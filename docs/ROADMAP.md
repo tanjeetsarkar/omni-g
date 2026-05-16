@@ -19,8 +19,8 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create `.gitignore` (Python, Node.js, Go)
 - [x] Create `.editorconfig` for consistent formatting
 - [x] Create `.dockerignore`
-- [ ] Configure pre-commit hooks (.githooks)
-- [ ] Add CONTRIBUTING.md template
+- [x] Configure pre-commit hooks (.githooks)
+- [x] Add CONTRIBUTING.md template
 - [ ] Add CODE_OF_CONDUCT.md
 
 **Dependencies:** None  
@@ -33,7 +33,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create `/infrastructure` with docker-compose base
 - [x] Create `/mcp-plugins` directory
 - [x] Create `/docs` with subdirectories
-- [ ] Add README.md to each service root explaining purpose
+- [x] Add README.md to each service root explaining purpose
 
 **Dependencies:** M1.1  
 **Verification:** All directories created, service READMEs explain module purpose
@@ -47,9 +47,9 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add health checks for all services
 - [x] Create Prometheus configuration
 - [x] Create Loki configuration
-- [ ] Create `.env.example` with all environment variables
-- [ ] Create `.env.local` gitignored template
-- [ ] Document profile-specific setup instructions
+- [x] Create `.env.example` with all environment variables
+- [x] Create `.env.local` gitignored template
+- [x] Document profile-specific setup instructions
 
 **Dependencies:** M1.2  
 **Verification:** `docker-compose --profile core up` succeeds, all services healthy
@@ -57,14 +57,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M1.4: Copilot Instructions & Agent Framework
-- [ ] Create `.copilot-instructions.md` (architecture validation mode)
-- [ ] Create `development-instructions.md` (hands-on coding mode)
-- [ ] Create `AGENTS.md` with:
+- [x] Create `.copilot-instructions.md` (architecture validation mode)
+- [x] Create `development-instructions.md` (hands-on coding mode)
+- [x] Create `AGENTS.md` with:
   - Omni-G Architect agent definition
   - Omni-G Developer agent definition
   - Service Specialist agents (Aggregator, Processor, Delivery)
   - DevOps agent definition
-- [ ] Create `/docs/agent-contexts/`:
+- [x] Create `/docs/agent-contexts/`:
   - `architect.md` — design validation context
   - `developer.md` — implementation guidance
   - `aggregator-specialist.md` — Go/Kafka specifics
@@ -92,20 +92,20 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M2: Service Scaffolding
 
-**Status:** 🔴 NOT STARTED  
+**Status:** � COMPLETE  
 **Focus:** Service initialization, build pipelines, test frameworks
 
 ### Milestones
 
 #### M2.1: Aggregator Service (Go)
-- [ ] Initialize Go module: `go mod init`
-- [ ] Create `/cmd/aggregator` with main.go
-- [ ] Implement HTTP health check endpoint (`:8080/health`)
-- [ ] Create `/internal/kafka` directory structure
-- [ ] Create `/internal/validation` directory structure
-- [ ] Create Dockerfile with multi-stage build
-- [ ] Add unit test skeleton (testify + table-driven tests)
-- [ ] Document aggregator responsibilities in README
+- [x] Initialize Go module: `go mod init`
+- [x] Create `/cmd/aggregator` with main.go
+- [x] Implement HTTP health check endpoint (`:8080/health`)
+- [x] Create `/internal/kafka` directory structure
+- [x] Create `/internal/validation` directory structure
+- [x] Create Dockerfile with multi-stage build
+- [x] Add unit test skeleton (testify + table-driven tests)
+- [x] Document aggregator responsibilities in README
 
 **Dependencies:** M1.2, M1.3  
 **Verification:**
@@ -117,15 +117,15 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M2.2: Processor Service (Python)
-- [ ] Initialize Python project with pyproject.toml
-- [ ] Configure uv for dependency management
-- [ ] Create FastAPI main application
-- [ ] Implement HTTP health check endpoint (`:8001/health`)
-- [ ] Create `/src/processor`, `/src/models`, `/src/llm` directories
-- [ ] Create `/src/kafka` consumer skeleton
-- [ ] Create Dockerfile with Python 3.13
-- [ ] Add pytest fixtures for Kafka/Redis/Neo4j
-- [ ] Document processor responsibilities in README
+- [x] Initialize Python project with pyproject.toml
+- [x] Configure uv for dependency management
+- [x] Create FastAPI main application
+- [x] Implement HTTP health check endpoint (`:8001/health`)
+- [x] Create `/src/processor`, `/src/models`, `/src/llm` directories
+- [x] Create `/src/kafka` consumer skeleton
+- [x] Create Dockerfile with Python 3.13
+- [x] Add pytest fixtures for Kafka/Redis/Neo4j
+- [x] Document processor responsibilities in README
 
 **Dependencies:** M1.2, M1.3  
 **Verification:**
@@ -137,13 +137,13 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M2.3: Delivery Service (Next.js Frontend)
-- [ ] Initialize Next.js 15 with TypeScript + Tailwind
-- [ ] Create WebSocket gateway stub in `/app/api/ws`
-- [ ] Create Sigma.js graph component skeleton
-- [ ] Configure Socket.io client
-- [ ] Create Dockerfile for Next.js production build
-- [ ] Add Jest test configuration
-- [ ] Document delivery responsibilities in README
+- [x] Initialize Next.js 15 with TypeScript + Tailwind
+- [x] Create WebSocket gateway stub in `/app/api/ws`
+- [x] Create Sigma.js graph component skeleton
+- [x] Configure Socket.io client
+- [x] Create Dockerfile for Next.js production build
+- [x] Add Jest test configuration
+- [x] Document delivery responsibilities in README
 
 **Dependencies:** M1.2, M1.3  
 **Verification:**
@@ -155,16 +155,16 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M2.4: CI/CD & Build Pipelines
-- [ ] Create `.github/workflows/build.yml` with:
+- [x] Create `.github/workflows/build.yml` with:
   - Go: build + lint (golangci-lint) + test
   - Python: lint (ruff) + type check (mypy) + test (pytest)
   - TypeScript: lint (prettier) + type check + test (jest)
-- [ ] Configure pre-commit hooks:
+- [x] Configure pre-commit hooks:
   - `golangci-lint run` for Go
   - `ruff check --fix` for Python
   - `prettier --write` for TypeScript/JSON
-- [ ] Create `docker-compose.test.yml` for integration tests
-- [ ] Document build process in CONTRIBUTING.md
+- [x] Create `docker-compose.test.yml` for integration tests
+- [x] Document build process in CONTRIBUTING.md
 
 **Dependencies:** M2.1, M2.2, M2.3  
 **Verification:**

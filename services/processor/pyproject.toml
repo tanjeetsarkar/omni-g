@@ -1,0 +1,56 @@
+[project]
+name = "processor"
+version = "0.1.0"
+description = "Omni-G Processor Service — LLM entity extraction, graph persistence, GraphRAG indexing"
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "pydantic==2.10.3",
+    "pydantic-settings==2.6.1",
+    "kafka-python-ng==2.2.3",
+    "redis[hiredis]==5.2.1",
+    "neo4j==5.27.0",
+    "qdrant-client==1.12.1",
+    "langchain==0.3.10",
+    "instructor==1.7.0",
+    "openai==1.57.2",
+    "stix2==3.0.1",
+    "httpx==0.28.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["S101"]  # allow assert in tests
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = ["--cov=src", "--cov-report=term-missing"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.4",
+    "mypy>=1.13.0",
+]

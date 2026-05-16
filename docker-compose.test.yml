@@ -1,0 +1,97 @@
+# docker-compose.test.yml
+# Integration test environment for Omni-G.
+#
+# Usage:
+#   docker compose -f infrastructure/docker-compose.yml \
+#                  -f docker-compose.test.yml \
+#                  --profile test up --abort-on-container-exit
+#
+# This overlay:
+#   - starts only the infrastructure services needed for integration tests
+#   - uses ephemeral volumes so test state doesn't persist
+#   - tags containers with the "test" profile
+
+services:
+  kafka:
+    extends:
+      file: infrastructure/docker-compose.yml
+      service: kafka
+    profiles:
+      - test
+    volumes: []   # ephemeral — no persistent volume for tests
+
+  redis:
+    extends:
+      file: infrastructure/docker-compose.yml
+      service: redis
+    profiles:
+      - test
+    volumes: []
+
+  neo4j:
+    extends:
+      file: infrastructure/docker-compose.yml
+      service: neo4j
+    profiles:
+      - test
+    volumes: []
+    environment:
+      NEO4J_AUTH: neo4j/test-password
+
+  qdrant:
+    extends:
+      file: infrastructure/docker-compose.yml
+      service: qdrant
+    profiles:
+      - test
+    volumes: []
+
+  # ============================================================
+  # Test runners — each exits with the test suite's exit code
+  # ============================================================
+  aggregator-test:
+    build:
+      context: services/aggregator
+      dockerfile: Dockerfile
+      target: builder
+    command: go test -race -count=1 ./...
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      VALIDATION_SERVICE_URL: http://processor:8001
+    depends_on:
+      kafka:
+        condition: service_healthy
+    profiles:
+      - test
+    networks:
+      - omni-g
+
+  processor-test:
+    build:
+      context: services/processor
+      dockerfile: Dockerfile
+      target: builder
+    command: ["uv", "run", "pytest", "-q", "--no-header"]
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis://redis:6379
+      NEO4J_URL: neo4j://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: test-password
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: http://localhost:11434  # not started in test profile
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    profiles:
+      - test
+    networks:
+      - omni-g
+
+networks:
+  omni-g:
+    driver: bridge

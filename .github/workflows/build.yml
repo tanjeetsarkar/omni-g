@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ============================================================
+  # Aggregator (Go)
+  # ============================================================
+  aggregator:
+    name: Aggregator (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/aggregator
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Install librdkafka (required by confluent-kafka-go)
+        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: services/aggregator
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: services/aggregator/coverage.txt
+          flags: aggregator
+
+  # ============================================================
+  # Processor (Python)
+  # ============================================================
+  processor:
+    name: Processor (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/processor
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.14"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check src/ tests/
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check src/ tests/
+
+      - name: Type check (mypy)
+        run: uv run mypy src/
+
+      - name: Test (pytest)
+        run: uv run pytest --no-header -q
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: services/processor/coverage.xml
+          flags: processor
+
+  # ============================================================
+  # Delivery (TypeScript / Next.js)
+  # ============================================================
+  delivery:
+    name: Delivery (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/delivery
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint (eslint)
+        run: pnpm lint
+
+      - name: Test (jest)
+        run: pnpm jest --ci --collectCoverage=false
+
+      - name: Build
+        run: pnpm build
+
+  # ============================================================
+  # Docker build smoke tests
+  # ============================================================
+  docker:
+    name: Docker builds
+    runs-on: ubuntu-latest
+    needs: [aggregator, processor, delivery]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Aggregator image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/aggregator
+          push: false
+          tags: omni-g/aggregator:ci
+
+      - name: Build Processor image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/processor
+          push: false
+          tags: omni-g/processor:ci
+
+      - name: Build Delivery image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/delivery
+          push: false
+          tags: omni-g/delivery:ci
