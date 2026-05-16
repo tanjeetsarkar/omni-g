@@ -1,0 +1,359 @@
+version: '3.9'
+
+services:
+  # =============================================================================
+  # CORE SERVICES (profile: core)
+  # =============================================================================
+
+  kafka:
+    image: apache/kafka:4.2.0
+    container_name: omni-g-kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:29093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    ports:
+      - "9092:9092"
+      - "29093:29093"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions.sh", "--bootstrap-server=localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - core
+      - all
+    networks:
+      - omni-g
+
+  redis:
+    image: redis/redis-stack:7.4.0-v8
+    container_name: omni-g-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"  # RedisInsight
+    environment:
+      - REDIS_PORT=6379
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - core
+      - all
+    networks:
+      - omni-g
+
+  neo4j:
+    image: neo4j:5.26.26-community
+    container_name: omni-g-neo4j
+    environment:
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      NEO4J_AUTH: neo4j/omni-g-password
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 512M
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "omni-g-password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - core
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # VECTOR & EMBEDDING SERVICES (profile: vector)
+  # =============================================================================
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    container_name: omni-g-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      QDRANT_API_KEY: "omni-g-api-key"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - vector
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # AI & LLM SERVICES (profile: ai)
+  # =============================================================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: omni-g-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - ai
+      - all
+    networks:
+      - omni-g
+    # Pull models on start (optional, can be done manually)
+    # entrypoint: /bin/sh -c "ollama serve &
+    #   sleep 5 &&
+    #   ollama pull qwen2.5:3b &&
+    #   ollama pull nomic-embed-text &&
+    #   wait"
+
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2
+    container_name: omni-g-kokoro-tts
+    ports:
+      - "8000:8000"
+    environment:
+      - WORKERS=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - ai
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # OBSERVABILITY SERVICES (profile: observability)
+  # =============================================================================
+
+  prometheus:
+    image: prom/prometheus:v3.11.3
+    container_name: omni-g-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - observability
+      - all
+    networks:
+      - omni-g
+
+  grafana:
+    image: grafana/grafana:13.0.1-security-01
+    container_name: omni-g-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - prometheus
+    profiles:
+      - observability
+      - all
+    networks:
+      - omni-g
+
+  loki:
+    image: grafana/loki:3.7.2
+    container_name: omni-g-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infrastructure/loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yml
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - observability
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # OBJECT STORAGE (profile: storage)
+  # =============================================================================
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: omni-g-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - storage
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # APPLICATION SERVICES (profile: services)
+  # =============================================================================
+
+  aggregator:
+    build:
+      context: ./services/aggregator
+      dockerfile: Dockerfile
+    container_name: omni-g-aggregator
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      LOG_LEVEL: info
+      VALIDATION_SERVICE_URL: http://validation-sidecar:8001
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - services
+      - all
+    networks:
+      - omni-g
+
+  processor:
+    build:
+      context: ./services/processor
+      dockerfile: Dockerfile
+    container_name: omni-g-processor
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis://redis:6379
+      NEO4J_URL: neo4j://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: omni-g-password
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_URL: http://ollama:11434
+      LOG_LEVEL: info
+    ports:
+      - "8001:8001"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - services
+      - all
+    networks:
+      - omni-g
+
+  delivery:
+    build:
+      context: ./services/delivery
+      dockerfile: Dockerfile
+    container_name: omni-g-delivery
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+      NEXT_PUBLIC_WS_URL: ws://localhost:3001
+      NEO4J_URL: neo4j://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: omni-g-password
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    depends_on:
+      - processor
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - services
+      - all
+    networks:
+      - omni-g
+
+volumes:
+  redis_data:
+  neo4j_data:
+  qdrant_data:
+  ollama_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  minio_data:
+
+networks:
+  omni-g:
+    driver: bridge
