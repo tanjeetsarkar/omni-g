@@ -176,21 +176,21 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M3: Core Event Pipeline
 
-**Status:** 🔴 NOT STARTED  
+**Status:** � IN PROGRESS  
 **Focus:** Ingestion, deduplication, LLM extraction
 
 ### Milestones
 
 #### M3.1: Aggregator - MCP Host Implementation
-- [ ] Implement MCP discovery protocol (tools/list endpoint)
-- [ ] Create agentic scheduler for polling frequency
-- [ ] Implement Kafka producer with:
+- [x] Implement MCP discovery protocol (tools/list endpoint)
+- [x] Create agentic scheduler for polling frequency
+- [x] Implement Kafka producer with:
   - Retry logic (3 retries with exponential backoff)
   - Batching (100 events or 1s timeout)
   - Prometheus metrics (ingest_rate, validation_failures)
-- [ ] Add schema validation at edge (Pydantic call to Python sidecar)
-- [ ] Create comprehensive unit tests (>80% coverage)
-- [ ] Document MCP server setup guide
+- [x] Add schema validation at edge (Pydantic call to Python sidecar)
+- [x] Create comprehensive unit tests (>80% coverage)
+- [x] Document MCP server setup guide
 
 **Dependencies:** M2.1, M2.4  
 **Verification:**
