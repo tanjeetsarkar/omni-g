@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 
 from src.models.stix import ExtractionResult, Malware, STIXType, ThreatActor
@@ -22,11 +24,11 @@ def test_malware_type_is_correct() -> None:
     ],
 )
 def test_stix_confidence_validation(confidence: int, valid: bool) -> None:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from pydantic import ValidationError
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     data = {
         "type": "threat-actor",
         "id": "threat-actor--12345678-1234-5678-1234-567812345678",
