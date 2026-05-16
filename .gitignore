@@ -45,7 +45,6 @@ dist/
 *.so
 *.dylib
 vendor/
-go.sum
 
 # IDE
 .vscode/

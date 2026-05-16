@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +20,7 @@ def test_settings() -> Settings:
         REDIS_URL="redis://localhost:6379",
         NEO4J_URL="neo4j://localhost:7687",
         NEO4J_USER="neo4j",
-        NEO4J_PASSWORD="test",
+        NEO4J_PASSWORD=os.environ.get("TEST_NEO4J_PASSWORD", "test"),
         QDRANT_URL="http://localhost:6333",
         OLLAMA_URL="http://localhost:11434",
     )

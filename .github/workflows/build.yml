@@ -130,7 +130,7 @@ jobs:
         run: pnpm lint
 
       - name: Test (jest)
-        run: pnpm jest --ci --collectCoverage=false
+        run: pnpm test --ci --collectCoverage=false
 
       - name: Build
         run: pnpm build
