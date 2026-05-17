@@ -49,9 +49,7 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = Field(default=None, alias="ELEVENLABS_API_KEY")
     briefing_hour: int = Field(default=8, alias="BRIEFING_HOUR")
     briefing_tenants: str = Field(default="default", alias="BRIEFING_TENANTS")
-    briefing_preflight_enabled: bool = Field(
-        default=False, alias="BRIEFING_PREFLIGHT_ENABLED"
-    )
+    briefing_preflight_enabled: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_ENABLED")
     briefing_preflight_strict: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_STRICT")
 
 

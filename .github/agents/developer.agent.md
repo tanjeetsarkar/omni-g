@@ -139,7 +139,7 @@ func (p *Producer) Produce(ctx context.Context, key string, value []byte) error 
         Key:            []byte(key),
         Value:          value,
     }
-    
+
     for attempt := 1; attempt <= 3; attempt++ {
         err := p.p.Produce(msg, nil)
         if err == nil {

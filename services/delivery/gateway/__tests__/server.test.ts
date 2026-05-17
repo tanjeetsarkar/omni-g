@@ -16,7 +16,9 @@ jest.mock("prom-client", () => {
   }));
   return {
     Registry: MockRegistry,
-    Gauge: jest.fn().mockImplementation(() => ({ inc: noop, dec: noop, set: noop })),
+    Gauge: jest
+      .fn()
+      .mockImplementation(() => ({ inc: noop, dec: noop, set: noop })),
     Histogram: jest.fn().mockImplementation(() => ({ observe: noopObs })),
     Counter: jest.fn().mockImplementation(() => ({ inc: noop })),
     collectDefaultMetrics: jest.fn(),
@@ -42,17 +44,23 @@ jest.mock("socket.io", () => ({
 }));
 
 // ─── Mock KafkaJS ────────────────────────────────────────────────────────────
-let capturedEachMessage: ((payload: {
-  topic: string;
-  partition: number;
-  message: { value: Buffer | null };
-}) => Promise<void>) | null = null;
+let capturedEachMessage:
+  | ((payload: {
+      topic: string;
+      partition: number;
+      message: { value: Buffer | null };
+    }) => Promise<void>)
+  | null = null;
 
 const mockConsumerConnect = jest.fn().mockResolvedValue(undefined);
 const mockConsumerSubscribe = jest.fn().mockResolvedValue(undefined);
-const mockConsumerRun = jest.fn().mockImplementation(async ({ eachMessage }: { eachMessage: (p: unknown) => Promise<void> }) => {
-  capturedEachMessage = eachMessage as typeof capturedEachMessage;
-});
+const mockConsumerRun = jest
+  .fn()
+  .mockImplementation(
+    async ({ eachMessage }: { eachMessage: (p: unknown) => Promise<void> }) => {
+      capturedEachMessage = eachMessage as typeof capturedEachMessage;
+    },
+  );
 const mockConsumerDisconnect = jest.fn().mockResolvedValue(undefined);
 
 const mockConsumer = {
@@ -96,17 +104,20 @@ describe("WebSocket Gateway – M5.1-B", () => {
     it("creates consumer with groupId delivery-gateway", () => {
       const consumer = createKafkaConsumer();
       expect(Kafka).toHaveBeenCalledWith(
-        expect.objectContaining({ clientId: "delivery-gateway" })
+        expect.objectContaining({ clientId: "delivery-gateway" }),
       );
       expect(consumer).toBeDefined();
     });
 
     it("subscribes to analyst-alerts topic", async () => {
       await mockConsumerConnect();
-      await mockConsumerSubscribe({ topic: "analyst-alerts", fromBeginning: false });
+      await mockConsumerSubscribe({
+        topic: "analyst-alerts",
+        fromBeginning: false,
+      });
 
       expect(mockConsumerSubscribe).toHaveBeenCalledWith(
-        expect.objectContaining({ topic: "analyst-alerts" })
+        expect.objectContaining({ topic: "analyst-alerts" }),
       );
     });
   });
@@ -151,7 +162,13 @@ describe("WebSocket Gateway – M5.1-B", () => {
     beforeEach(async () => {
       await mockConsumerRun({
         autoCommit: true,
-        eachMessage: async ({ message }: { topic: string; partition: number; message: { value: Buffer | null } }) => {
+        eachMessage: async ({
+          message,
+        }: {
+          topic: string;
+          partition: number;
+          message: { value: Buffer | null };
+        }) => {
           if (!message.value) return;
           const parsed = JSON.parse(message.value.toString()) as AlertMessage;
           io.to(`tenant:${parsed.tenant_id}`).emit("alert", parsed);
@@ -183,7 +200,7 @@ describe("WebSocket Gateway – M5.1-B", () => {
           topic: "analyst-alerts",
           partition: 0,
           message: { value: null },
-        })
+        }),
       ).resolves.not.toThrow();
     });
   });
@@ -191,20 +208,28 @@ describe("WebSocket Gateway – M5.1-B", () => {
   // ── Metrics ─────────────────────────────────────────────────────────────────
   describe("Prometheus metrics", () => {
     it("connected_clients gauge is created", () => {
-      const names = gaugeCalls.map((args) => (args[0] as Record<string, unknown>)?.name);
+      const names = gaugeCalls.map(
+        (args) => (args[0] as Record<string, unknown>)?.name,
+      );
       expect(names).toContain("delivery_connected_clients");
     });
 
     it("broadcast_latency_ms histogram is created with correct buckets", () => {
       const match = histogramCalls.find(
-        (args) => (args[0] as Record<string, unknown>)?.name === "delivery_broadcast_latency_ms"
+        (args) =>
+          (args[0] as Record<string, unknown>)?.name ===
+          "delivery_broadcast_latency_ms",
       );
       expect(match).toBeDefined();
-      expect((match![0] as Record<string, unknown>).buckets).toEqual([50, 100, 200, 500, 1000, 2000]);
+      expect((match![0] as Record<string, unknown>).buckets).toEqual([
+        50, 100, 200, 500, 1000, 2000,
+      ]);
     });
 
     it("connection_lifecycle counter is created", () => {
-      const names = counterCalls.map((args) => (args[0] as Record<string, unknown>)?.name);
+      const names = counterCalls.map(
+        (args) => (args[0] as Record<string, unknown>)?.name,
+      );
       expect(names).toContain("delivery_connection_lifecycle_total");
     });
 

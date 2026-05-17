@@ -11,7 +11,7 @@ const PROCESSOR_URL = process.env.PROCESSOR_URL ?? "http://localhost:8001";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const tenantId = req.nextUrl.searchParams.get("tenant_id") ?? "default";
@@ -19,7 +19,7 @@ export async function GET(
   try {
     const upstream = await fetch(
       `${PROCESSOR_URL}/briefings/${encodeURIComponent(id)}?tenant_id=${encodeURIComponent(tenantId)}`,
-      { next: { revalidate: 0 } }
+      { next: { revalidate: 0 } },
     );
 
     if (upstream.status === 404) {
@@ -35,7 +35,7 @@ export async function GET(
   } catch {
     return NextResponse.json(
       { error: "processor unavailable" },
-      { status: 502 }
+      { status: 502 },
     );
   }
 }

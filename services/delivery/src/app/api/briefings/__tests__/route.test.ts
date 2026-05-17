@@ -23,11 +23,13 @@ describe("GET /api/briefings", () => {
       json: async () => ({ briefings: [] }),
     });
 
-    await GET(makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"));
+    await GET(
+      makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"),
+    );
 
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("tenant_id=acme"),
-      expect.anything()
+      expect.anything(),
     );
   });
 
@@ -40,16 +42,22 @@ describe("GET /api/briefings", () => {
       json: async () => ({ briefings: mockBriefings }),
     });
 
-    const res = await GET(makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"));
+    const res = await GET(
+      makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"),
+    );
     const body = await res.json();
 
     expect(body.briefings).toEqual(mockBriefings);
   });
 
   it("returns fallback when fetch throws", async () => {
-    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error("Network error"));
+    (global.fetch as jest.Mock).mockRejectedValueOnce(
+      new Error("Network error"),
+    );
 
-    const res = await GET(makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"));
+    const res = await GET(
+      makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"),
+    );
     const body = await res.json();
 
     expect(body.briefings).toEqual([]);
@@ -62,7 +70,9 @@ describe("GET /api/briefings", () => {
       status: 503,
     });
 
-    const res = await GET(makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"));
+    const res = await GET(
+      makeRequest("http://localhost:3000/api/briefings?tenant_id=acme"),
+    );
     const body = await res.json();
 
     expect(body.briefings).toEqual([]);

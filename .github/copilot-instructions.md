@@ -182,17 +182,17 @@ When security is discussed, ensure these are addressed:
 ```
 This violates two principles:
 
-1. SEPARATION OF CONCERNS: Aggregator should only ingest + validate. 
+1. SEPARATION OF CONCERNS: Aggregator should only ingest + validate.
    Extraction requires LLM inference, which is the Processor's responsibility.
 
-2. SCALABILITY: If LLM inference happens in Aggregator, ingestion rate is 
+2. SCALABILITY: If LLM inference happens in Aggregator, ingestion rate is
    capped by LLM throughput. Kafka decoupling allows independent scaling.
 
 Instead:
 - Aggregator: ingest → Kafka (raw-feed)
 - Processor: consume from Kafka → extract → persist to graph
 
-This way, if LLM starts timing out, Processor workers can scale 
+This way, if LLM starts timing out, Processor workers can scale
 independently without blocking ingestion.
 
 Latency will actually improve because:

@@ -28,8 +28,12 @@ const STIX_BADGE_COLORS: Record<string, string> = {
   vulnerability: "bg-rose-600 text-white",
 };
 
-export default function FocusPanel({ nodeId, nodes, onClose }: FocusPanelProps) {
-  const node = nodeId ? nodes.find((n) => n.id === nodeId) ?? null : null;
+export default function FocusPanel({
+  nodeId,
+  nodes,
+  onClose,
+}: FocusPanelProps) {
+  const node = nodeId ? (nodes.find((n) => n.id === nodeId) ?? null) : null;
 
   return (
     <aside
@@ -61,16 +65,21 @@ export default function FocusPanel({ nodeId, nodes, onClose }: FocusPanelProps) 
             {/* Label */}
             <div>
               <p className="text-xs text-slate-500 uppercase mb-1">Entity</p>
-              <p className="text-slate-100 font-semibold text-lg">{node.label}</p>
+              <p className="text-slate-100 font-semibold text-lg">
+                {node.label}
+              </p>
             </div>
 
             {/* STIX type badge */}
             {node.stixType && (
               <div>
-                <p className="text-xs text-slate-500 uppercase mb-1">STIX Type</p>
+                <p className="text-xs text-slate-500 uppercase mb-1">
+                  STIX Type
+                </p>
                 <span
                   className={`inline-block text-xs font-medium px-2 py-1 rounded ${
-                    STIX_BADGE_COLORS[node.stixType] ?? "bg-slate-600 text-white"
+                    STIX_BADGE_COLORS[node.stixType] ??
+                    "bg-slate-600 text-white"
                   }`}
                 >
                   {node.stixType}

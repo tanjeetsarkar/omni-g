@@ -36,8 +36,8 @@ function nodeColor(stixType?: string, defaultColor?: string): string {
     malware: "#f97316",
     "attack-pattern": "#eab308",
     campaign: "#a855f7",
-    "identity": "#3b82f6",
-    "tool": "#06b6d4",
+    identity: "#3b82f6",
+    tool: "#06b6d4",
     location: "#10b981",
     vulnerability: "#f43f5e",
   };
@@ -117,12 +117,14 @@ export default function GraphView({
     if (!graph) return;
 
     graph.forEachNode((nodeId: string) => {
-      const original: string = graph.getNodeAttribute(nodeId, "originalColor") ?? "#6366f1";
+      const original: string =
+        graph.getNodeAttribute(nodeId, "originalColor") ?? "#6366f1";
       const isHighlighted = highlightedNodeIds?.has(nodeId) ?? false;
       const isSelected = selectedNodeId === nodeId;
 
       let color = original;
-      if (isSelected) color = "#f59e0b"; // amber for selected
+      if (isSelected)
+        color = "#f59e0b"; // amber for selected
       else if (isHighlighted) color = "#ef4444"; // red for alerted
 
       graph.setNodeAttribute(nodeId, "color", color);

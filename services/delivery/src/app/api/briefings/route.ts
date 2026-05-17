@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   try {
     const upstream = await fetch(
       `${PROCESSOR_URL}/briefings?tenant_id=${encodeURIComponent(tenantId)}`,
-      { next: { revalidate: 0 } }
+      { next: { revalidate: 0 } },
     );
 
     if (!upstream.ok) {
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   } catch {
     return NextResponse.json(
       { briefings: [], error: "processor unavailable" },
-      { status: 200 }
+      { status: 200 },
     );
   }
 }

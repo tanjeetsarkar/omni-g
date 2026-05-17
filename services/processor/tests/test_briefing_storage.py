@@ -121,9 +121,7 @@ class TestMinIOStorageService:
         from src.briefing.storage import MinIOStorageService
 
         mock_s3 = AsyncMock()
-        _client_err = ClientError(
-            {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket"
-        )
+        _client_err = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket")
         mock_s3.head_bucket = AsyncMock(side_effect=_client_err)
         mock_s3.create_bucket = AsyncMock(return_value={})
         mock_s3.put_object = AsyncMock(return_value={})
@@ -151,9 +149,7 @@ class TestMinIOStorageService:
         from src.briefing.storage import MinIOStorageService
 
         mock_s3 = AsyncMock()
-        _client_err = ClientError(
-            {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket"
-        )
+        _client_err = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket")
         mock_s3.head_bucket = AsyncMock(side_effect=_client_err)
         mock_s3.create_bucket = AsyncMock(return_value={})
         mock_s3.list_objects_v2 = AsyncMock(return_value={})

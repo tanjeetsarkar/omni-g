@@ -1,7 +1,7 @@
 # Omni-G Implementation Plan
 
-**Project Status:** Phase 1 - Foundation & Infrastructure  
-**Last Updated:** May 16, 2026  
+**Project Status:** Phase 1 - Foundation & Infrastructure
+**Last Updated:** May 16, 2026
 **Repository:** github.com/yourusername/omni-g
 
 ## Overview
@@ -10,8 +10,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 1: Foundation & Infrastructure âœ… IN PROGRESS
 
-**Duration:** 1-2 weeks  
-**Objective:** Set up Docker, Kubernetes skeleton, Git, and local service orchestration.  
+**Duration:** 1-2 weeks
+**Objective:** Set up Docker, Kubernetes skeleton, Git, and local service orchestration.
 **Deliverables:** Infrastructure-as-Code, service scaffolding, CI/CD foundation
 
 ### Tasks
@@ -70,8 +70,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 2: Service Scaffolding (Planned)
 
-**Duration:** 1-2 weeks  
-**Objective:** Scaffold each microservice with build pipelines and internal APIs.  
+**Duration:** 1-2 weeks
+**Objective:** Scaffold each microservice with build pipelines and internal APIs.
 **Deliverables:** Service stubs, CI/CD workflows, unit test frameworks
 
 ### Key Tasks
@@ -94,8 +94,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 3: Core Event Pipeline (Planned)
 
-**Duration:** 2-3 weeks  
-**Objective:** Implement ingestion â†’ deduplication â†’ extraction pipeline.  
+**Duration:** 2-3 weeks
+**Objective:** Implement ingestion â†’ deduplication â†’ extraction pipeline.
 **Deliverables:** MCP host implementation, Kafka producer/consumer, LLM integration
 
 ### Key Tasks
@@ -134,8 +134,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 4: Knowledge Graph Construction (Planned)
 
-**Duration:** 2-3 weeks  
-**Objective:** Entity resolution and graph persistence.  
+**Duration:** 2-3 weeks
+**Objective:** Entity resolution and graph persistence.
 **Deliverables:** Neo4j schema, entity resolution engine, GraphRAG indexing
 
 ### Key Tasks
@@ -170,8 +170,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 5: Delivery & Real-Time Alerting (Planned)
 
-**Duration:** 2 weeks  
-**Objective:** Deliver intelligence to analysts via multiple modalities.  
+**Duration:** 2 weeks
+**Objective:** Deliver intelligence to analysts via multiple modalities.
 **Deliverables:** WebSocket gateway, interactive dashboard, audio briefings
 
 ### Key Tasks
@@ -207,8 +207,8 @@ This document outlines the complete 6-phase implementation strategy for Omni-Gâ€
 
 ## Phase 6: Security, Multi-Tenancy & Polish (Planned)
 
-**Duration:** 2-3 weeks  
-**Objective:** Production-grade security and governance.  
+**Duration:** 2-3 weeks
+**Objective:** Production-grade security and governance.
 **Deliverables:** Multi-tenant isolation, plugin sandboxing, audit trail, observability
 
 ### Key Tasks
@@ -380,16 +380,16 @@ Phase 6                         ###
 
 ## Questions & Decisions
 
-**Q: Should plugins self-register or use static registry?**  
+**Q: Should plugins self-register or use static registry?**
 A: Start with static registry in `.env`, evolve to dynamic service discovery (Consul/Etcd) in Phase 5+.
 
-**Q: How strict should STIX ontology mapping be?**  
+**Q: How strict should STIX ontology mapping be?**
 A: Enforce core types (Person, Malware, Location), allow custom properties via `custom_properties` field.
 
-**Q: Ollama or cloud LLM?**  
+**Q: Ollama or cloud LLM?**
 A: Ollama for Phase 1-3 (free, local), integrate cloud provider abstraction in Phase 5 for production.
 
-**Q: Firecracker/gVisor in Phase 1 or Phase 6?**  
+**Q: Firecracker/gVisor in Phase 1 or Phase 6?**
 A: Phase 1 uses Docker network isolation, Phase 6 upgrades to kernel-level sandboxing.
 
 ---

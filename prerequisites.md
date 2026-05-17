@@ -115,7 +115,7 @@ All infrastructure runs locally in Docker. On an 8 GB machine, split the stack i
 
 ### 3.1 Message Streaming — Apache Kafka (KRaft mode, no ZooKeeper)
 
-- **Image:** `apache/kafka:4.2.0`  
+- **Image:** `apache/kafka:4.2.0`
 - **Purpose:** Central nervous system. All raw events flow through Kafka topics.
 - **Key Topics to create on startup:**
   - `raw-feed` — raw ingested events from MCP plugins
@@ -127,7 +127,7 @@ All infrastructure runs locally in Docker. On an 8 GB machine, split the stack i
 
 ### 3.2 Graph Database — Neo4j Community Edition
 
-- **Image:** `neo4j:5.26.26-community`  
+- **Image:** `neo4j:5.26.26-community`
 - **Purpose:** Stores the Knowledge Graph. Nodes = entities (Person, Org, Malware). Edges = relationships (ATTRIBUTED_TO, TARGETS, USES).
 - **Query Language:** Cypher
 - **Plugins to enable:** APOC for procedures. Do not assume GDS is bundled in Community; keep community detection in a separate Python service unless you explicitly add and license the required plugin stack.
@@ -137,20 +137,20 @@ All infrastructure runs locally in Docker. On an 8 GB machine, split the stack i
 
 ### 3.3 Cache & Deduplication — Redis Stack
 
-- **Image:** `redis/redis-stack:7.4.0-v8`  
+- **Image:** `redis/redis-stack:7.4.0-v8`
 - **Purpose:** SHA-256 content hashing for deduplication, entity blocking cache, sliding-window botnet dedup.
 - **Includes:** RedisJSON + RediSearch (needed for entity blocking queries)
 - **UI:** RedisInsight at `http://localhost:8001`
 
 ### 3.4 Vector Database — Qdrant
 
-- **Image:** `qdrant/qdrant:v1.18.0`  
+- **Image:** `qdrant/qdrant:v1.18.0`
 - **Purpose:** Stores entity embeddings for semantic entity resolution ("Robert Smith" ≈ "Bob Smith"). Powers the vector blocking step in the Entity Resolution pipeline.
 - **Web UI:** Built-in dashboard at `http://localhost:6333/dashboard`
 
 ### 3.5 Object Storage — MinIO
 
-- **Image:** `minio/minio:RELEASE.2025-09-07T16-13-09Z`  
+- **Image:** `minio/minio:RELEASE.2025-09-07T16-13-09Z`
 - **Purpose:** Replaces GCS/S3. Stores generated audio briefing files, raw document archives, and plugin artifact cache.
 - **Web UI:** MinIO Console at `http://localhost:9001`
 

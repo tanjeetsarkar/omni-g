@@ -47,7 +47,9 @@ describe("useAlertHighlight", () => {
   });
 
   it("adds entity_ids to highlightedNodeIds on alert event", () => {
-    const socket = createMockSocket() as Socket & { _trigger: (e: string, p: unknown) => void };
+    const socket = createMockSocket() as Socket & {
+      _trigger: (e: string, p: unknown) => void;
+    };
     const { result } = renderHook(() => useAlertHighlight(socket));
 
     act(() => {
@@ -64,7 +66,9 @@ describe("useAlertHighlight", () => {
   });
 
   it("increments alertCount on each alert", () => {
-    const socket = createMockSocket() as Socket & { _trigger: (e: string, p: unknown) => void };
+    const socket = createMockSocket() as Socket & {
+      _trigger: (e: string, p: unknown) => void;
+    };
     const { result } = renderHook(() => useAlertHighlight(socket));
 
     act(() => {
@@ -76,7 +80,9 @@ describe("useAlertHighlight", () => {
   });
 
   it("removes entity_ids from highlightedNodeIds after 3000ms", () => {
-    const socket = createMockSocket() as Socket & { _trigger: (e: string, p: unknown) => void };
+    const socket = createMockSocket() as Socket & {
+      _trigger: (e: string, p: unknown) => void;
+    };
     const { result } = renderHook(() => useAlertHighlight(socket));
 
     act(() => {
@@ -97,7 +103,9 @@ describe("useAlertHighlight", () => {
   });
 
   it("handles alert with no entity_ids without throwing", () => {
-    const socket = createMockSocket() as Socket & { _trigger: (e: string, p: unknown) => void };
+    const socket = createMockSocket() as Socket & {
+      _trigger: (e: string, p: unknown) => void;
+    };
     const { result } = renderHook(() => useAlertHighlight(socket));
 
     act(() => {

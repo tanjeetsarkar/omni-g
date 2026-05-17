@@ -31,7 +31,7 @@ You are a **Go/Kafka Expert** for the Omni-G Aggregator service. Your role is to
 **Responsibility:** Ingest → Validate → Publish
 
 ```
-MCP Plugins (HTTP/SSE) 
+MCP Plugins (HTTP/SSE)
     ↓ [read via MCP client]
 Aggregator (Go)
     ├─ [discover plugins via tools/list]
@@ -76,10 +76,10 @@ Kafka Topic: raw-feed
 type MCPHost struct {
     // Discover available tools
     DiscoverTools(ctx context.Context) ([]Tool, error)
-    
+
     // Call a tool with arguments
     CallTool(ctx context.Context, toolName string, args map[string]interface{}) (interface{}, error)
-    
+
     // Subscribe to streaming tool output
     StreamTool(ctx context.Context, toolName string, args map[string]interface{}) (<-chan interface{}, error)
 }
@@ -129,10 +129,10 @@ type ValidationResult struct {
 type Producer struct {
     // Produce event to Kafka
     Produce(ctx context.Context, event *Event) error
-    
+
     // Flush pending messages
     Flush(ctx context.Context) error
-    
+
     // Handle delivery reports
     OnDeliveryReport(msg *kafka.Message, err error)
 }
@@ -155,10 +155,10 @@ type Producer struct {
 type Scheduler struct {
     // Poll frequency for a tool
     GetPollFrequency(toolName string) time.Duration // default: 5 minutes
-    
+
     // Adjust based on threat level
     IncreasePollFrequency(toolName string, threatLevel string) // e.g., "critical" → 30 seconds
-    
+
     // Reset to normal
     ResetPollFrequency(toolName string)
 }
@@ -241,7 +241,7 @@ func (h *MCPHost) CallTool(ctx context.Context, toolName string, args map[string
         duration := time.Since(start)
         mcpToolLatencyMs.WithLabelValues(toolName).Observe(duration.Seconds() * 1000)
     }()
-    
+
     result, err := h.client.CallTool(ctx, toolName, args)
     if err != nil {
         mcpToolErrors.WithLabelValues(toolName, err.Error()).Inc()
@@ -267,7 +267,7 @@ type BatchProducer struct {
 func (bp *BatchProducer) Add(event *Event) error {
     bp.mutex.Lock()
     defer bp.mutex.Unlock()
-    
+
     bp.batch = append(bp.batch, event)
     if len(bp.batch) >= bp.batchSize {
         return bp.flush()
@@ -439,20 +439,20 @@ if err == context.DeadlineExceeded {
 ```go
 func TestProducerBatching(t *testing.T) {
     producer := NewBatchProducer(100) // batch size 100
-    
+
     for i := 0; i < 50; i++ {
         err := producer.Add(&Event{Data: fmt.Sprintf("event-%d", i)})
         if err != nil {
             t.Fatalf("unexpected error: %v", err)
         }
     }
-    
+
     // 50 events added, batch not flushed yet
     require.Len(t, producer.batch, 50)
-    
+
     // Add 51st event to trigger flush
     producer.Add(&Event{Data: "event-50"})
-    
+
     // Batch should be empty now (flushed to Kafka)
     require.Len(t, producer.batch, 0)
 }
@@ -465,24 +465,24 @@ func TestMCPPluginIntegration(t *testing.T) {
     // Start embedded Kafka
     kafka := startEmbeddedKafka(t)
     defer kafka.Stop()
-    
+
     // Start mock MCP server
     mockMCP := startMockMCPServer(t)
     defer mockMCP.Stop()
-    
+
     // Create Aggregator
     agg := NewAggregator(kafka.Brokers(), mockMCP.URL())
     ctx := context.Background()
-    
+
     // Discover tools
     tools, err := agg.DiscoverTools(ctx)
     require.NoError(t, err)
     require.Len(t, tools, 1) // mock server provides 1 tool
-    
+
     // Call tool
     result, err := agg.CallTool(ctx, "test_tool", map[string]interface{}{})
     require.NoError(t, err)
-    
+
     // Verify event in Kafka
     msgs, err := kafka.ReadTopic("raw-feed", 1)
     require.NoError(t, err)

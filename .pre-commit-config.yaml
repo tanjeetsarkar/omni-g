@@ -17,15 +17,26 @@ repos:
   # ============================================================
   # Go (Aggregator)
   # ============================================================
-  - repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.5.1
+  - repo: local
     hooks:
-      - id: go-fmt
-        files: ^services/aggregator/
-      - id: go-vet
-        files: ^services/aggregator/
-      - id: go-unit-tests
-        files: ^services/aggregator/
+      - id: aggregator-go-fmt
+        name: go-fmt (aggregator)
+        entry: bash -c 'cd services/aggregator && gofmt -w $(find . -type f -name "*.go")'
+        language: system
+        pass_filenames: false
+        files: ^services/aggregator/.*\.go$
+      - id: aggregator-go-vet
+        name: go-vet (aggregator)
+        entry: bash -c 'cd services/aggregator && go vet ./...'
+        language: system
+        pass_filenames: false
+        files: ^services/aggregator/(.*\.go|go\.mod|go\.sum)$
+      - id: aggregator-go-unit-tests
+        name: go-unit-tests (aggregator)
+        entry: bash -c 'cd services/aggregator && go test ./...'
+        language: system
+        pass_filenames: false
+        files: ^services/aggregator/(.*\.go|go\.mod|go\.sum)$
 
   # ============================================================
   # Python (Processor)
@@ -47,4 +58,3 @@ repos:
     hooks:
       - id: prettier
         files: ^services/delivery/
-        types_or: [typescript, tsx, javascript, json, css, markdown]

@@ -24,7 +24,7 @@ const mockNodes: GraphNode[] = [
 ];
 
 describe("FocusPanel", () => {
-  it('shows placeholder when nodeId is null', () => {
+  it("shows placeholder when nodeId is null", () => {
     render(<FocusPanel nodeId={null} nodes={mockNodes} onClose={jest.fn()} />);
     expect(screen.getByText(/click a node to inspect/i)).toBeInTheDocument();
   });

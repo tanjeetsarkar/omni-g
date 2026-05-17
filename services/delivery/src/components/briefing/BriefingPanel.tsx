@@ -38,7 +38,9 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
 
   const fetchBriefings = useCallback(async () => {
     try {
-      const res = await fetch(`/api/briefings?tenant_id=${encodeURIComponent(tenantId)}`);
+      const res = await fetch(
+        `/api/briefings?tenant_id=${encodeURIComponent(tenantId)}`,
+      );
       const data: BriefingsResponse = await res.json();
       if (data.error && data.briefings.length === 0) {
         setFetchError(data.error);
@@ -63,7 +65,7 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
     setPlayingId(briefingId);
     try {
       const res = await fetch(
-        `/api/briefings/${encodeURIComponent(briefingId)}?tenant_id=${encodeURIComponent(tenantId)}`
+        `/api/briefings/${encodeURIComponent(briefingId)}?tenant_id=${encodeURIComponent(tenantId)}`,
       );
       if (!res.ok) throw new Error("Failed to get signed URL");
       const { signed_url } = await res.json();
@@ -100,10 +102,7 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
       {loading && (
         <div className="space-y-2" aria-label="Loading briefings">
           {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-10 bg-slate-700 rounded animate-pulse"
-            />
+            <div key={i} className="h-10 bg-slate-700 rounded animate-pulse" />
           ))}
         </div>
       )}

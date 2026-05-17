@@ -25,7 +25,9 @@ const GraphView = dynamic(() => import("@/components/graph/GraphView"), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center w-full h-full">
-      <p className="text-slate-400 text-sm animate-pulse">Initialising graph…</p>
+      <p className="text-slate-400 text-sm animate-pulse">
+        Initialising graph…
+      </p>
     </div>
   ),
 });
@@ -61,7 +63,9 @@ export default function DashboardPage() {
         <main className="flex-1 relative">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10">
-              <p className="text-slate-400 text-sm animate-pulse">Loading graph…</p>
+              <p className="text-slate-400 text-sm animate-pulse">
+                Loading graph…
+              </p>
             </div>
           )}
           {error && !loading && (

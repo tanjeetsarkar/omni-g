@@ -23,7 +23,9 @@ import {
 // ─── Environment ────────────────────────────────────────────────────────────
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "3001", 10);
 const METRICS_PORT = parseInt(process.env.METRICS_PORT ?? "9464", 10);
-const KAFKA_BROKERS = (process.env.KAFKA_BROKERS ?? "localhost:9092").split(",");
+const KAFKA_BROKERS = (process.env.KAFKA_BROKERS ?? "localhost:9092").split(
+  ",",
+);
 const KAFKA_ALERTS_TOPIC = process.env.KAFKA_ALERTS_TOPIC ?? "analyst-alerts";
 
 // ─── Prometheus registry ─────────────────────────────────────────────────────
@@ -167,9 +169,14 @@ async function main(): Promise<void> {
   consumer = createKafkaConsumer();
   try {
     await startConsumer(consumer);
-    console.log(`[gateway] Kafka consumer connected → topic: ${KAFKA_ALERTS_TOPIC}`);
+    console.log(
+      `[gateway] Kafka consumer connected → topic: ${KAFKA_ALERTS_TOPIC}`,
+    );
   } catch (err) {
-    console.error("[gateway] Kafka connection failed (will retry on reconnect):", err);
+    console.error(
+      "[gateway] Kafka connection failed (will retry on reconnect):",
+      err,
+    );
   }
 }
 
@@ -192,7 +199,10 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 // Only auto-start when NOT in Jest test environment
-if (process.env.NODE_ENV !== "test" && process.env.JEST_WORKER_ID === undefined) {
+if (
+  process.env.NODE_ENV !== "test" &&
+  process.env.JEST_WORKER_ID === undefined
+) {
   main().catch((err) => {
     console.error("[gateway] fatal error:", err);
     process.exit(1);

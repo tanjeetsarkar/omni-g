@@ -58,7 +58,7 @@ A complete reference of every technology, library, and tool used across the Omni
 
 > **Alternative:** `falkordb/falkordb:latest` — Redis-based graph DB, lower latency for high-throughput writes.
 
-**Query Language:** Cypher  
+**Query Language:** Cypher
 **Web UI:** Neo4j Browser at `http://localhost:7474`
 
 ### 3.3 Cache & Deduplication

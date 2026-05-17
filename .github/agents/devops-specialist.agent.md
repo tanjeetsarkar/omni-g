@@ -365,15 +365,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Build services
         run: |
           docker-compose build
-      
+
       - name: Run tests
         run: |
           docker-compose -f docker-compose.test.yml up --exit-code-from test
-      
+
       - name: Push images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -399,10 +399,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
-      
+
       - name: Deploy to Kubernetes
         run: |
           kubectl apply -f infrastructure/k8s/

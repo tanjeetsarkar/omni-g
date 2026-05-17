@@ -23,7 +23,9 @@ export function useAlertHighlight(socket: Socket): {
   highlightedNodeIds: Set<string>;
   alertCount: number;
 } {
-  const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<string>>(new Set());
+  const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [alertCount, setAlertCount] = useState(0);
 
   // Track active timeout IDs so we can clear them on unmount
