@@ -105,7 +105,7 @@ flowchart LR
 | Producer | Interface | Consumer | Contract |
 |---|---|---|---|
 | MCP Plugin | JSON-RPC/SSE | Aggregator Scheduler | `tools/list`, `tools/call` content blocks |
-| Aggregator | HTTP POST `/validate` | Processor (current impl) | validation contract: `{ valid: boolean, errors?: [{ field: string, message: string }] }`; target is a decoupled validation sidecar/service |
+| Aggregator | HTTP POST `/validate` | Processor (current impl) | validation contract: `{ valid: boolean, errors?: [{ field: string, message: string }] }`; when `valid=false`, `errors` must be present with at least one entry; target is a decoupled validation sidecar/service |
 | Aggregator | Kafka `raw-feed` | Processor | `RawEvent` envelope |
 | Processor | Kafka `analyst-alerts` | Delivery Gateway | `AnalystAlert` payload |
 | Delivery API routes | HTTP REST | Processor | `/briefings`, `/briefings/generate` |
@@ -286,6 +286,8 @@ flowchart LR
    - roadmap marks M5 as not started, while implementation and gap matrix indicate substantial M5 completion.
 9. **Delivery runtime still carries Neo4j credentials**
    - Even with proxy-style APIs, retaining direct DB credentials in Delivery increases the chance of bypassing Processor tenant/audit controls.
+10. **Baseline AI profile drift for local extraction path**
+   - Ollama is architecturally assumed in Processor extraction/summarization flows, but the compose Ollama service is currently commented and not active in the baseline profile.
 
 ### 11.2 Anti-Pattern Watchlist (for upcoming phases)
 - Do not allow Delivery direct Neo4j access (credentials currently present in Delivery env despite proxy pattern).
@@ -295,8 +297,8 @@ flowchart LR
 
 ## 12. Recommended Next Architecture Actions
 
-1. **Replace mock graph API first:** prioritize Processor-backed graph query endpoint so analysts see live intelligence instead of fixtures.
-2. **Remove direct graph credentials from Delivery runtime:** enforce delivery→processor-only graph access and keep tenant/audit controls centralized.
+1. **Remove direct graph credentials from Delivery runtime first:** credentials are currently present but unnecessary and should be removed before any graph API wiring to prevent boundary bypass.
+2. **Replace mock graph API next:** prioritize Processor-backed graph query endpoint so analysts see live intelligence instead of fixtures.
 3. **Close tenancy enforcement gap:** implement query-time tenant enforcement + authorization model (M6.1).
 4. **Decouple ingress validation path:** move `/validate` dependency to a dedicated sidecar/service boundary so ingestion survives Processor partial outages.
 5. **Normalize Delivery↔Processor API contracts:** adopt one canonical briefing contract (`GET /briefings`, `GET /briefings/{id}`, `POST /briefings`) and align both services.
