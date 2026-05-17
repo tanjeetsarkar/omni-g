@@ -105,7 +105,7 @@ flowchart LR
 | Producer | Interface | Consumer | Contract |
 |---|---|---|---|
 | MCP Plugin | JSON-RPC/SSE | Aggregator Scheduler | `tools/list`, `tools/call` content blocks |
-| Aggregator | HTTP POST `/validate` | Processor (current impl) | validation contract: `{ valid: boolean, errors?: [{ field: string, message: string }] }`; when `valid=false`, `errors` must be present with at least one entry; target is a decoupled validation sidecar/service |
+| Aggregator | HTTP POST `/validate` | Processor (current impl) | validation contract: success `{ valid: true }`; failure `{ valid: false, errors: [{ field: string, message: string }] }` (at least one error); target is a decoupled validation sidecar/service |
 | Aggregator | Kafka `raw-feed` | Processor | `RawEvent` envelope |
 | Processor | Kafka `analyst-alerts` | Delivery Gateway | `AnalystAlert` payload |
 | Delivery API routes | HTTP REST | Processor | `/briefings`, `/briefings/generate` |
@@ -165,7 +165,8 @@ flowchart TB
 ### 7.1 Current Deployment (Docker Compose Profiles)
 - **core:** Kafka, Redis, Neo4j
 - **vector:** Qdrant
-- **ai:** Kokoro TTS (Ollama service is currently commented in compose to keep baseline resource usage lower; roadmap still assumes Ollama for extraction/summarization paths)
+- **ai:** Kokoro TTS
+- **note:** Ollama service is currently commented in compose to keep baseline resource usage lower, though roadmap architecture still assumes Ollama in extraction/summarization paths.
 - **storage:** MinIO
 - **observability:** Prometheus, Grafana, Loki
 - **services:** Aggregator, Processor, Delivery
@@ -271,7 +272,7 @@ flowchart LR
 1. **Tenant isolation remains partial**
    - tenant_id propagation exists, but Neo4j LBAC/federated authorization and end-to-end tenant auth boundaries are not yet complete.
 2. **Ingress validation is tightly coupled to Processor availability**
-   - Aggregator currently depends on Processor `/validate`; if Processor is unavailable, Aggregator validation fails closed and raw event publishing is blocked.
+   - Aggregator currently depends on Processor `/validate`; if Processor is unavailable, validation fails secure (event rejected) and raw event publishing is blocked.
 3. **Sandboxing target not implemented**
    - MCP plugin isolation/runtime policies (gVisor/Firecracker/network allow-list) are not active.
 4. **Delivery graph source is still mock**
@@ -279,13 +280,13 @@ flowchart LR
 5. **Provenance linkage gap (`created_by_ref`)**
    - model field exists; extraction metadata path currently does not guarantee full plugin+analyst provenance population.
 6. **Architecture drift in Delivery API contracts**
-   - Delivery route expects `/briefings/{id}` while Processor exposes `/briefings` and `/briefings/generate`; this is a latent integration defect and can cause endpoint failures depending on UI path.
+   - Delivery route expects `GET /briefings/{id}` but Processor currently exposes `/briefings` and `/briefings/generate`; this is a latent integration defect caused by a missing/unaligned Processor endpoint.
 7. **Duplicate persistence pathways**
    - resolver persistence and graph persistence both write to Neo4j in pipeline sequence, increasing model/label consistency risk.
 8. **Roadmap/document drift**
    - roadmap marks M5 as not started, while implementation and gap matrix indicate substantial M5 completion.
 9. **Delivery runtime still carries Neo4j credentials**
-   - Even with proxy-style APIs, retaining direct DB credentials in Delivery increases the chance of bypassing Processor tenant/audit controls.
+   - Even with proxy-style APIs, retaining direct DB credentials in Delivery creates a security boundary violation by enabling potential bypass of Processor tenant/audit controls.
 10. **Baseline AI profile drift for local extraction path**
    - Ollama is architecturally assumed in Processor extraction/summarization flows, but the compose Ollama service is currently commented and not active in the baseline profile.
 
