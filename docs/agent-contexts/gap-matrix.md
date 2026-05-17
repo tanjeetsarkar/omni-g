@@ -2,7 +2,7 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** May 17, 2026 — CI reliability hardening (Aggregator lint toolchain, Processor Ruff formatting, Processor Docker build context, Delivery no-test policy)
+**Last Updated:** May 17, 2026 — CI reliability hardening (Aggregator lint toolchain, Processor Ruff formatting, Processor Docker build context, Delivery no-test policy, Delivery Docker CI mode)
 
 ## Scope
 
@@ -48,6 +48,7 @@ This document should be updated after every implementation change. Capture only 
 - **M4.3 GraphRAG Indexing (closed):** `CommunityDetector` tries GDS Leiden/Louvain on a projected graph, falls back to Python union-find connected-components when GDS is unavailable; `detect_communities_for_entity` runs incremental 2-hop subgraph detection. `CommunitySummarizer` fetches entity+relationship context, builds an analyst-style prompt, calls Ollama (or OpenAI if key set), falls back to a template on error, and writes `community_id`/`community_summary`/`community_updated_at` to member nodes. `GraphRAGIndexer` orchestrates full and incremental passes, supports a background periodic task, and emits 4 Prometheus metrics. Wired into `ProcessingPipeline` (Step 6) and `startup_consumer`. 10 new GraphRAG tests. All 131 tests pass.
 - **CI reliability hardening (no roadmap scope change):** Aggregator lint step no longer depends on a prebuilt `golangci-lint` binary compiled with an older Go toolchain; workflow now installs a pinned `golangci-lint` version from source using the job's Go 1.26 environment before linting. Processor code was reformatted to satisfy enforced Ruff format checks. Delivery CI test command now includes `--passWithNoTests` to make current no-test state explicit until tracked baseline tests are added.
 - **Processor Docker build hardening (no roadmap scope change):** `services/processor/Dockerfile` now copies both `uv.lock` and `README.md` into the build context before `uv sync --no-dev --frozen`, so frozen installs succeed inside CI and local Docker builds without relying on ambient files outside the image context.
+- **Delivery Docker build hardening (no roadmap scope change):** `services/delivery/Dockerfile` now copies `pnpm-workspace.yaml` into the dependency stage so `allowBuilds` is visible during `pnpm install --frozen-lockfile`, and the builder stage sets `CI=true` so pnpm does not abort module-directory cleanup in the non-TTY Docker build environment.
 
  in `infrastructure/docker-compose.yml` by replacing Kafka probe with a lightweight TCP socket readiness check (`bash -c 'echo > /dev/tcp/localhost/9092'`) instead of unavailable/slow CLI probes, and aligned Kokoro probe/port mapping to the actual service bind port (`8880`) with host mapping `8000:8880`.
 - **Kafka listener binding correction:** Kafka listener bind address was updated to `0.0.0.0` (`KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093`) while keeping `KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092`, so in-container localhost health checks and inter-container DNS-based client routing both succeed.
