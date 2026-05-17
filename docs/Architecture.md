@@ -284,6 +284,8 @@ flowchart LR
    - resolver persistence and graph persistence both write to Neo4j in pipeline sequence, increasing model/label consistency risk.
 8. **Roadmap/document drift**
    - roadmap marks M5 as not started, while implementation and gap matrix indicate substantial M5 completion.
+9. **Delivery runtime still carries Neo4j credentials**
+   - Even with proxy-style APIs, retaining direct DB credentials in Delivery increases the chance of bypassing Processor tenant/audit controls.
 
 ### 11.2 Anti-Pattern Watchlist (for upcoming phases)
 - Do not allow Delivery direct Neo4j access (credentials currently present in Delivery env despite proxy pattern).
