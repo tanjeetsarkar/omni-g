@@ -32,25 +32,28 @@ type Pipeline struct {
 	validator SchemaValidator
 	publisher Publisher
 	topic     string
+	tenantID  string
 }
 
 // New creates a Pipeline wired to the given validator and publisher.
-// topic is used only for metrics labels.
-func New(validator SchemaValidator, publisher Publisher, topic string) *Pipeline {
+// topic is used only for metrics labels. tenantID is stamped on every event.
+func New(validator SchemaValidator, publisher Publisher, topic string, tenantID string) *Pipeline {
 	return &Pipeline{
 		validator: validator,
 		publisher: publisher,
 		topic:     topic,
+		tenantID:  tenantID,
 	}
 }
 
 // Process validates payload and publishes it as a RawEvent.
 // source identifies the originating MCP plugin URL.
+// pluginName and pluginVersion are stamped into the event envelope for provenance.
 //
 // If the validation sidecar is unreachable the event is dropped and an error
 // is returned (fail-closed). If the payload is invalid the event is counted as
 // a validation failure and dropped without an error (the rejection is expected).
-func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any) error {
+func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string) error {
 	start := time.Now()
 
 	// ── validate ──────────────────────────────────────────────────────────
@@ -64,9 +67,9 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	if !result.Valid {
 		reason := "schema_violation"
 		if len(result.Errors) > 0 {
-			reason = result.Errors[0]
+			reason = result.Errors[0].Field + ":" + result.Errors[0].Message
 		}
-		log.Warn().Str("source", source).Strs("errors", result.Errors).
+		log.Warn().Str("source", source).Str("reason", reason).
 			Msg("event failed schema validation, dropping")
 		metrics.ValidationFailureTotal.WithLabelValues(source, reason).Inc()
 		metrics.IngestTotal.WithLabelValues(source, "validation_failed").Inc()
@@ -74,11 +77,16 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	}
 
 	// ── publish ───────────────────────────────────────────────────────────
+	elapsed := time.Since(start).Milliseconds()
 	event := &kafkainternal.RawEvent{
-		ID:        uuid.New().String(),
-		Source:    source,
-		Timestamp: time.Now().UTC(),
-		Payload:   payload,
+		ID:              uuid.New().String(),
+		Source:          source,
+		Timestamp:       time.Now().UTC(),
+		Payload:         payload,
+		PluginName:      pluginName,
+		PluginVersion:   pluginVersion,
+		IngestLatencyMs: elapsed,
+		TenantID:        p.tenantID,
 	}
 
 	if err := p.publisher.Publish(ctx, event); err != nil {
@@ -97,7 +105,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 
 // ProcessBlock parses a ContentBlock's text as a JSON payload and forwards it
 // to Process. Malformed JSON is dropped and logged.
-func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string) error {
+func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string) error {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		log.Warn().Str("source", source).Str("text", text).
@@ -105,5 +113,5 @@ func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string)
 		metrics.IngestTotal.WithLabelValues(source, "parse_error").Inc()
 		return nil // non-fatal
 	}
-	return p.Process(ctx, source, payload)
+	return p.Process(ctx, source, payload, pluginName, pluginVersion)
 }

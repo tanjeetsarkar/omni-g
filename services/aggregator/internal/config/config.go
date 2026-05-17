@@ -26,6 +26,9 @@ type Config struct {
 	// DLQTopic is the Kafka topic for dead-lettered events.
 	// Unused in M3.1; wired in M3.4.
 	DLQTopic string `mapstructure:"KAFKA_DLQ_TOPIC"`
+
+	// TenantID identifies the tenant for all events produced by this instance.
+	TenantID string `mapstructure:"TENANT_ID"`
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -42,6 +45,7 @@ func Load() (*Config, error) {
 	v.SetDefault("MCP_PLUGIN_URLS", "")
 	v.SetDefault("SCHEDULER_INTERVAL_MS", 30000)
 	v.SetDefault("KAFKA_DLQ_TOPIC", "raw-feed.dlq")
+	v.SetDefault("TENANT_ID", "default")
 
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

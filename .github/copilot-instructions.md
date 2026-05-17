@@ -290,8 +290,19 @@ When asked about Omni-G architecture, refer to these files:
 3. **prerequisites.md** — Development environment setup
 4. **IMPLEMENTATION-PLAN.md** — Phase-by-phase breakdown
 5. **ROADMAP.md** — Milestone sequencing
+6. **docs/agent-contexts/gap-matrix.md** — Living delta between vision, roadmap, and implementation
 
 When giving advice, cite specific sections (e.g., "Per techstack.md § 5.1, Ollama serves models via OpenAI-compatible API").
+
+## Documentation Hygiene
+
+After every implementation or behavior-changing change, update **docs/agent-contexts/gap-matrix.md** so it reflects:
+- completed upgrades
+- remaining deviations from the business plan
+- roadmap phase impact
+- any doc drift that should be corrected next
+
+Treat the gap matrix as the canonical living record of how the implementation compares to the vision.
 
 ---
 

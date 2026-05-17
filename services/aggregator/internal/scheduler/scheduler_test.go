@@ -67,7 +67,7 @@ func TestScheduler_ReceivesBlocks(t *testing.T) {
 	defer cancel()
 
 	var received atomic.Int32
-	go s.Start(ctx, func(_ context.Context, _ string, block mcp.ContentBlock) error {
+	go s.Start(ctx, func(_ context.Context, _ string, block mcp.ContentBlock, _ mcp.Tool) error {
 		received.Add(1)
 		assert.Equal(t, mcp.ContentTypeText, block.Type)
 		return nil
@@ -98,7 +98,7 @@ func TestScheduler_MultiplePlugins(t *testing.T) {
 	sources := make(map[string]int)
 	var mu sync.Mutex
 
-	go s.Start(ctx, func(_ context.Context, source string, _ mcp.ContentBlock) error {
+	go s.Start(ctx, func(_ context.Context, source string, _ mcp.ContentBlock, _ mcp.Tool) error {
 		mu.Lock()
 		sources[source]++
 		mu.Unlock()
@@ -122,7 +122,7 @@ func TestScheduler_NoPlugins(t *testing.T) {
 	// Should return quickly when no plugins registered.
 	done := make(chan struct{})
 	go func() {
-		s.Start(ctx, func(_ context.Context, _ string, _ mcp.ContentBlock) error { return nil })
+		s.Start(ctx, func(_ context.Context, _ string, _ mcp.ContentBlock, _ mcp.Tool) error { return nil })
 		close(done)
 	}()
 
@@ -144,7 +144,7 @@ func TestScheduler_PluginUnavailable_DoesNotPanic(t *testing.T) {
 	// Should not panic; just log errors and back off.
 	done := make(chan struct{})
 	go func() {
-		s.Start(ctx, func(_ context.Context, _ string, _ mcp.ContentBlock) error { return nil })
+		s.Start(ctx, func(_ context.Context, _ string, _ mcp.ContentBlock, _ mcp.Tool) error { return nil })
 		close(done)
 	}()
 

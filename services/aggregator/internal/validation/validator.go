@@ -10,10 +10,16 @@ import (
 	"time"
 )
 
+// ErrorDetail is a single structured validation error from the sidecar.
+type ErrorDetail struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
 // ValidationResult is returned by the validation sidecar.
 type ValidationResult struct {
-	Valid  bool     `json:"valid"`
-	Errors []string `json:"errors,omitempty"`
+	Valid  bool          `json:"valid"`
+	Errors []ErrorDetail `json:"errors,omitempty"`
 }
 
 // Validator delegates schema validation to the Python sidecar.

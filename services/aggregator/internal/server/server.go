@@ -72,11 +72,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // pipeline.
 func (s *Server) Start(ctx context.Context) error {
 	if s.scheduler != nil && s.pipeline != nil {
-		go s.scheduler.Start(ctx, func(ctx context.Context, source string, block mcp.ContentBlock) error {
+		go s.scheduler.Start(ctx, func(ctx context.Context, source string, block mcp.ContentBlock, tool mcp.Tool) error {
 			if block.Type != mcp.ContentTypeText || block.Text == "" {
 				return nil
 			}
-			return s.pipeline.ProcessBlock(ctx, source, block.Text)
+			version := tool.Version
+			if version == "" {
+				version = "unknown"
+			}
+			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version)
 		})
 	}
 

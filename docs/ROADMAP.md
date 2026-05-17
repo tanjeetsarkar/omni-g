@@ -202,28 +202,28 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M3.2: Redis Deduplication Layer
-- [ ] Implement SHA-256 content hashing
-- [ ] Create sliding window dedup logic (24h TTL)
-- [ ] Write Redis Lua scripts for atomic check-set
-- [ ] Add RediSearch blocking queries
-- [ ] Create comprehensive unit tests (>80% coverage)
+- [x] Implement SHA-256 content hashing
+- [x] Create sliding window dedup logic (24h TTL)
+- [x] Write Redis Lua scripts for atomic check-set
+- [x] Add RediSearch blocking queries
+- [x] Create comprehensive unit tests (>80% coverage)
 
 **Dependencies:** M1.3, M2.2  
 **Verification:**
-- Hash collisions handled correctly
-- TTL expiry works as expected
-- Botnet dedup clusters duplicates correctly
-- Lua script atomicity verified under concurrency
+- Hash collisions handled correctly ✅
+- TTL expiry works as expected ✅
+- Botnet dedup clusters duplicates correctly ✅
+- Lua script atomicity verified under concurrency ✅
 
 ---
 
 #### M3.3: LLM Entity Extraction
-- [ ] Implement instructor-based LLM prompt
-- [ ] Create Pydantic STIX 2.1 models (Person, Org, Malware, etc.)
-- [ ] Implement Ollama fallback logic
-- [ ] Add confidence scoring for extracted entities
-- [ ] Implement rate limiting (tokens/sec)
-- [ ] Create comprehensive unit tests (>80% coverage)
+- [x] Implement instructor-based LLM prompt
+- [x] Create Pydantic STIX 2.1 models (Person, Org, Malware, etc.)
+- [x] Implement Ollama fallback logic
+- [x] Add confidence scoring for extracted entities
+- [x] Implement rate limiting (tokens/sec)
+- [x] Create comprehensive unit tests (>80% coverage)
 
 **Dependencies:** M2.2, M3.1  
 **Verification:**
@@ -235,14 +235,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M3.4: Processor Kafka Consumer
-- [ ] Implement consumer group pattern (multiple workers)
-- [ ] Create dead-letter queue (DLQ) for schema violations
-- [ ] Build processing pipeline: hash check → extract → resolve
-- [ ] Add Prometheus metrics:
+- [x] Implement consumer group pattern (multiple workers)
+- [x] Create dead-letter queue (DLQ) for schema violations
+- [x] Build processing pipeline: hash check → extract → resolve
+- [x] Add Prometheus metrics:
   - Processing latency per event
   - Extraction accuracy (confidence distribution)
   - DLQ error rate
-- [ ] Create comprehensive integration tests
+- [x] Create comprehensive integration tests
 
 **Dependencies:** M3.1, M3.2, M3.3, M2.2  
 **Verification:**

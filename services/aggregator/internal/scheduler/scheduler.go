@@ -17,8 +17,8 @@ const (
 )
 
 // OnBlockFunc is called for every ContentBlock delivered by a plugin tool.
-// source is the plugin URL.
-type OnBlockFunc func(ctx context.Context, source string, block mcp.ContentBlock) error
+// source is the plugin URL; tool is the tool that produced the block.
+type OnBlockFunc func(ctx context.Context, source string, block mcp.ContentBlock, tool mcp.Tool) error
 
 // pluginEntry describes a registered MCP plugin server.
 type pluginEntry struct {
@@ -30,13 +30,23 @@ type pluginEntry struct {
 // Scheduler polls registered MCP plugin servers and delivers ContentBlocks to
 // a caller-supplied handler.
 type Scheduler struct {
-	mu      sync.Mutex
-	plugins []pluginEntry
+	mu          sync.Mutex
+	plugins     []pluginEntry
+	discoveryFn func(ctx context.Context, pluginURL string, tools []mcp.Tool)
 }
 
 // New creates an empty Scheduler.
 func New() *Scheduler {
 	return &Scheduler{}
+}
+
+// SetOnDiscovery registers a callback that is invoked after each successful
+// tools/list response. The callback receives the plugin URL and the full list
+// of discovered tools. It is used to keep the MCP handler registry up to date.
+func (s *Scheduler) SetOnDiscovery(fn func(ctx context.Context, pluginURL string, tools []mcp.Tool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discoveryFn = fn
 }
 
 // RegisterPlugin adds an MCP plugin server to the polling schedule.
@@ -127,6 +137,15 @@ func (s *Scheduler) pollOnce(ctx context.Context, p pluginEntry, onBlock OnBlock
 
 	metrics.SchedulerPollTotal.WithLabelValues(p.url, "ok").Inc()
 
+	// Notify the discovery callback with freshly-listed tools so the MCP
+	// handler registry stays current without a separate ListTools call.
+	s.mu.Lock()
+	dfn := s.discoveryFn
+	s.mu.Unlock()
+	if dfn != nil {
+		dfn(ctx, p.url, tools)
+	}
+
 	for _, tool := range tools {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -147,7 +166,7 @@ func (s *Scheduler) callTool(ctx context.Context, p pluginEntry, tool mcp.Tool, 
 	}
 
 	for block := range ch {
-		if err := onBlock(ctx, p.url, block); err != nil {
+		if err := onBlock(ctx, p.url, block, tool); err != nil {
 			log.Warn().Str("plugin", p.url).Str("tool", tool.Name).
 				Err(err).Msg("onBlock handler returned error")
 		}

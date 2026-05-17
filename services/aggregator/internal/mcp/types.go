@@ -45,6 +45,7 @@ const (
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
+	Version     string          `json:"version,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
 }
 

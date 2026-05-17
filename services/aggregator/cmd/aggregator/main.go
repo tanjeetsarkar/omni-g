@@ -45,7 +45,7 @@ func main() {
 	validator := validation.NewValidator(cfg.ValidationServiceURL)
 
 	// ── Processing pipeline ───────────────────────────────────────────────
-	pl := pipeline.New(validator, producer, cfg.KafkaTopic)
+	pl := pipeline.New(validator, producer, cfg.KafkaTopic, cfg.TenantID)
 
 	// ── Agentic scheduler ─────────────────────────────────────────────────
 	sched := scheduler.New()
@@ -57,12 +57,24 @@ func main() {
 
 	// ── MCP discovery handler ─────────────────────────────────────────────
 	mcpHandler := mcp.NewHandler()
-	for _, u := range cfg.MCPPluginURLs {
-		mcpHandler.RegisterTool(mcp.Tool{
-			Name:        u,
-			Description: "MCP plugin data source",
-		})
+
+	// Initial discovery: contact each plugin to populate the tool registry.
+	{
+		discoverCtx, discoverCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		for _, u := range cfg.MCPPluginURLs {
+			if _, err := mcpHandler.DiscoverTools(discoverCtx, u); err != nil {
+				log.Warn().Str("plugin", u).Err(err).Msg("initial tool discovery failed, will retry on next poll")
+			} else {
+				log.Info().Str("plugin", u).Msg("initial tool discovery succeeded")
+			}
+		}
+		discoverCancel()
 	}
+
+	// Periodic refresh: scheduler notifies the handler after every successful poll.
+	sched.SetOnDiscovery(func(ctx context.Context, pluginURL string, tools []mcp.Tool) {
+		mcpHandler.UpdatePluginTools(pluginURL, tools)
+	})
 
 	// ── HTTP server ───────────────────────────────────────────────────────
 	srv := server.New(cfg, pl, sched, mcpHandler)

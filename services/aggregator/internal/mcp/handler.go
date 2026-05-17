@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 )
@@ -10,30 +12,53 @@ import (
 // It exposes the list of data sources the aggregator is currently ingesting from,
 // allowing upstream agents to discover available tools.
 type Handler struct {
-	mu    sync.RWMutex
-	tools []Tool
+	mu       sync.RWMutex
+	byPlugin map[string][]Tool // keyed by plugin URL; "__manual__" for RegisterTool entries
 }
 
 // NewHandler creates an empty Handler.
 func NewHandler() *Handler {
-	return &Handler{}
+	return &Handler{byPlugin: make(map[string][]Tool)}
 }
 
-// RegisterTool adds a tool to the discovery list. Safe to call from multiple
-// goroutines.
+// RegisterTool adds a tool to the discovery list under the "__manual__" bucket.
+// Safe to call from multiple goroutines.
 func (h *Handler) RegisterTool(t Tool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.tools = append(h.tools, t)
+	h.byPlugin["__manual__"] = append(h.byPlugin["__manual__"], t)
 }
 
-// HandleToolsList serves GET /mcp/tools, returning the registered tools as a
+// UpdatePluginTools replaces the registered tools for the given plugin URL.
+// Safe to call from multiple goroutines.
+func (h *Handler) UpdatePluginTools(pluginURL string, tools []Tool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.byPlugin[pluginURL] = tools
+}
+
+// DiscoverTools contacts pluginURL, fetches its tools/list, updates the
+// handler's registry for that plugin, and returns the discovered tools.
+// Intended for initial startup discovery and periodic refresh.
+func (h *Handler) DiscoverTools(ctx context.Context, pluginURL string) ([]Tool, error) {
+	c := NewClient(pluginURL)
+	tools, err := c.ListTools(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover tools from %s: %w", pluginURL, err)
+	}
+	h.UpdatePluginTools(pluginURL, tools)
+	return tools, nil
+}
+
+// HandleToolsList serves GET /mcp/tools, returning all registered tools as a
 // JSON-RPC 2.0 result envelope so upstream MCP clients can treat this endpoint
 // like any other MCP server.
 func (h *Handler) HandleToolsList(w http.ResponseWriter, _ *http.Request) {
 	h.mu.RLock()
-	tools := make([]Tool, len(h.tools))
-	copy(tools, h.tools)
+	var tools []Tool
+	for _, ts := range h.byPlugin {
+		tools = append(tools, ts...)
+	}
 	h.mu.RUnlock()
 
 	result, err := json.Marshal(ToolsListResult{Tools: tools})
