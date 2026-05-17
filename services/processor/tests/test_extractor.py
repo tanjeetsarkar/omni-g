@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +16,6 @@ def _make_threat_actor(
     uid: str = "12345678-1234-5678-1234-567812345678",
 ) -> ThreatActor:
     return ThreatActor(
-        type="threat-actor",
         id=f"threat-actor--{uid}",
         created=datetime.now(UTC),
         modified=datetime.now(UTC),
@@ -112,7 +112,9 @@ async def test_extract_batch_converts_exceptions_to_empty_results(
     call_count = 0
 
     async def _patched_extract(
-        event_id: str, text: str, metadata: dict | None = None
+        event_id: str,
+        text: str,
+        metadata: dict[str, Any] | None = None,
     ) -> ExtractionResult:
         nonlocal call_count
         call_count += 1
@@ -120,13 +122,12 @@ async def test_extract_batch_converts_exceptions_to_empty_results(
             return good
         raise RuntimeError("unexpected LLM failure")
 
-    extractor.extract = _patched_extract  # type: ignore[method-assign]
-
     events = [
         {"id": "evt-001", "text": "APT28 attacked"},
         {"id": "evt-002", "text": "some text"},
     ]
-    results = await extractor.extract_batch(events)
+    with patch.object(extractor, "extract", side_effect=_patched_extract):
+        results = await extractor.extract_batch(events)
 
     assert len(results) == 2
     assert results[0].source_event_id == "evt-001"

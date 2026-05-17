@@ -1,6 +1,6 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 16, 2026  
+**Last Updated:** May 17, 2026  
 **Status:** Foundation Phase Active
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
@@ -255,7 +255,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M4: Knowledge Graph Construction
 
-**Status:** 🔴 NOT STARTED  
+**Status:** 🟢 COMPLETE  
 **Focus:** Entity resolution, graph persistence, GraphRAG indexing
 
 ### Milestones
@@ -281,17 +281,17 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M4.2: Neo4j Graph Persistence
-- [ ] Create Neo4j schema:
+- [x] Create Neo4j schema:
   - Nodes: Person, Organization, Malware, Location, Campaign, AttackPattern
   - Properties: STIX-compliant fields + custom_properties
   - Edges: attributed-to, targets, uses, located-at, related-to
-- [ ] Create indexes on:
+- [x] Create indexes on:
   - Entity IDs (unique constraint)
   - Created/updated timestamps
   - Confidence scores
-- [ ] Implement APOC procedures for community detection (Leiden/Louvain)
-- [ ] Add transaction management + rollback on write failures
-- [ ] Create comprehensive integration tests
+- [x] Implement APOC procedures for community detection (Leiden/Louvain)
+- [x] Add transaction management + rollback on write failures
+- [x] Create comprehensive integration tests
 
 **Dependencies:** M1.3 (Neo4j), M4.1  
 **Verification:**
@@ -303,15 +303,15 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M4.3: GraphRAG Indexing
-- [ ] Implement community detection on subgraph updates
-- [ ] Create natural language summary generation (LLM-based)
-- [ ] Store summaries in Neo4j node properties
-- [ ] Implement incremental updates (avoid full recalculation)
-- [ ] Add Prometheus metrics:
+- [x] Implement community detection on subgraph updates
+- [x] Create natural language summary generation (LLM-based)
+- [x] Store summaries in Neo4j node properties
+- [x] Implement incremental updates (avoid full recalculation)
+- [x] Add Prometheus metrics:
   - Community detection latency
   - Summary generation time
   - Update frequency
-- [ ] Create comprehensive tests
+- [x] Create comprehensive tests
 
 **Dependencies:** M4.2, M3.3  
 **Verification:**

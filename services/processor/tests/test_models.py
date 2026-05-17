@@ -6,11 +6,11 @@ from src.models.stix import ExtractionResult, Malware, STIXType, ThreatActor
 
 
 def test_threat_actor_type_is_correct() -> None:
-    assert ThreatActor.__fields__["type"].default == STIXType.THREAT_ACTOR  # type: ignore[attr-defined]
+    assert ThreatActor.model_fields["type"].default == STIXType.THREAT_ACTOR
 
 
 def test_malware_type_is_correct() -> None:
-    assert Malware.__fields__["type"].default == STIXType.MALWARE  # type: ignore[attr-defined]
+    assert Malware.model_fields["type"].default == STIXType.MALWARE
 
 
 @pytest.mark.parametrize(
@@ -38,11 +38,11 @@ def test_stix_confidence_validation(confidence: int, valid: bool) -> None:
         "confidence": confidence,
     }
     if valid:
-        actor = ThreatActor(**data)
+        actor = ThreatActor.model_validate(data)
         assert actor.confidence == confidence
     else:
         with pytest.raises(ValidationError):
-            ThreatActor(**data)
+            ThreatActor.model_validate(data)
 
 
 def test_extraction_result_defaults_are_empty() -> None:

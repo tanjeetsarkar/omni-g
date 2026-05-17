@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,6 +9,7 @@ from prometheus_client import Histogram
 from pydantic import ValidationError
 
 from src.dedup.deduplicator import ContentDeduplicator
+from src.llm.extractor import LLMExtractor
 from src.models.stix import ExtractionResult
 from src.processor.pipeline import (
     DEDUP_DROPS,
@@ -18,6 +19,7 @@ from src.processor.pipeline import (
     RawEventEnvelope,
     SchemaViolationError,
 )
+from src.resolution.resolver import EntityResolver
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,6 +33,14 @@ def _histogram_count(hist: Histogram) -> float:
             if sample.name.endswith("_count"):
                 return sample.value
     return 0.0
+
+
+def _counter_value(counter: Any, **labels: str) -> float:
+    metric = counter.labels(**labels) if labels else counter
+    value_obj = getattr(metric, "_value", None)
+    if value_obj is None:
+        return 0.0
+    return float(value_obj.get())
 
 
 def _make_valid_event(**overrides: Any) -> dict[str, Any]:
@@ -67,7 +77,7 @@ async def pipeline(
 ) -> ProcessingPipeline:
     return ProcessingPipeline(
         deduplicator=fake_deduplicator,
-        extractor=mock_extractor,  # type: ignore[arg-type]
+        extractor=cast(LLMExtractor, mock_extractor),
     )
 
 
@@ -171,11 +181,11 @@ class TestProcessingPipeline:
         pipeline: ProcessingPipeline,
     ) -> None:
         """Each schema violation increments the SCHEMA_VIOLATIONS counter."""
-        before = SCHEMA_VIOLATIONS._value.get()  # type: ignore[attr-defined]
+        before = _counter_value(SCHEMA_VIOLATIONS)
         bad_event: dict[str, Any] = {"payload": {"ip": "1.2.3.4"}}
         with pytest.raises(SchemaViolationError):
             await pipeline.process(bad_event)
-        assert SCHEMA_VIOLATIONS._value.get() == before + 1  # type: ignore[attr-defined]
+        assert _counter_value(SCHEMA_VIOLATIONS) == before + 1
 
     async def test_missing_payload_raises_schema_violation_error(
         self,
@@ -210,9 +220,9 @@ class TestProcessingPipeline:
             payload={"text": "dedup metric test"},
         )
         await pipeline.process(event)
-        before = DEDUP_DROPS.labels(tenant_id="t-metric")._value.get()  # type: ignore[attr-defined]
+        before = _counter_value(DEDUP_DROPS, tenant_id="t-metric")
         await pipeline.process(event)  # duplicate
-        assert DEDUP_DROPS.labels(tenant_id="t-metric")._value.get() == before + 1  # type: ignore[attr-defined]
+        assert _counter_value(DEDUP_DROPS, tenant_id="t-metric") == before + 1
 
     async def test_confidence_histogram_observed_on_success(
         self,
@@ -309,11 +319,11 @@ class TestProcessingPipeline:
         """Two worker pipelines sharing the same deduplicator drop cross-worker duplicates."""
         pipeline1 = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=mock_extractor,  # type: ignore[arg-type]
+            extractor=cast(LLMExtractor, mock_extractor),
         )
         pipeline2 = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=mock_extractor,  # type: ignore[arg-type]
+            extractor=cast(LLMExtractor, mock_extractor),
         )
         event1 = _make_valid_event(id="evt-w1", payload={"text": "worker1 unique event"})
         event2 = _make_valid_event(id="evt-w2", payload={"text": "worker2 unique event"})
@@ -334,7 +344,6 @@ class TestProcessingPipeline:
         from datetime import UTC, datetime
 
         from src.models.stix import Malware, ThreatActor
-        from src.resolution.resolver import EntityResolver
 
         now = datetime.now(UTC)
 
@@ -361,8 +370,8 @@ class TestProcessingPipeline:
         mock_resolver = AsyncMock(spec=EntityResolver)
         pipeline_with_resolver = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=mock_extractor,  # type: ignore[arg-type]
-            resolver=mock_resolver,  # type: ignore[arg-type]
+            extractor=cast(LLMExtractor, mock_extractor),
+            resolver=cast(EntityResolver, mock_resolver),
         )
 
         event = _make_valid_event(id="evt-resolver", payload={"text": "APT28 dropped Emotet"})
@@ -389,7 +398,7 @@ class TestProcessingPipeline:
         """Schema validation failure short-circuits before dedup; Redis not written."""
         pipeline = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=mock_extractor,  # type: ignore[arg-type]
+            extractor=cast(LLMExtractor, mock_extractor),
         )
         bad_event: dict[str, Any] = {"payload": {}}
         with pytest.raises(SchemaViolationError):

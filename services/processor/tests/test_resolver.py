@@ -42,6 +42,14 @@ def _make_stix_id(stix_type: str = "threat-actor") -> str:
     return f"{stix_type}--{uuid.uuid4()}"
 
 
+def _counter_value(counter: Any, **labels: str) -> float:
+    metric = counter.labels(**labels) if labels else counter
+    value_obj = getattr(metric, "_value", None)
+    if value_obj is None:
+        return 0.0
+    return float(value_obj.get())
+
+
 def _make_threat_actor(name: str = "APT-X", **kwargs: Any) -> ThreatActor:
     return ThreatActor(
         id=_make_stix_id("threat-actor"),
@@ -306,7 +314,7 @@ class TestAllEntitiesHelper:
             extraction_confidence=0.5,
         )
         all_ents = er.all_entities()
-        assert rel not in all_ents
+        assert all(not isinstance(ent, Relationship) for ent in all_ents)
         assert len(all_ents) == 0
 
 
@@ -333,7 +341,7 @@ class TestVectorBlocking:
         assert len(points) == 1
         assert points[0].payload["entity_id"] == entity.id
 
-        assert candidates == []  # search returned empty list
+        assert len(candidates) == 0  # search returned empty list
 
     async def test_vector_blocking_filters_self_from_results(self) -> None:
         """find_candidates() must not return the entity being resolved as a candidate."""
@@ -562,7 +570,7 @@ class TestMetrics:
             entity=entity,
         )
 
-        before_merges = SAME_AS_MERGES.labels(tenant_id=TENANT)._value.get()  # type: ignore[attr-defined]
+        before_merges = _counter_value(SAME_AS_MERGES, tenant_id=TENANT)
 
         with patch.object(resolver, "resolve", AsyncMock(return_value=auto_merge_result)):
             with patch.object(resolver, "persist_entity", AsyncMock(return_value=entity.id)):
@@ -583,7 +591,7 @@ class TestMetrics:
             entity2 = _make_threat_actor("MetricActor2")
             await resolver.resolve(TENANT, entity2)
 
-        assert SAME_AS_MERGES.labels(tenant_id=TENANT)._value.get() >= before_merges + 1  # type: ignore[attr-defined]
+        assert _counter_value(SAME_AS_MERGES, tenant_id=TENANT) >= before_merges + 1
 
     async def test_resolve_increments_false_positive_alerts_for_ambiguous(self) -> None:
         """AMBIGUOUS decision increments FALSE_POSITIVE_ALERTS counter."""
@@ -591,7 +599,7 @@ class TestMetrics:
         entity = _make_threat_actor("AmbiguousActor")
         existing_id = _make_stix_id("threat-actor")
 
-        before = FALSE_POSITIVE_ALERTS.labels(tenant_id=TENANT)._value.get()  # type: ignore[attr-defined]
+        before = _counter_value(FALSE_POSITIVE_ALERTS, tenant_id=TENANT)
 
         with (
             patch.object(
@@ -604,7 +612,7 @@ class TestMetrics:
             result = await resolver.resolve(TENANT, entity)
 
         assert result.decision == ResolutionDecision.AMBIGUOUS
-        assert FALSE_POSITIVE_ALERTS.labels(tenant_id=TENANT)._value.get() == before + 1  # type: ignore[attr-defined]
+        assert _counter_value(FALSE_POSITIVE_ALERTS, tenant_id=TENANT) == before + 1
 
     async def test_resolve_increments_same_as_merges_for_auto_merge(self) -> None:
         """AUTO_MERGE decision increments SAME_AS_MERGES counter."""
@@ -612,7 +620,7 @@ class TestMetrics:
         entity = _make_threat_actor("MergeActor")
         existing_id = _make_stix_id("threat-actor")
 
-        before = SAME_AS_MERGES.labels(tenant_id=TENANT)._value.get()  # type: ignore[attr-defined]
+        before = _counter_value(SAME_AS_MERGES, tenant_id=TENANT)
 
         with (
             patch.object(
@@ -625,16 +633,18 @@ class TestMetrics:
             result = await resolver.resolve(TENANT, entity)
 
         assert result.decision == ResolutionDecision.AUTO_MERGE
-        assert SAME_AS_MERGES.labels(tenant_id=TENANT)._value.get() == before + 1  # type: ignore[attr-defined]
+        assert _counter_value(SAME_AS_MERGES, tenant_id=TENANT) == before + 1
 
     async def test_resolve_increments_decisions_counter(self) -> None:
         """resolve() increments RESOLUTION_DECISIONS for each call."""
         resolver = _make_resolver()
         entity = _make_threat_actor("DecisionActor")
 
-        before = RESOLUTION_DECISIONS.labels(
-            decision="new_entity", tenant_id=TENANT
-        )._value.get()  # type: ignore[attr-defined]
+        before = _counter_value(
+            RESOLUTION_DECISIONS,
+            decision="new_entity",
+            tenant_id=TENANT,
+        )
 
         with (
             patch.object(resolver, "find_candidates", AsyncMock(return_value=[])),
@@ -644,7 +654,11 @@ class TestMetrics:
 
         assert result.decision == ResolutionDecision.NEW_ENTITY
         assert (
-            RESOLUTION_DECISIONS.labels(decision="new_entity", tenant_id=TENANT)._value.get()  # type: ignore[attr-defined]
+            _counter_value(
+                RESOLUTION_DECISIONS,
+                decision="new_entity",
+                tenant_id=TENANT,
+            )
             == before + 1
         )
 

@@ -29,6 +29,11 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     from qdrant_client import AsyncQdrantClient
 
     from ..dedup.deduplicator import ContentDeduplicator
+    from ..graph.persistence import GraphPersistenceService
+    from ..graph.schema import GraphSchemaManager
+    from ..graphrag.community import CommunityDetector
+    from ..graphrag.indexer import GraphRAGIndexer
+    from ..graphrag.summarizer import CommunitySummarizer
     from ..kafka.consumer import RawEventConsumer
     from ..llm.extractor import LLMExtractor
     from ..resolution.resolver import EntityResolver
@@ -54,10 +59,33 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     )
     resolver = EntityResolver(neo4j_driver=neo4j_driver, qdrant_client=qdrant_client)
 
+    # M4.2: Neo4j schema + persistence
+    schema_manager = GraphSchemaManager(neo4j_driver)
+    try:
+        await schema_manager.initialize()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Graph schema initialization failed (continuing)",
+            extra={"error": str(exc), "worker_id": worker_id},
+        )
+    graph_persistence = GraphPersistenceService(neo4j_driver)
+
+    # M4.3: GraphRAG indexing
+    community_detector = CommunityDetector(neo4j_driver)
+    summarizer = CommunitySummarizer(
+        neo4j_driver,
+        ollama_url=cfg.ollama_url,
+        model=cfg.ollama_model,
+        openai_api_key=cfg.openai_api_key,
+    )
+    graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
+
     pipeline = ProcessingPipeline(
         deduplicator=deduplicator,
         extractor=extractor,
         resolver=resolver,
+        graph_persistence=graph_persistence,
+        graphrag_indexer=graphrag_indexer,
     )
     consumer.start()
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncGenerator
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -69,7 +70,7 @@ async def fake_deduplicator() -> AsyncGenerator[object]:
 
     fake_r: fakeredis.aioredis.FakeRedis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     dedup = ContentDeduplicator(ttl_seconds=60)
-    dedup._client = fake_r  # type: ignore[assignment]
+    dedup._client = cast(Any, fake_r)
     try:
         dedup._script_sha = await fake_r.script_load(_LUA_SCRIPT)
     except Exception:

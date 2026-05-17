@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from ..dedup.deduplicator import ContentDeduplicator
+from ..graph.persistence import GraphPersistenceService
+from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
 from ..models.stix import ExtractionResult
 from ..resolution.resolver import EntityResolver
@@ -95,7 +97,7 @@ class SchemaViolationError(ValueError):
 
 
 class ProcessingPipeline:
-    """Orchestrates the full M3.4 event processing pipeline.
+    """Orchestrates the full event processing pipeline.
 
     Stages
     ------
@@ -106,6 +108,10 @@ class ProcessingPipeline:
        records an :metric:`processor_extraction_confidence` histogram observation.
     4. **Entity resolution** — resolves extracted STIX entities against the knowledge
        graph via vector blocking (Qdrant) and structural matching (Neo4j).
+    5. **Graph persistence** — transactionally writes all STIX entities and
+       relationships from the extraction result to Neo4j.
+    6. **GraphRAG incremental index** — re-runs community detection on the 2-hop
+       subgraph around each newly persisted entity and regenerates summaries.
 
     Returns
     -------
@@ -125,10 +131,14 @@ class ProcessingPipeline:
         deduplicator: ContentDeduplicator,
         extractor: LLMExtractor,
         resolver: EntityResolver | None = None,
+        graph_persistence: GraphPersistenceService | None = None,
+        graphrag_indexer: GraphRAGIndexer | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
         self._resolver = resolver
+        self._graph_persistence = graph_persistence
+        self._graphrag_indexer = graphrag_indexer
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         # ── Step 1: Schema validation ──────────────────────────────────────
@@ -173,5 +183,18 @@ class ProcessingPipeline:
         if self._resolver is not None:
             for entity in extraction.all_entities():
                 await self._resolver.resolve_and_persist(envelope.tenant_id, entity)
+
+        # ── Step 5: Graph persistence ──────────────────────────────────────
+        if self._graph_persistence is not None:
+            await self._graph_persistence.persist_extraction(
+                extraction, envelope.tenant_id
+            )
+
+        # ── Step 6: GraphRAG incremental index ────────────────────────────
+        if self._graphrag_indexer is not None:
+            for entity_id in [e.id for e in extraction.all_entities()]:
+                await self._graphrag_indexer.index_incremental(
+                    entity_id, envelope.tenant_id
+                )
 
         return extraction
