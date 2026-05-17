@@ -128,3 +128,15 @@ class ExtractionResult(BaseModel):
     extraction_confidence: float = Field(ge=0.0, le=1.0)
     plugin_id: str | None = None
     plugin_version: str | None = None
+
+    def all_entities(self) -> list[STIXObject]:
+        """Return every SDO in this result as a flat list (excludes SROs)."""
+        return (
+            list(self.threat_actors)
+            + list(self.malware)
+            + list(self.identities)
+            + list(self.attack_patterns)
+            + list(self.campaigns)
+            + list(self.indicators)
+            + list(self.locations)
+        )

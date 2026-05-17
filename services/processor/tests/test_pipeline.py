@@ -325,6 +325,62 @@ class TestProcessingPipeline:
         assert r2 is not None
         assert mock_extractor.extract.call_count == 2
 
+    async def test_resolver_called_for_each_entity_when_provided(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: AsyncMock,
+    ) -> None:
+        """When a resolver is wired in, resolve_and_persist is called once per extracted entity."""
+        from datetime import UTC, datetime
+
+        from src.models.stix import Malware, ThreatActor
+        from src.resolution.resolver import EntityResolver
+
+        now = datetime.now(UTC)
+
+        # Build a result with two entities so we can count calls
+        threat_actor = ThreatActor(
+            id="threat-actor--00000000-0000-0000-0000-000000000001",
+            created=now,
+            modified=now,
+            name="APT28",
+        )
+        malware = Malware(
+            id="malware--00000000-0000-0000-0000-000000000002",
+            created=now,
+            modified=now,
+            name="Emotet",
+        )
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-resolver",
+            extraction_confidence=0.9,
+            threat_actors=[threat_actor],
+            malware=[malware],
+        )
+
+        mock_resolver = AsyncMock(spec=EntityResolver)
+        pipeline_with_resolver = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            extractor=mock_extractor,  # type: ignore[arg-type]
+            resolver=mock_resolver,  # type: ignore[arg-type]
+        )
+
+        event = _make_valid_event(id="evt-resolver", payload={"text": "APT28 dropped Emotet"})
+        result = await pipeline_with_resolver.process(event)
+
+        assert result is not None
+        # resolve_and_persist should be called once for each entity (2 total)
+        assert mock_resolver.resolve_and_persist.call_count == 2
+
+    async def test_resolver_not_called_when_none(
+        self,
+        pipeline: ProcessingPipeline,
+    ) -> None:
+        """When no resolver is wired in (None), the pipeline still completes successfully."""
+        # The default `pipeline` fixture has no resolver; just verify it doesn't raise
+        result = await pipeline.process(_make_valid_event(id="evt-no-resolver"))
+        assert result is not None
+
     async def test_schema_violation_error_does_not_reach_deduplicator(
         self,
         fake_deduplicator: ContentDeduplicator,

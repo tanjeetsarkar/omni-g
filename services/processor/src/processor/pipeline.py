@@ -10,6 +10,7 @@ from pydantic import ValidationError as PydanticValidationError
 from ..dedup.deduplicator import ContentDeduplicator
 from ..llm.extractor import LLMExtractor
 from ..models.stix import ExtractionResult
+from ..resolution.resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,8 @@ class ProcessingPipeline:
     2. **Deduplication** — checks Redis; silently drops duplicate events.
     3. **LLM entity extraction** — extracts STIX entities from event text and
        records an :metric:`processor_extraction_confidence` histogram observation.
-    4. **Entity resolution stub** — placeholder for M4.1 graph persistence.
+    4. **Entity resolution** — resolves extracted STIX entities against the knowledge
+       graph via vector blocking (Qdrant) and structural matching (Neo4j).
 
     Returns
     -------
@@ -122,9 +124,11 @@ class ProcessingPipeline:
         self,
         deduplicator: ContentDeduplicator,
         extractor: LLMExtractor,
+        resolver: EntityResolver | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
+        self._resolver = resolver
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         # ── Step 1: Schema validation ──────────────────────────────────────
@@ -165,7 +169,9 @@ class ProcessingPipeline:
             },
         )
 
-        # ── Step 4: Entity resolution — stub (TODO: M4.1) ─────────────────
-        # Will persist entities to Neo4j and resolve against the Knowledge Graph.
+        # ── Step 4: Entity resolution ──────────────────────────────────────
+        if self._resolver is not None:
+            for entity in extraction.all_entities():
+                await self._resolver.resolve_and_persist(envelope.tenant_id, entity)
 
         return extraction

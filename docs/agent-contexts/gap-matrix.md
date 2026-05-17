@@ -2,7 +2,7 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** May 17, 2026 — Infrastructure healthcheck correction (Kafka + Kokoro)
+**Last Updated:** May 17, 2026 — M4.1 Entity Resolution Service complete
 
 ## Scope
 
@@ -24,7 +24,7 @@ This document should be updated after every implementation change. Capture only 
 
 | Area | Vision | Current Implementation | Gap Type | Priority |
 |------|--------|------------------------|----------|----------|
-| Entity resolution | Vector blocking + structural matching + merge thresholds | Not yet implemented | Roadmap-staged gap (M4.1) | Medium |
+| Entity resolution | Vector blocking + structural matching + merge thresholds | Fully implemented: `EntityResolver` with Qdrant vector blocking, Neo4j structural matching, merge tiers (>95% AUTO_MERGE, 50-95% AMBIGUOUS, <50% NEW_ENTITY), SAME_AS lifecycle tracking, Prometheus metrics; wired into `ProcessingPipeline` via `startup_consumer`; 37 tests, 97% coverage | ✅ Closed (M4.1) | — |
 | Graph persistence | Neo4j write path with STIX-compliant nodes and edges | Not yet implemented | Roadmap-staged gap (M4.2) | Medium |
 | GraphRAG | Community detection and summary updates | Not yet implemented | Roadmap-staged gap (M4.3) | Medium |
 | Multi-tenant controls | tenant_id propagation in Neo4j queries and WebSocket subscriptions | tenant_id now in Kafka envelope (Aggregator `TenantID` field) and dedup keys; Neo4j/WS layer not yet built | Security gap (partial) | High |
@@ -42,7 +42,9 @@ This document should be updated after every implementation change. Capture only 
 - **STIX models (closed):** Full SDO coverage — `ThreatActor`, `Malware`, `Identity`, `AttackPattern`, `Campaign`, `Indicator`, `Location`, `Relationship` (SRO), `STIXBundle`; `created_by_ref` on base model; `custom_properties` extensibility.
 - **M3.4 Consumer pipeline (closed — fully upgraded):** `ProcessingPipeline` class in `src/processor/pipeline.py` orchestrates schema validation → dedup → LLM extraction → entity-resolution stub (M4.1); `RawEventEnvelope` Pydantic model enforces payload schema (mirrors `/validate` endpoint rules); `SchemaViolationError` raised on invalid events so the consumer routes them to DLQ with `error_type=SchemaViolationError`; three new Prometheus metrics — `processor_extraction_confidence` histogram (buckets 0.1…1.0), `processor_schema_violations_total` counter, `processor_dedup_drops_total` counter with `tenant_id` label; `KAFKA_NUM_WORKERS` setting launches N consumer tasks (same `group_id`, Kafka rebalances partitions automatically); `main.py` lifespan manages the full task list; 19 new pipeline tests + 1 new consumer test; all 68 tests pass.
 - **Quality hardening (no roadmap scope change):** Processor lint/type issues were remediated without behavior changes: fixed test fixture typing and line-length violations, removed stale `# type: ignore` comments, and tightened local sequence typing in confidence calculation. Validation: `ruff check src tests`, `mypy src`, and `pytest` all pass (68 tests).
-- **Infra reliability correction (compose runtime):** Fixed false-negative health checks in `infrastructure/docker-compose.yml` by replacing Kafka probe with a lightweight TCP socket readiness check (`bash -c 'echo > /dev/tcp/localhost/9092'`) instead of unavailable/slow CLI probes, and aligned Kokoro probe/port mapping to the actual service bind port (`8880`) with host mapping `8000:8880`.
+- **M4.1 Entity Resolution Service (closed):** `EntityResolver` implements two-stage resolution: (1) Qdrant vector blocking using hash-based embeddings (placeholder for Phase 5 real embeddings) with per-tenant collections; (2) Neo4j structural matching with exact name/alias Cypher query + co-occurrence analysis (≥2 shared relationship targets). Merge tiers: AUTO_MERGE (≥0.95), AMBIGUOUS (0.50–0.95, creates SAME_AS edge), NEW_ENTITY (<0.50). Entity lifecycle tracked via Neo4j MERGE with `created_at`/`updated_at`. Prometheus metrics: `processor_resolution_decisions_total`, `processor_resolution_latency_seconds`, `processor_false_positive_alerts_total`, `processor_same_as_merges_total`. Wired into `ProcessingPipeline` (Step 4) and `startup_consumer` in `main.py` with AsyncDriver + AsyncQdrantClient; connections properly closed in finally block. 37 unit+integration tests, 97% resolver coverage, 107 total tests passing.
+
+ in `infrastructure/docker-compose.yml` by replacing Kafka probe with a lightweight TCP socket readiness check (`bash -c 'echo > /dev/tcp/localhost/9092'`) instead of unavailable/slow CLI probes, and aligned Kokoro probe/port mapping to the actual service bind port (`8880`) with host mapping `8000:8880`.
 - **Kafka listener binding correction:** Kafka listener bind address was updated to `0.0.0.0` (`KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093`) while keeping `KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092`, so in-container localhost health checks and inter-container DNS-based client routing both succeed.
 
 ## Next Implementation Reviews

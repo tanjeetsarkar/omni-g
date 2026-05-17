@@ -261,15 +261,15 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ### Milestones
 
 #### M4.1: Entity Resolution Service
-- [ ] Implement vector blocking (Qdrant semantic search)
-- [ ] Implement graph structural matching (neighborhood analysis)
-- [ ] Create merge logic:
+- [x] Implement vector blocking (Qdrant semantic search)
+- [x] Implement graph structural matching (neighborhood analysis)
+- [x] Create merge logic:
   - Auto-merge on >95% confidence
   - Ambiguity alerts for 50-95% confidence
   - Rejection for <50% confidence
-- [ ] Track entity lifecycle (creation, updates, SAME_AS relationships)
-- [ ] Monitor false-positive rate
-- [ ] Create comprehensive unit + integration tests
+- [x] Track entity lifecycle (creation, updates, SAME_AS relationships)
+- [x] Monitor false-positive rate
+- [x] Create comprehensive unit + integration tests
 
 **Dependencies:** M2.2, M1.3 (Qdrant profile)  
 **Verification:**

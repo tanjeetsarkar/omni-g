@@ -25,9 +25,13 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     inside the same consumer group so Kafka rebalances partition ownership
     automatically.
     """
+    from neo4j import AsyncGraphDatabase
+    from qdrant_client import AsyncQdrantClient
+
     from ..dedup.deduplicator import ContentDeduplicator
     from ..kafka.consumer import RawEventConsumer
     from ..llm.extractor import LLMExtractor
+    from ..resolution.resolver import EntityResolver
     from .pipeline import ProcessingPipeline
 
     consumer = RawEventConsumer(
@@ -39,8 +43,32 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     deduplicator = ContentDeduplicator(ttl_seconds=cfg.dedup_ttl_seconds)
     await deduplicator.connect(cfg.redis_url)
     extractor = LLMExtractor()
-    pipeline = ProcessingPipeline(deduplicator=deduplicator, extractor=extractor)
+
+    neo4j_driver = AsyncGraphDatabase.driver(
+        cfg.neo4j_url,
+        auth=(cfg.neo4j_user, cfg.neo4j_password),
+    )
+    qdrant_client = AsyncQdrantClient(
+        url=cfg.qdrant_url,
+        api_key=cfg.qdrant_api_key,
+    )
+    resolver = EntityResolver(neo4j_driver=neo4j_driver, qdrant_client=qdrant_client)
+
+    pipeline = ProcessingPipeline(
+        deduplicator=deduplicator,
+        extractor=extractor,
+        resolver=resolver,
+    )
     consumer.start()
+
+    logger.info(
+        "Entity resolver initialised",
+        extra={
+            "worker_id": worker_id,
+            "neo4j_url": cfg.neo4j_url,
+            "qdrant_url": cfg.qdrant_url,
+        },
+    )
 
     logger.info(
         "Kafka consumer worker started",
@@ -50,7 +78,15 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     async def _handle(event: dict[str, Any]) -> None:
         await pipeline.process(event)
 
-    await consumer.process_messages(_handle)
+    try:
+        await consumer.process_messages(_handle)
+    finally:
+        await neo4j_driver.close()
+        await qdrant_client.close()
+        logger.info(
+            "Kafka consumer worker shut down; connections closed",
+            extra={"worker_id": worker_id},
+        )
 
 
 @asynccontextmanager
