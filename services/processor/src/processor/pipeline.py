@@ -13,6 +13,7 @@ from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
 from ..models.stix import ExtractionResult
 from ..resolution.resolver import EntityResolver
+from .alert_publisher import AlertPublisher, AnalystAlert
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ class ProcessingPipeline:
        relationships from the extraction result to Neo4j.
     6. **GraphRAG incremental index** — re-runs community detection on the 2-hop
        subgraph around each newly persisted entity and regenerates summaries.
+    7. **Alert publishing** — if an :class:`AlertPublisher` is wired in and the
+       extraction confidence exceeds 0.5, publishes an :class:`AnalystAlert` to
+       the ``analyst-alerts`` Kafka topic.
 
     Returns
     -------
@@ -131,12 +135,14 @@ class ProcessingPipeline:
         resolver: EntityResolver | None = None,
         graph_persistence: GraphPersistenceService | None = None,
         graphrag_indexer: GraphRAGIndexer | None = None,
+        alert_publisher: AlertPublisher | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
         self._resolver = resolver
         self._graph_persistence = graph_persistence
         self._graphrag_indexer = graphrag_indexer
+        self._alert_publisher = alert_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         # ── Step 1: Schema validation ──────────────────────────────────────
@@ -188,5 +194,22 @@ class ProcessingPipeline:
         if self._graphrag_indexer is not None:
             for entity_id in [e.id for e in extraction.all_entities()]:
                 await self._graphrag_indexer.index_incremental(entity_id, envelope.tenant_id)
+
+        # ── Step 7: Alert publishing ───────────────────────────────────────
+        if self._alert_publisher is not None and extraction.extraction_confidence > 0.5:
+            summary_text: str
+            if hasattr(extraction, "summary_text"):
+                summary_text = str(getattr(extraction, "summary_text", ""))[:500]
+            else:
+                n = len(extraction.all_entities())
+                summary_text = f"{n} {'entity' if n == 1 else 'entities'} extracted"
+            alert = AnalystAlert(
+                tenant_id=envelope.tenant_id,
+                entity_ids=[e.id for e in extraction.all_entities()],
+                summary=summary_text,
+                confidence=extraction.extraction_confidence,
+                source_event_id=envelope.id,
+            )
+            await self._alert_publisher.publish(alert)
 
         return extraction

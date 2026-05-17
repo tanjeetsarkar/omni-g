@@ -12,8 +12,13 @@ const config: Config = {
     // Stub WebGL / canvas APIs not available in jsdom
     "^sigma$": "<rootDir>/src/__mocks__/sigma.ts",
     "^graphology$": "<rootDir>/src/__mocks__/graphology.ts",
+    "^graphology-layout-forceatlas2$": "<rootDir>/src/__mocks__/graphology-layout-forceatlas2.ts",
   },
-  testMatch: ["<rootDir>/src/**/*.test.{ts,tsx}", "<rootDir>/tests/**/*.test.{ts,tsx}"],
+  testMatch: [
+    "<rootDir>/src/**/*.test.{ts,tsx}",
+    "<rootDir>/tests/**/*.test.{ts,tsx}",
+    "<rootDir>/gateway/**/*.test.{ts,tsx}",
+  ],
   collectCoverageFrom: [
     "src/**/*.{ts,tsx}",
     "!src/**/*.d.ts",

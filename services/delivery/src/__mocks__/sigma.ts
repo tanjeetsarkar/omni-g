@@ -2,6 +2,8 @@
 const Sigma = jest.fn().mockImplementation(() => ({
   kill: jest.fn(),
   refresh: jest.fn(),
+  getGraph: jest.fn(),
+  on: jest.fn(),
 }));
 
 export { Sigma };

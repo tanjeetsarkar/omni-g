@@ -17,6 +17,23 @@ from .config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+async def startup_briefing_storage_preflight(cfg: Settings) -> None:
+    """Ensure briefing storage bucket exists before serving briefing endpoints."""
+    from ..briefing.storage import MinIOStorageService
+
+    storage = MinIOStorageService(
+        endpoint_url=cfg.minio_url,
+        access_key=cfg.minio_access_key,
+        secret_key=cfg.minio_secret_key,
+        bucket=cfg.minio_bucket,
+    )
+    await storage.ensure_bucket()
+    logger.info(
+        "Briefing storage preflight complete",
+        extra={"minio_url": cfg.minio_url, "minio_bucket": cfg.minio_bucket},
+    )
+
+
 async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     """Start one Kafka consumer worker in the processing pipeline.
 
@@ -37,6 +54,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     from ..kafka.consumer import RawEventConsumer
     from ..llm.extractor import LLMExtractor
     from ..resolution.resolver import EntityResolver
+    from .alert_publisher import AlertPublisher
     from .pipeline import ProcessingPipeline
 
     consumer = RawEventConsumer(
@@ -80,12 +98,18 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     )
     graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
 
+    alert_publisher = AlertPublisher(
+        brokers=cfg.kafka_brokers,
+        topic=cfg.kafka_alerts_topic,
+    )
+
     pipeline = ProcessingPipeline(
         deduplicator=deduplicator,
         extractor=extractor,
         resolver=resolver,
         graph_persistence=graph_persistence,
         graphrag_indexer=graphrag_indexer,
+        alert_publisher=alert_publisher,
     )
     consumer.start()
 
@@ -111,6 +135,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     finally:
         await neo4j_driver.close()
         await qdrant_client.close()
+        alert_publisher.close()
         logger.info(
             "Kafka consumer worker shut down; connections closed",
             extra={"worker_id": worker_id},
@@ -121,6 +146,15 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("Processor service starting", extra={"port": settings.http_port})
+
+    if settings.briefing_preflight_enabled:
+        try:
+            await startup_briefing_storage_preflight(settings)
+        except Exception as exc:  # noqa: BLE001
+            if settings.briefing_preflight_strict:
+                logger.error("Briefing storage preflight failed (strict mode): %s", exc)
+                raise
+            logger.warning("Briefing storage preflight failed (continuing): %s", exc)
 
     consumer_tasks: list[asyncio.Task[None]] = []
     if settings.kafka_enabled:
@@ -239,6 +273,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         return JSONResponse({"valid": True})
+
+    @app.get("/briefings", tags=["briefings"])
+    async def list_briefings() -> JSONResponse:
+        """Return signed URLs for the latest briefing audio for all configured tenants."""
+        from ..briefing.storage import MinIOStorageService
+        from ..briefing.url_signer import BriefingURLSigner
+
+        cfg: Settings = app.state.settings
+        storage = MinIOStorageService(
+            endpoint_url=cfg.minio_url,
+            access_key=cfg.minio_access_key,
+            secret_key=cfg.minio_secret_key,
+            bucket=cfg.minio_bucket,
+        )
+        signer = BriefingURLSigner(storage)
+        tenant_ids = [t.strip() for t in cfg.briefing_tenants.split(",") if t.strip()]
+        results = []
+        for tenant_id in tenant_ids:
+            signed_url = await signer.sign_latest(tenant_id)
+            if signed_url is not None:
+                # Extract object key from the signed URL path
+                from urllib.parse import urlparse as _urlparse
+
+                parsed = _urlparse(signed_url)
+                object_key = parsed.path.lstrip("/")
+                results.append(
+                    {"tenant_id": tenant_id, "object_key": object_key, "signed_url": signed_url}
+                )
+        return JSONResponse(results)
+
+    @app.post("/briefings/generate", tags=["briefings"])
+    async def generate_briefing(body: dict[str, str]) -> JSONResponse:
+        """Trigger an on-demand audio briefing for a tenant.
+
+        Request body: ``{"tenant_id": "<tenant>"}``
+        Returns: ``{"signed_url": "<presigned-url>"}``
+        """
+        from ..briefing.scheduler import BriefingScheduler
+        from ..briefing.script_generator import BriefingScriptGenerator
+        from ..briefing.storage import MinIOStorageService
+        from ..briefing.tts_synthesizer import TTSSynthesizer
+        from ..graphrag.community import CommunityDetector
+        from ..graphrag.indexer import GraphRAGIndexer
+        from ..graphrag.summarizer import CommunitySummarizer
+        from ..llm.extractor import LLMExtractor
+
+        cfg: Settings = app.state.settings
+        tenant_id = body.get("tenant_id", "default")
+
+        from neo4j import AsyncGraphDatabase
+
+        neo4j_driver = AsyncGraphDatabase.driver(
+            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
+        )
+        try:
+            community_detector = CommunityDetector(neo4j_driver)
+            summarizer = CommunitySummarizer(
+                neo4j_driver,
+                ollama_url=cfg.ollama_url,
+                model=cfg.ollama_model,
+                openai_api_key=cfg.openai_api_key,
+            )
+            graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
+            llm_extractor = LLMExtractor()
+            script_gen = BriefingScriptGenerator(graphrag_indexer, llm_extractor)
+            tts = TTSSynthesizer(
+                kokoro_url=cfg.kokoro_url,
+                elevenlabs_api_key=cfg.elevenlabs_api_key,
+            )
+            storage = MinIOStorageService(
+                endpoint_url=cfg.minio_url,
+                access_key=cfg.minio_access_key,
+                secret_key=cfg.minio_secret_key,
+                bucket=cfg.minio_bucket,
+            )
+            scheduler = BriefingScheduler(script_gen, tts, storage, cfg.briefing_hour)
+            object_key = await scheduler.on_demand(tenant_id)
+            signed_url = await storage.get_signed_url(object_key)
+        finally:
+            await neo4j_driver.close()
+
+        return JSONResponse({"signed_url": signed_url})
 
     return app
 
