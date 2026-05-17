@@ -1,4 +1,5 @@
 """Tests for the /validate endpoint."""
+
 from __future__ import annotations
 
 import pytest
@@ -109,4 +110,3 @@ class TestValidateEndpoint:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status_code == 422
-

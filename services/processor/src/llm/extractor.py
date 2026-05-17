@@ -161,9 +161,7 @@ class LLMExtractor:
         diversity = sum(1 for lst in all_lists if lst)
         return min(1.0, total * 0.1 + diversity * 0.05)
 
-    async def extract_batch(
-        self, events: list[dict[str, Any]]
-    ) -> list[ExtractionResult]:
+    async def extract_batch(self, events: list[dict[str, Any]]) -> list[ExtractionResult]:
         """Extract entities from multiple events concurrently.
 
         Exceptions from individual extractions are captured via

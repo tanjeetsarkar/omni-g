@@ -136,14 +136,12 @@ class CommunityDetector:
                     "error": str(gds_err),
                 },
             )
-            COMMUNITY_DETECTION_ERRORS.labels(
-                algorithm=algorithm, tenant_id=tenant_id
-            ).inc()
+            COMMUNITY_DETECTION_ERRORS.labels(algorithm=algorithm, tenant_id=tenant_id).inc()
             communities = await self._detect_via_python_cc(tenant_id)
 
-        COMMUNITY_DETECTION_LATENCY.labels(
-            algorithm=algorithm, tenant_id=tenant_id
-        ).observe(time.perf_counter() - t0)
+        COMMUNITY_DETECTION_LATENCY.labels(algorithm=algorithm, tenant_id=tenant_id).observe(
+            time.perf_counter() - t0
+        )
 
         for c in communities:
             COMMUNITY_SIZE.observe(len(c.entity_ids))
@@ -205,9 +203,9 @@ class CommunityDetector:
         assignment = _connected_components(edges)
         communities = _build_communities(assignment, tenant_id, algorithm)
 
-        COMMUNITY_DETECTION_LATENCY.labels(
-            algorithm=algorithm, tenant_id=tenant_id
-        ).observe(time.perf_counter() - t0)
+        COMMUNITY_DETECTION_LATENCY.labels(algorithm=algorithm, tenant_id=tenant_id).observe(
+            time.perf_counter() - t0
+        )
 
         for c in communities:
             COMMUNITY_SIZE.observe(len(c.entity_ids))
@@ -227,9 +225,7 @@ class CommunityDetector:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _detect_via_gds(
-        self, tenant_id: str, *, algorithm: str
-    ) -> list[CommunityResult]:
+    async def _detect_via_gds(self, tenant_id: str, *, algorithm: str) -> list[CommunityResult]:
         """Attempt GDS community detection.  Raises if GDS is unavailable."""
         async with self._driver.session() as session:
             # Project in-memory graph
@@ -263,9 +259,7 @@ class CommunityDetector:
             records = await result.data()
 
             # Drop the projected graph
-            await session.run(
-                "CALL gds.graph.drop('omni_g_graph', false) YIELD graphName"
-            )
+            await session.run("CALL gds.graph.drop('omni_g_graph', false) YIELD graphName")
 
         assignment: dict[str, int] = {r["entity_id"]: r["communityId"] for r in records}
         return _build_communities(assignment, tenant_id, algorithm)
@@ -292,9 +286,7 @@ class CommunityDetector:
                     tenant_id=tenant_id,
                 )
                 iso_records = await iso_result.data()
-            assignment: dict[str, int] = {
-                r["nid"]: idx for idx, r in enumerate(iso_records)
-            }
+            assignment: dict[str, int] = {r["nid"]: idx for idx, r in enumerate(iso_records)}
         else:
             assignment = _connected_components(edges)
 

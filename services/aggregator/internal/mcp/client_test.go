@@ -32,7 +32,7 @@ func TestClient_ListTools_Success(t *testing.T) {
 		})
 		resp := mcp.JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(result)}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
 	}))
 	defer srv.Close()
 
@@ -52,7 +52,7 @@ func TestClient_ListTools_RPCError(t *testing.T) {
 			Error:   &mcp.JSONRPCError{Code: mcp.ErrMethodNotFound, Message: "unknown method"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
 	}))
 	defer srv.Close()
 

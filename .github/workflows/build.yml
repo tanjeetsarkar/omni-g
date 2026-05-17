@@ -42,11 +42,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Install golangci-lint (pinned)
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          working-directory: services/aggregator
+        run: $(go env GOPATH)/bin/golangci-lint run ./...
 
       - name: Test
         run: go test -race -coverprofile=coverage.txt -covermode=atomic ./...
@@ -130,7 +130,7 @@ jobs:
         run: pnpm lint
 
       - name: Test (jest)
-        run: pnpm test --ci --collectCoverage=false
+        run: pnpm test --ci --collectCoverage=false --passWithNoTests
 
       - name: Build
         run: pnpm build

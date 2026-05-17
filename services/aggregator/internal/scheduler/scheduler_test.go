@@ -45,7 +45,7 @@ func mockPlugin(t *testing.T, tools []mcp.Tool, sseBlocks []mcp.ContentBlock) *h
 		result, _ := json.Marshal(mcp.ToolsListResult{Tools: tools})
 		resp := mcp.JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(result)}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
 	}))
 }
 

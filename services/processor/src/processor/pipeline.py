@@ -69,9 +69,7 @@ class RawEventEnvelope(BaseModel):
             raise ValueError("payload must not be empty")
         required_keys = {"text", "content", "data", "url"}
         if not required_keys.intersection(self.payload.keys()):
-            raise ValueError(
-                "payload must contain at least one of: text, content, data, url"
-            )
+            raise ValueError("payload must contain at least one of: text, content, data, url")
         for k, v in self.payload.items():
             if v is None or v == "":
                 raise ValueError(f"payload.{k} must not be None or empty string")
@@ -159,9 +157,7 @@ class ProcessingPipeline:
             return None
 
         # ── Step 3: LLM entity extraction ─────────────────────────────────
-        text: str = str(
-            envelope.payload.get("text") or envelope.payload.get("content", "")
-        )
+        text: str = str(envelope.payload.get("text") or envelope.payload.get("content", ""))
         metadata: dict[str, Any] = {
             "plugin_name": envelope.plugin_name,
             "plugin_version": envelope.plugin_version,
@@ -186,15 +182,11 @@ class ProcessingPipeline:
 
         # ── Step 5: Graph persistence ──────────────────────────────────────
         if self._graph_persistence is not None:
-            await self._graph_persistence.persist_extraction(
-                extraction, envelope.tenant_id
-            )
+            await self._graph_persistence.persist_extraction(extraction, envelope.tenant_id)
 
         # ── Step 6: GraphRAG incremental index ────────────────────────────
         if self._graphrag_indexer is not None:
             for entity_id in [e.id for e in extraction.all_entities()]:
-                await self._graphrag_indexer.index_incremental(
-                    entity_id, envelope.tenant_id
-                )
+                await self._graphrag_indexer.index_incremental(entity_id, envelope.tenant_id)
 
         return extraction

@@ -116,9 +116,7 @@ class TestRawEventEnvelope:
             RawEventEnvelope.model_validate({"payload": {"text": ""}})
 
     def test_url_is_a_valid_content_key(self) -> None:
-        envelope = RawEventEnvelope.model_validate(
-            {"payload": {"url": "https://example.com"}}
-        )
+        envelope = RawEventEnvelope.model_validate({"payload": {"url": "https://example.com"}})
         assert envelope.payload["url"] == "https://example.com"
 
     def test_data_is_a_valid_content_key(self) -> None:

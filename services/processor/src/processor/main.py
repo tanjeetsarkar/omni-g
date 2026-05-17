@@ -129,9 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 task = asyncio.create_task(startup_consumer(settings, worker_id=worker_id))
                 consumer_tasks.append(task)
             except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "Failed to create Kafka consumer task %d: %s", worker_id, exc
-                )
+                logger.error("Failed to create Kafka consumer task %d: %s", worker_id, exc)
 
     yield
 
@@ -246,4 +244,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

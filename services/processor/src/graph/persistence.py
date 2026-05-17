@@ -150,9 +150,7 @@ class GraphPersistenceService:
                     record = await result.single()
 
             entity_id: str = record["entity_id"] if record else entity.id
-            GRAPH_WRITE_LATENCY.labels(operation="upsert_entity").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="upsert_entity").observe(time.perf_counter() - t0)
             logger.debug(
                 "entity_persisted",
                 extra={

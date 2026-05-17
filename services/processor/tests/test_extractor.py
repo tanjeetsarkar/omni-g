@@ -11,6 +11,7 @@ from src.models.stix import ExtractionResult, ThreatActor
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_threat_actor(
     name: str = "APT28",
     uid: str = "12345678-1234-5678-1234-567812345678",
@@ -24,6 +25,7 @@ def _make_threat_actor(
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def mock_create() -> AsyncMock:
@@ -44,6 +46,7 @@ def extractor(mock_create: AsyncMock) -> LLMExtractor:
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_happy_path_two_threat_actors(
@@ -137,9 +140,7 @@ async def test_extract_batch_converts_exceptions_to_empty_results(
 
 
 @pytest.mark.asyncio
-async def test_plugin_metadata_propagated(
-    extractor: LLMExtractor, mock_create: AsyncMock
-) -> None:
+async def test_plugin_metadata_propagated(extractor: LLMExtractor, mock_create: AsyncMock) -> None:
     """plugin_id and plugin_version from metadata are set on the result."""
     mock_create.return_value = _LLMEntities()
 
@@ -151,4 +152,3 @@ async def test_plugin_metadata_propagated(
 
     assert result.plugin_id == "twitter-v1"
     assert result.plugin_version == "1.2.3"
-

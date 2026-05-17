@@ -67,9 +67,7 @@ class ContentDeduplicator:
             try:
                 self._script_sha = await client.script_load(_LUA_SCRIPT)
             except ResponseError as exc:
-                logger.warning(
-                    "Lua scripting unavailable (%s) — will use non-atomic fallback", exc
-                )
+                logger.warning("Lua scripting unavailable (%s) — will use non-atomic fallback", exc)
             modules: list[Any] = await client.module_list()
             module_names = [str(m.get("name", "")).lower() for m in modules]
             self._has_redisearch = any("search" in name for name in module_names)
@@ -155,9 +153,7 @@ class ContentDeduplicator:
             return []
         try:
             ft_client = self._client.ft("dedup_idx")  # type: ignore[no-untyped-call]
-            result: Any = await ft_client.search(
-                f"@tenant_id:{{{tenant_id}}} @source:{source}"
-            )
+            result: Any = await ft_client.search(f"@tenant_id:{{{tenant_id}}} @source:{source}")
             return [str(doc.id) for doc in result.docs]
         except (ConnectionError, ResponseError) as exc:
             logger.warning("RediSearch FT.SEARCH failed: %s", exc)
