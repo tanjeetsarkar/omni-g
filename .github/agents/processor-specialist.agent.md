@@ -100,7 +100,7 @@ class KafkaConsumer:
             enable_auto_commit=False,  # Manual commit for at-least-once
             value_deserializer=json.loads,
         )
-        
+
         async for msg in consumer:
             try:
                 await self.process_event(msg.value)
@@ -129,13 +129,13 @@ class DeduplicationService:
         """Check if content already processed in last 24h"""
         hash_key = f"hash:{sha256(content.encode()).hexdigest()}"
         exists = await redis.exists(hash_key)
-        
+
         if not exists:
             # New content, mark it
             await redis.setex(hash_key, 24*3600, "1")  # 24h TTL
-        
+
         return bool(exists)
-    
+
     async def get_bot_cluster(self, source_id: str, window_minutes: int = 10) -> List[str]:
         """Get similar messages in sliding window (botnet dedup)"""
         # Fetch recent messages from source
@@ -144,7 +144,7 @@ class DeduplicationService:
             time.time() - window_minutes*60,
             time.time(),
         )
-        
+
         # Hash each and find duplicates
         hashes = [sha256(msg.encode()).hexdigest() for msg in messages]
         return list(set(hashes))  # Unique hashes = unique messages
@@ -186,7 +186,7 @@ class ExtractionService:
             base_url=llm_url + "/v1"
         )
         self.llm = Instructor(client=self.client)
-    
+
     async def extract_entities(self, content: str) -> ExtractionResult:
         """Extract STIX entities from text using LLM"""
         try:
@@ -195,7 +195,7 @@ class ExtractionService:
                 messages=[{
                     "role": "user",
                     "content": f"""Extract all entities and relationships from this intelligence report.
-                    
+
 Format output as JSON matching this schema:
 {ExtractionResult.model_json_schema()}
 
@@ -210,7 +210,7 @@ Report:
             # Fallback to local Ollama
             logger.warn("Cloud LLM timeout, falling back to local Ollama")
             return await self._extract_with_local_ollama(content)
-    
+
     async def _extract_with_local_ollama(self, content: str) -> ExtractionResult:
         """Fallback to local Ollama (smaller model, faster)"""
         response = await self.llm.messages.create(
@@ -242,7 +242,7 @@ class EntityResolutionService:
     def __init__(self, qdrant: QdrantClient, neo4j: AsyncDriver):
         self.qdrant = qdrant
         self.neo4j = neo4j
-    
+
     async def resolve_entity(self, entity: dict) -> Optional[str]:
         """Find matching entity in graph, merge if high confidence"""
         # Step 1: Vector similarity (semantic search)
@@ -253,51 +253,51 @@ class EntityResolutionService:
             limit=5,
             score_threshold=0.9,
         )
-        
+
         candidates = [hit.payload for hit in similar]
-        
+
         # Step 2: Structural matching (neighborhood in graph)
         best_match = None
         best_score = 0
-        
+
         for candidate in candidates:
             # Compare neighbors (phone, email, address, etc.)
             score = await self._structural_score(entity, candidate)
             if score > best_score:
                 best_score = score
                 best_match = candidate
-        
+
         # Step 3: Merge decision
         if best_score > 0.95:
             # High confidence: auto-merge
             await self._merge_entities(entity, best_match)
             logger.info(f"Auto-merged: {entity} → {best_match}")
             return best_match['id']
-        
+
         elif best_score > 0.50:
             # Medium confidence: flag for analyst review
             await self._create_ambiguity_alert(entity, best_match, best_score)
             logger.warn(f"Ambiguity: {entity} ~= {best_match} ({best_score:.2f})")
             return None
-        
+
         else:
             # Low confidence: create new entity
             new_id = await self._create_entity(entity)
             return new_id
-    
+
     async def _structural_score(self, entity1: dict, entity2: dict) -> float:
         """Score based on shared neighbors (phone, email, address)"""
         shared = 0
         total = 0
-        
+
         for attr in ['phone', 'email', 'address']:
             if attr in entity1 and attr in entity2:
                 total += 1
                 if entity1[attr] == entity2[attr]:
                     shared += 1
-        
+
         return shared / max(total, 1)
-    
+
     async def _merge_entities(self, entity1: dict, entity2: dict):
         """Merge two entities in Neo4j"""
         async with self.neo4j.session() as session:
@@ -327,7 +327,7 @@ class EntityResolutionService:
 class GraphService:
     def __init__(self, uri: str, auth: tuple):
         self.driver = AsyncGraphDatabase.driver(uri, auth=auth)
-    
+
     async def create_entity(self, stix_object: dict) -> str:
         """Create or update entity in graph"""
         async with self.driver.session() as session:
@@ -341,21 +341,21 @@ class GraphService:
                         e.updated_at = datetime(),
                         e.type = $type
                     RETURN e.id
-                """, 
+                """,
                 id=stix_object['id'],
                 type=stix_object['type'],
                 properties=stix_object
                 )
-                
+
                 record = await result.single()
                 await tx.commit()
-                
+
                 return record['e.id']
             except Exception as e:
                 await tx.rollback()
                 logger.error(f"Graph write failed: {e}")
                 raise
-    
+
     async def create_relationship(self, source_id: str, target_id: str, rel_type: str, confidence: float):
         """Create relationship between entities"""
         async with self.driver.session() as session:
@@ -369,7 +369,7 @@ class GraphService:
             target_id=target_id,
             confidence=confidence
             )
-    
+
     async def get_entity_neighbors(self, entity_id: str, distance: int = 2) -> dict:
         """Get neighborhood of entity for structural matching"""
         async with self.driver.session() as session:
@@ -377,7 +377,7 @@ class GraphService:
                 MATCH (e {id: $entity_id})-[r*1..""" + str(distance) + """]->(neighbors)
                 RETURN neighbors, relationships(r)
             """, entity_id=entity_id)
-            
+
             return await result.data()
 ```
 
@@ -398,7 +398,7 @@ class GraphRAGService:
     def __init__(self, driver: AsyncDriver, llm_service: ExtractionService):
         self.driver = driver
         self.llm = llm_service
-    
+
     async def update_communities(self):
         """Detect communities and generate summaries"""
         async with self.driver.session() as session:
@@ -410,19 +410,19 @@ class GraphRAGService:
                 YIELD nodeId, communityId
                 RETURN communityId, collect(gds.util.asNode(nodeId)) AS members
             """)
-            
+
             communities = await result.data()
-            
+
             # Step 2: Summarize each community
             for community in communities:
                 members = community['members']
-                
+
                 # Build context from member names/descriptions
                 context = "\n".join([
                     f"- {m['name']}: {m.get('description', '')}"
                     for m in members
                 ])
-                
+
                 # Generate summary with LLM
                 summary = await self.llm.client.messages.create(
                     model="qwen2.5:3b",
@@ -431,7 +431,7 @@ class GraphRAGService:
                         "content": f"Summarize this group of threat entities:\n{context}"
                     }],
                 )
-                
+
                 # Store summary in graph
                 await session.run("""
                     MATCH (c:Community {id: $community_id})
@@ -532,22 +532,22 @@ async def test_high_confidence_merge(resolution_service):
         'email': 'john@example.com',
         'phone': '+1-555-0100'
     }
-    
+
     entity2 = {
         'id': 'person-2',
         'name': 'Jon Smith',
         'email': 'john@example.com',
         'phone': '+1-555-0100'
     }
-    
+
     # Mock vector search to return similar entity
     resolution_service.qdrant.search = AsyncMock(return_value=[
         AsyncMock(payload=entity2)
     ])
-    
+
     # Resolve
     result_id = await resolution_service.resolve_entity(entity1)
-    
+
     # Should merge into entity2
     assert result_id == 'person-2'
     resolution_service.neo4j.run.assert_called_once()
@@ -559,24 +559,24 @@ async def test_high_confidence_merge(resolution_service):
 @pytest.mark.asyncio
 async def test_end_to_end_processing():
     processor = await create_test_processor()
-    
+
     # Raw event
     raw_event = {
         'source': 'twitter',
         'content': 'Malware "Emotet" used in campaign against healthcare',
         'timestamp': '2024-01-15T10:00:00Z'
     }
-    
+
     # Process
     result = await processor.process_event(raw_event)
-    
+
     # Verify extraction
     assert len(result.entities) > 0
-    
+
     # Verify Neo4j write
     entities = await processor.graph.query_entities()
     assert any(e['name'] == 'Emotet' for e in entities)
-    
+
     # Verify Kafka publish
     alerts = processor.kafka.get_alerts()
     assert len(alerts) > 0

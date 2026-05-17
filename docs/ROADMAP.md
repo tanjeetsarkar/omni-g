@@ -1,6 +1,6 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 17, 2026  
+**Last Updated:** May 17, 2026
 **Status:** Foundation Phase Active
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
@@ -9,7 +9,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M1: Project Foundation
 
-**Status:** 🟢 IN PROGRESS  
+**Status:** 🟢 IN PROGRESS
 **Focus:** Infrastructure, version control, documentation framework
 
 ### Milestones
@@ -23,7 +23,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add CONTRIBUTING.md template
 - [ ] Add CODE_OF_CONDUCT.md
 
-**Dependencies:** None  
+**Dependencies:** None
 **Verification:** `git log` shows clean commits, `pre-commit run --all-files` passes
 
 ---
@@ -35,7 +35,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create `/docs` with subdirectories
 - [x] Add README.md to each service root explaining purpose
 
-**Dependencies:** M1.1  
+**Dependencies:** M1.1
 **Verification:** All directories created, service READMEs explain module purpose
 
 ---
@@ -51,7 +51,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create `.env.local` gitignored template
 - [x] Document profile-specific setup instructions
 
-**Dependencies:** M1.2  
+**Dependencies:** M1.2
 **Verification:** `docker-compose --profile core up` succeeds, all services healthy
 
 ---
@@ -72,7 +72,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - `delivery-specialist.md` — Next.js/WebSocket specifics
   - `devops-specialist.md` — Docker/Kubernetes/observability
 
-**Dependencies:** M1.3  
+**Dependencies:** M1.3
 **Verification:** All agent files created, Copilot can invoke agents without errors
 
 ---
@@ -85,14 +85,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [ ] Create `docs/GLOSSARY.md` (terminology reference)
 - [ ] Create root `README.md` with project overview
 
-**Dependencies:** M1.2, M1.4  
+**Dependencies:** M1.2, M1.4
 **Verification:** Documentation complete, links verified, no broken references
 
 ---
 
 ## M2: Service Scaffolding
 
-**Status:** � COMPLETE  
+**Status:** � COMPLETE
 **Focus:** Service initialization, build pipelines, test frameworks
 
 ### Milestones
@@ -107,7 +107,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add unit test skeleton (testify + table-driven tests)
 - [x] Document aggregator responsibilities in README
 
-**Dependencies:** M1.2, M1.3  
+**Dependencies:** M1.2, M1.3
 **Verification:**
 - `go mod tidy` succeeds
 - `go build ./cmd/aggregator` produces binary
@@ -127,7 +127,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add pytest fixtures for Kafka/Redis/Neo4j
 - [x] Document processor responsibilities in README
 
-**Dependencies:** M1.2, M1.3  
+**Dependencies:** M1.2, M1.3
 **Verification:**
 - `uv sync` installs dependencies
 - `fastapi dev src/processor/main.py` starts server
@@ -145,7 +145,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add Jest test configuration
 - [x] Document delivery responsibilities in README
 
-**Dependencies:** M1.2, M1.3  
+**Dependencies:** M1.2, M1.3
 **Verification:**
 - `npm run dev` starts development server on :3000
 - `npm run build` succeeds
@@ -166,7 +166,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create `docker-compose.test.yml` for integration tests
 - [x] Document build process in CONTRIBUTING.md
 
-**Dependencies:** M2.1, M2.2, M2.3  
+**Dependencies:** M2.1, M2.2, M2.3
 **Verification:**
 - GitHub Actions workflow passes for all services
 - Pre-commit hooks run without errors
@@ -176,7 +176,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M3: Core Event Pipeline
 
-**Status:** � IN PROGRESS  
+**Status:** � IN PROGRESS
 **Focus:** Ingestion, deduplication, LLM extraction
 
 ### Milestones
@@ -192,7 +192,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Create comprehensive unit tests (>80% coverage)
 - [x] Document MCP server setup guide
 
-**Dependencies:** M2.1, M2.4  
+**Dependencies:** M2.1, M2.4
 **Verification:**
 - MCP discovery returns list of available tools
 - Kafka producer sends >1000 events/sec
@@ -208,7 +208,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add RediSearch blocking queries
 - [x] Create comprehensive unit tests (>80% coverage)
 
-**Dependencies:** M1.3, M2.2  
+**Dependencies:** M1.3, M2.2
 **Verification:**
 - Hash collisions handled correctly ✅
 - TTL expiry works as expected ✅
@@ -225,7 +225,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Implement rate limiting (tokens/sec)
 - [x] Create comprehensive unit tests (>80% coverage)
 
-**Dependencies:** M2.2, M3.1  
+**Dependencies:** M2.2, M3.1
 **Verification:**
 - Entity extraction produces valid STIX objects
 - Confidence scores correlate with accuracy
@@ -244,7 +244,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - DLQ error rate
 - [x] Create comprehensive integration tests
 
-**Dependencies:** M3.1, M3.2, M3.3, M2.2  
+**Dependencies:** M3.1, M3.2, M3.3, M2.2
 **Verification:**
 - Consumer group rebalances correctly
 - Schema violations land in DLQ with error details
@@ -255,7 +255,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M4: Knowledge Graph Construction
 
-**Status:** 🟢 COMPLETE  
+**Status:** 🟢 COMPLETE
 **Focus:** Entity resolution, graph persistence, GraphRAG indexing
 
 ### Milestones
@@ -271,7 +271,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Monitor false-positive rate
 - [x] Create comprehensive unit + integration tests
 
-**Dependencies:** M2.2, M1.3 (Qdrant profile)  
+**Dependencies:** M2.2, M1.3 (Qdrant profile)
 **Verification:**
 - Semantic search returns correct candidates
 - Structural matching identifies relationships
@@ -293,7 +293,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [x] Add transaction management + rollback on write failures
 - [x] Create comprehensive integration tests
 
-**Dependencies:** M1.3 (Neo4j), M4.1  
+**Dependencies:** M1.3 (Neo4j), M4.1
 **Verification:**
 - Schema validates STIX compliance
 - Indexes created successfully
@@ -313,7 +313,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Update frequency
 - [x] Create comprehensive tests
 
-**Dependencies:** M4.2, M3.3  
+**Dependencies:** M4.2, M3.3
 **Verification:**
 - Community detection produces coherent clusters
 - Summaries are human-readable
@@ -324,7 +324,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M5: Delivery & Real-Time Alerting
 
-**Status:** 🔴 NOT STARTED  
+**Status:** 🔴 NOT STARTED
 **Focus:** WebSocket gateway, interactive dashboard, audio briefings
 
 ### Milestones
@@ -340,7 +340,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Connection lifecycle events
 - [ ] Create comprehensive tests
 
-**Dependencies:** M1.3 (Kafka), M2.3  
+**Dependencies:** M1.3 (Kafka), M2.3
 **Verification:**
 - WebSocket connections maintain heartbeat
 - Alerts broadcast to correct clients
@@ -361,7 +361,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - GPU acceleration where available
 - [ ] Create performance benchmarks
 
-**Dependencies:** M5.1, M2.3, M4.2  
+**Dependencies:** M5.1, M2.3, M4.2
 **Verification:**
 - Dashboard loads 10k nodes smoothly
 - Zoom/pan operations are responsive
@@ -380,7 +380,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [ ] Generate secure signed URLs for download
 - [ ] Create comprehensive tests
 
-**Dependencies:** M4.3, M1.3 (MinIO), M2.2  
+**Dependencies:** M4.3, M1.3 (MinIO), M2.2
 **Verification:**
 - Briefing scripts are grammatically correct
 - TTS produces clear, understandable audio
@@ -391,7 +391,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M6: Security, Multi-Tenancy & Polish
 
-**Status:** 🔴 NOT STARTED  
+**Status:** 🔴 NOT STARTED
 **Focus:** Data isolation, plugin sandboxing, audit trail, production hardening
 
 ### Milestones
@@ -404,7 +404,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [ ] Create cross-tenant leakage scenario tests
 - [ ] Document multi-tenancy architecture
 
-**Dependencies:** M4.2, M2.2  
+**Dependencies:** M4.2, M2.2
 **Verification:**
 - Tenant A cannot query Tenant B data
 - Federated queries return correct cross-tenant results
@@ -420,7 +420,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 - [ ] Create audit logging (all plugin invocations)
 - [ ] Document sandboxing architecture
 
-**Dependencies:** M3.1  
+**Dependencies:** M3.1
 **Verification:**
 - Plugin crashes don't crash Aggregator
 - Network policies enforced correctly
@@ -440,7 +440,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - CSV/JSON reports
 - [ ] Document compliance procedures
 
-**Dependencies:** M4.2, M6.1  
+**Dependencies:** M4.2, M6.1
 **Verification:**
 - All nodes have STIX mappings
 - Audit log is immutable + timestamped
@@ -464,7 +464,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Memory usage (>85% of limit)
 - [ ] Document observability runbook
 
-**Dependencies:** M1.3, M2.1, M2.2, M2.3  
+**Dependencies:** M1.3, M2.1, M2.2, M2.3
 **Verification:**
 - All dashboards populated with real data
 - Alert rules trigger on defined thresholds
@@ -493,7 +493,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Search syntax
   - FAQ
 
-**Dependencies:** M6.1, M6.2, M6.3, M6.4  
+**Dependencies:** M6.1, M6.2, M6.3, M6.4
 **Verification:**
 - Documentation is complete + accurate
 - Examples are copy-paste ready
@@ -518,7 +518,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Query plan analysis
 - [ ] Create performance baseline + SLAs
 
-**Dependencies:** All previous milestones  
+**Dependencies:** All previous milestones
 **Verification:**
 - End-to-end tests pass consistently
 - 10k EPS sustained without degradation

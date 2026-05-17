@@ -100,7 +100,7 @@ export function GraphViewer({ graphData }) {
 
     // 1. Build graph structure
     const graph = new Graph({ multi: true, allowSelfLoops: true });
-    
+
     // Add nodes
     graphData.nodes.forEach(node => {
       graph.addNode(node.id, {
@@ -137,7 +137,7 @@ export function GraphViewer({ graphData }) {
 
     // 4. Mouse interactions
     const camera = sigmaRef.current.getCamera();
-    
+
     // Zoom on mouse wheel
     sigmaRef.current.getMouseCaptor().on('wheel', e => {
       const factor = e.deltaY > 0 ? 1.2 : 0.8;
@@ -218,18 +218,18 @@ export function RealtimeAlertListener({ sigma }: { sigma: Sigma }) {
     // Handle incoming alerts
     newSocket.on('alert', (alert: Alert) => {
       console.log('Received alert:', alert);
-      
+
       // 1. Add to alerts list
       setAlerts(prev => [alert, ...prev.slice(0, 9)]); // Keep last 10
-      
+
       // 2. Highlight affected node
       if (sigma && alert.node_id) {
         highlightNode(sigma, alert.node_id, alert.severity);
-        
+
         // Pulse animation
         animatePulse(sigma, alert.node_id, 1000);
       }
-      
+
       // 3. Show toast notification
       showNotification(alert.message, {
         type: alert.severity.toLowerCase(),
@@ -260,7 +260,7 @@ export function RealtimeAlertListener({ sigma }: { sigma: Sigma }) {
 
 function highlightNode(sigma: Sigma, nodeId: string, severity: string) {
   const graph = sigma.getGraph();
-  
+
   // Color by severity
   const colors: Record<string, string> = {
     critical: '#FF0000',
@@ -291,7 +291,7 @@ function animatePulse(sigma: Sigma, nodeId: string, duration: number) {
     elapsed += 50;
     const progress = Math.sin((elapsed / duration) * Math.PI * 2);
     const size = baseSize * (1 + progress * 0.3);
-    
+
     graph.updateNode(nodeId, { size });
 
     if (elapsed < duration) {
@@ -354,8 +354,8 @@ export async function GET(req: NextRequest) {
       WITH n
       OPTIONAL MATCH (n)-[r]->(m:Entity)
       WHERE m.tenant_id = $tenant_id AND m.confidence >= $confidence
-      RETURN DISTINCT 
-        n, 
+      RETURN DISTINCT
+        n,
         collect({target: m, relationship: r}) as edges
       LIMIT $limit
     `;
@@ -459,7 +459,7 @@ export function AudioBriefingPlayer({ briefingId }: { briefingId: string }) {
   const handleDownload = async () => {
     const response = await fetch(`/api/audio/${briefingId}?download=true`);
     const blob = await response.blob();
-    
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -471,7 +471,7 @@ export function AudioBriefingPlayer({ briefingId }: { briefingId: string }) {
   return (
     <div className="audio-player bg-slate-800 p-4 rounded-lg">
       <audio ref={audioRef} />
-      
+
       <div className="flex items-center gap-4">
         <button
           onClick={handlePlay}
@@ -554,10 +554,10 @@ describe('GraphViewer', () => {
 
   test('handles node click', async () => {
     const { container } = render(<GraphViewer graphData={mockData} />);
-    
+
     const node = container.querySelector('[data-node-id="1"]');
     fireEvent.click(node!);
-    
+
     await waitFor(() => {
       expect(screen.getByText(/Emotet/i)).toBeInTheDocument();
     });

@@ -1,6 +1,6 @@
 # MCP Server Setup Guide
 
-**Audience:** Plugin developers building new data sources for Omni-G  
+**Audience:** Plugin developers building new data sources for Omni-G
 **Status:** Current as of M3.1
 
 ---

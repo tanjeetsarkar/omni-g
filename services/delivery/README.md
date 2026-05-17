@@ -35,13 +35,13 @@ delivery/
 
 ## Configuration
 
-| Variable                 | Default                   | Description                        |
-|--------------------------|---------------------------|------------------------------------|
-| `NEXT_PUBLIC_API_URL`    | `http://localhost:8001`   | Processor API base URL             |
-| `NEXT_PUBLIC_WS_URL`     | `ws://localhost:3001`     | WebSocket gateway URL              |
-| `NEO4J_URL`              | `neo4j://localhost:7687`  | Neo4j URL (server-side queries)    |
-| `NEO4J_USER`             | `neo4j`                   | Neo4j username                     |
-| `NEO4J_PASSWORD`         | `omni-g-password`         | Neo4j password                     |
+| Variable              | Default                  | Description                     |
+| --------------------- | ------------------------ | ------------------------------- |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8001`  | Processor API base URL          |
+| `NEXT_PUBLIC_WS_URL`  | `ws://localhost:3001`    | WebSocket gateway URL           |
+| `NEO4J_URL`           | `neo4j://localhost:7687` | Neo4j URL (server-side queries) |
+| `NEO4J_USER`          | `neo4j`                  | Neo4j username                  |
+| `NEO4J_PASSWORD`      | `omni-g-password`        | Neo4j password                  |
 
 ## Running Locally
 
@@ -54,10 +54,10 @@ pnpm build        # production build
 
 ## API Endpoints
 
-| Method | Path          | Description                    |
-|--------|---------------|--------------------------------|
-| `GET`  | `/api/health` | Liveness probe                 |
-| `GET`  | `/api/ws`     | WebSocket gateway status (M5.1)|
+| Method | Path          | Description                     |
+| ------ | ------------- | ------------------------------- |
+| `GET`  | `/api/health` | Liveness probe                  |
+| `GET`  | `/api/ws`     | WebSocket gateway status (M5.1) |
 
 ## Docker
 

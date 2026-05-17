@@ -1,22 +1,17 @@
 /**
- * WebSocket gateway stub (M5.1).
+ * GET /api/ws — WebSocket gateway connection info (M5.1-B).
  *
- * Phase M5.1 will replace this with a full Socket.io server that:
- *   - subscribes to the `analyst-alerts` Kafka topic
- *   - broadcasts events to connected WebSocket clients, filtered by tenant
- *   - tracks connection lifecycle and Prometheus metrics
- *
- * Next.js App Router does not natively support long-lived WebSocket upgrades.
- * The production gateway will run as a separate Node.js process on port 3001
- * alongside the Next.js server. This route provides a placeholder for the
- * REST-based status endpoint.
+ * Returns gateway port and topic so clients know where to connect.
+ * The actual Socket.io server is the standalone gateway process on port 3001.
  */
 import { NextResponse } from "next/server";
 
 export async function GET() {
+  const gatewayPort = parseInt(process.env.GATEWAY_PORT ?? "3001", 10);
   return NextResponse.json({
-    status: "not_implemented",
-    message: "WebSocket gateway is implemented in Phase M5.1",
-    gateway_port: 3001,
+    status: "ok",
+    gateway_port: gatewayPort,
+    kafka_topic: process.env.KAFKA_ALERTS_TOPIC ?? "analyst-alerts",
+    message: `Connect to ws://localhost:${gatewayPort} via Socket.io`,
   });
 }

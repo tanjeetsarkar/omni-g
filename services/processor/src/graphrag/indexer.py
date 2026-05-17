@@ -158,6 +158,33 @@ class GraphRAGIndexer:
         )
         return result
 
+    async def get_community_summaries(self, tenant_id: str) -> list[dict[str, object]]:
+        """Query Neo4j for all nodes with a ``community_summary`` property set.
+
+        Returns a list of dicts, each containing ``community_id``,
+        ``community_summary``, and ``entity_count`` for each distinct community
+        found for *tenant_id*.
+        """
+        async with self._summarizer._driver.session() as session:
+            result = await session.run(
+                "MATCH (n:STIXEntity {tenant_id: $tenant_id}) "
+                "WHERE n.community_summary IS NOT NULL "
+                "RETURN n.community_id AS community_id, "
+                "       n.community_summary AS community_summary, "
+                "       count(n) AS entity_count "
+                "ORDER BY n.community_id",
+                tenant_id=tenant_id,
+            )
+            records = await result.data()
+        return [
+            {
+                "community_id": r["community_id"],
+                "community_summary": r["community_summary"],
+                "entity_count": r["entity_count"],
+            }
+            for r in records
+        ]
+
     async def schedule_background_index(
         self,
         tenant_id: str,
