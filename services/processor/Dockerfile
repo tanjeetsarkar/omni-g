@@ -8,7 +8,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_NO_CACHE=1
 
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --no-dev --frozen
 
 # ============================================================
