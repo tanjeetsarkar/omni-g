@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -57,6 +59,25 @@ def mock_kafka_consumer() -> MagicMock:
     mock = MagicMock()
     mock.messages.return_value = iter([])
     return mock
+
+
+@pytest.fixture()
+async def fake_deduplicator() -> AsyncGenerator[object]:
+    """ContentDeduplicator wired to an in-process FakeRedis (no real Redis required)."""
+    import fakeredis.aioredis
+
+    from src.dedup.deduplicator import _LUA_SCRIPT, ContentDeduplicator
+
+    fake_r: fakeredis.aioredis.FakeRedis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    dedup = ContentDeduplicator(ttl_seconds=60)
+    dedup._client = cast(Any, fake_r)
+    try:
+        dedup._script_sha = await fake_r.script_load(_LUA_SCRIPT)
+    except Exception:
+        # fakeredis without Lua support — _call_lua falls back to non-atomic Python path
+        dedup._script_sha = None
+    yield dedup
+    await fake_r.aclose()
 
 
 @pytest.fixture()

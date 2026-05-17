@@ -1,6 +1,6 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 16, 2026  
+**Last Updated:** May 17, 2026  
 **Status:** Foundation Phase Active
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
@@ -176,21 +176,21 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M3: Core Event Pipeline
 
-**Status:** 🔴 NOT STARTED  
+**Status:** � IN PROGRESS  
 **Focus:** Ingestion, deduplication, LLM extraction
 
 ### Milestones
 
 #### M3.1: Aggregator - MCP Host Implementation
-- [ ] Implement MCP discovery protocol (tools/list endpoint)
-- [ ] Create agentic scheduler for polling frequency
-- [ ] Implement Kafka producer with:
+- [x] Implement MCP discovery protocol (tools/list endpoint)
+- [x] Create agentic scheduler for polling frequency
+- [x] Implement Kafka producer with:
   - Retry logic (3 retries with exponential backoff)
   - Batching (100 events or 1s timeout)
   - Prometheus metrics (ingest_rate, validation_failures)
-- [ ] Add schema validation at edge (Pydantic call to Python sidecar)
-- [ ] Create comprehensive unit tests (>80% coverage)
-- [ ] Document MCP server setup guide
+- [x] Add schema validation at edge (Pydantic call to Python sidecar)
+- [x] Create comprehensive unit tests (>80% coverage)
+- [x] Document MCP server setup guide
 
 **Dependencies:** M2.1, M2.4  
 **Verification:**
@@ -202,28 +202,28 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M3.2: Redis Deduplication Layer
-- [ ] Implement SHA-256 content hashing
-- [ ] Create sliding window dedup logic (24h TTL)
-- [ ] Write Redis Lua scripts for atomic check-set
-- [ ] Add RediSearch blocking queries
-- [ ] Create comprehensive unit tests (>80% coverage)
+- [x] Implement SHA-256 content hashing
+- [x] Create sliding window dedup logic (24h TTL)
+- [x] Write Redis Lua scripts for atomic check-set
+- [x] Add RediSearch blocking queries
+- [x] Create comprehensive unit tests (>80% coverage)
 
 **Dependencies:** M1.3, M2.2  
 **Verification:**
-- Hash collisions handled correctly
-- TTL expiry works as expected
-- Botnet dedup clusters duplicates correctly
-- Lua script atomicity verified under concurrency
+- Hash collisions handled correctly ✅
+- TTL expiry works as expected ✅
+- Botnet dedup clusters duplicates correctly ✅
+- Lua script atomicity verified under concurrency ✅
 
 ---
 
 #### M3.3: LLM Entity Extraction
-- [ ] Implement instructor-based LLM prompt
-- [ ] Create Pydantic STIX 2.1 models (Person, Org, Malware, etc.)
-- [ ] Implement Ollama fallback logic
-- [ ] Add confidence scoring for extracted entities
-- [ ] Implement rate limiting (tokens/sec)
-- [ ] Create comprehensive unit tests (>80% coverage)
+- [x] Implement instructor-based LLM prompt
+- [x] Create Pydantic STIX 2.1 models (Person, Org, Malware, etc.)
+- [x] Implement Ollama fallback logic
+- [x] Add confidence scoring for extracted entities
+- [x] Implement rate limiting (tokens/sec)
+- [x] Create comprehensive unit tests (>80% coverage)
 
 **Dependencies:** M2.2, M3.1  
 **Verification:**
@@ -235,14 +235,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M3.4: Processor Kafka Consumer
-- [ ] Implement consumer group pattern (multiple workers)
-- [ ] Create dead-letter queue (DLQ) for schema violations
-- [ ] Build processing pipeline: hash check → extract → resolve
-- [ ] Add Prometheus metrics:
+- [x] Implement consumer group pattern (multiple workers)
+- [x] Create dead-letter queue (DLQ) for schema violations
+- [x] Build processing pipeline: hash check → extract → resolve
+- [x] Add Prometheus metrics:
   - Processing latency per event
   - Extraction accuracy (confidence distribution)
   - DLQ error rate
-- [ ] Create comprehensive integration tests
+- [x] Create comprehensive integration tests
 
 **Dependencies:** M3.1, M3.2, M3.3, M2.2  
 **Verification:**
@@ -255,21 +255,21 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M4: Knowledge Graph Construction
 
-**Status:** 🔴 NOT STARTED  
+**Status:** 🟢 COMPLETE  
 **Focus:** Entity resolution, graph persistence, GraphRAG indexing
 
 ### Milestones
 
 #### M4.1: Entity Resolution Service
-- [ ] Implement vector blocking (Qdrant semantic search)
-- [ ] Implement graph structural matching (neighborhood analysis)
-- [ ] Create merge logic:
+- [x] Implement vector blocking (Qdrant semantic search)
+- [x] Implement graph structural matching (neighborhood analysis)
+- [x] Create merge logic:
   - Auto-merge on >95% confidence
   - Ambiguity alerts for 50-95% confidence
   - Rejection for <50% confidence
-- [ ] Track entity lifecycle (creation, updates, SAME_AS relationships)
-- [ ] Monitor false-positive rate
-- [ ] Create comprehensive unit + integration tests
+- [x] Track entity lifecycle (creation, updates, SAME_AS relationships)
+- [x] Monitor false-positive rate
+- [x] Create comprehensive unit + integration tests
 
 **Dependencies:** M2.2, M1.3 (Qdrant profile)  
 **Verification:**
@@ -281,17 +281,17 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M4.2: Neo4j Graph Persistence
-- [ ] Create Neo4j schema:
+- [x] Create Neo4j schema:
   - Nodes: Person, Organization, Malware, Location, Campaign, AttackPattern
   - Properties: STIX-compliant fields + custom_properties
   - Edges: attributed-to, targets, uses, located-at, related-to
-- [ ] Create indexes on:
+- [x] Create indexes on:
   - Entity IDs (unique constraint)
   - Created/updated timestamps
   - Confidence scores
-- [ ] Implement APOC procedures for community detection (Leiden/Louvain)
-- [ ] Add transaction management + rollback on write failures
-- [ ] Create comprehensive integration tests
+- [x] Implement APOC procedures for community detection (Leiden/Louvain)
+- [x] Add transaction management + rollback on write failures
+- [x] Create comprehensive integration tests
 
 **Dependencies:** M1.3 (Neo4j), M4.1  
 **Verification:**
@@ -303,15 +303,15 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M4.3: GraphRAG Indexing
-- [ ] Implement community detection on subgraph updates
-- [ ] Create natural language summary generation (LLM-based)
-- [ ] Store summaries in Neo4j node properties
-- [ ] Implement incremental updates (avoid full recalculation)
-- [ ] Add Prometheus metrics:
+- [x] Implement community detection on subgraph updates
+- [x] Create natural language summary generation (LLM-based)
+- [x] Store summaries in Neo4j node properties
+- [x] Implement incremental updates (avoid full recalculation)
+- [x] Add Prometheus metrics:
   - Community detection latency
   - Summary generation time
   - Update frequency
-- [ ] Create comprehensive tests
+- [x] Create comprehensive tests
 
 **Dependencies:** M4.2, M3.3  
 **Verification:**

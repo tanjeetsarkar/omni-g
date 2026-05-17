@@ -34,7 +34,7 @@ func TestValidator_InvalidPayload(t *testing.T) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		json.NewEncoder(w).Encode(map[string]any{
 			"valid":  false,
-			"errors": []string{"field 'source' is required"},
+			"errors": []map[string]string{{"field": "source", "message": "field 'source' is required"}},
 		})
 	}))
 	defer srv.Close()

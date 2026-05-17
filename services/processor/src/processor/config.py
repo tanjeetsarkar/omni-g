@@ -11,11 +11,14 @@ class Settings(BaseSettings):
     http_port: int = Field(default=8001, alias="HTTP_PORT")
 
     # Kafka
+    kafka_enabled: bool = Field(default=False, alias="KAFKA_ENABLED")
     kafka_brokers: str = Field(default="localhost:9092", alias="KAFKA_BROKERS")
     kafka_group_id: str = Field(default="processor-group", alias="KAFKA_GROUP_ID")
     kafka_raw_topic: str = Field(default="raw-feed", alias="KAFKA_RAW_TOPIC")
     kafka_entities_topic: str = Field(default="processed-entities", alias="KAFKA_ENTITIES_TOPIC")
     kafka_alerts_topic: str = Field(default="analyst-alerts", alias="KAFKA_ALERTS_TOPIC")
+    kafka_dlq_topic: str = Field(default="raw-feed.dlq", alias="KAFKA_DLQ_TOPIC")
+    kafka_num_workers: int = Field(default=1, alias="KAFKA_NUM_WORKERS")
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")

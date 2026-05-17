@@ -15,14 +15,24 @@ The **Aggregator** is the edge ingestion layer of Omni-G. It receives raw events
 aggregator/
 ├── cmd/
 │   └── aggregator/
-│       └── main.go          # Entry point
+│       └── main.go          # Entry point — wires all components
 ├── internal/
 │   ├── config/
 │   │   └── config.go        # Viper-based config from env vars
 │   ├── kafka/
 │   │   └── producer.go      # Kafka producer wrapper
+│   ├── mcp/
+│   │   ├── types.go         # JSON-RPC 2.0 + MCP protocol types
+│   │   ├── client.go        # HTTP+SSE MCP plugin client
+│   │   └── handler.go       # GET /mcp/tools discovery endpoint
+│   ├── metrics/
+│   │   └── metrics.go       # Prometheus counters / histograms
+│   ├── pipeline/
+│   │   └── pipeline.go      # Validate → publish processing step
+│   ├── scheduler/
+│   │   └── scheduler.go     # Agentic per-plugin polling scheduler
 │   ├── server/
-│   │   └── server.go        # HTTP server (health, metrics)
+│   │   └── server.go        # HTTP server (health, metrics, MCP)
 │   └── validation/
 │       └── validator.go     # Validation sidecar client
 ├── Dockerfile
@@ -43,6 +53,9 @@ All configuration is provided via environment variables.
 | `KAFKA_PRODUCER_BATCH_SIZE` | `100`                     | Max messages per batch               |
 | `KAFKA_BATCH_TIMEOUT_MS` | `1000`                       | Batch flush timeout (ms)             |
 | `VALIDATION_SERVICE_URL` | `http://localhost:8001`      | Processor sidecar URL                |
+| `MCP_PLUGIN_URLS`        | *(empty)*                    | Comma-separated MCP plugin base URLs |
+| `SCHEDULER_INTERVAL_MS`  | `30000`                      | Poll interval per plugin (ms)        |
+| `KAFKA_DLQ_TOPIC`        | `raw-feed.dlq`               | Dead-letter topic (wired in M3.4)    |
 
 ## Running Locally
 
@@ -62,11 +75,17 @@ go build -o bin/aggregator ./cmd/aggregator
 
 ## API Endpoints
 
-| Method | Path      | Description                |
-|--------|-----------|----------------------------|
-| `GET`  | `/health` | Liveness probe             |
-| `GET`  | `/ready`  | Readiness probe            |
-| `GET`  | `/metrics`| Prometheus metrics (M3.1)  |
+| Method | Path          | Description                              |
+|--------|---------------|------------------------------------------|
+| `GET`  | `/health`     | Liveness probe                           |
+| `GET`  | `/ready`      | Readiness probe                          |
+| `GET`  | `/metrics`    | Prometheus metrics                       |
+| `GET`  | `/mcp/tools`  | MCP discovery — lists registered plugins |
+
+## MCP Plugin Setup
+
+See [docs/mcp-server-setup.md](../../docs/mcp-server-setup.md) for a full guide on building,
+registering, and testing MCP plugin servers.
 
 ## Docker
 

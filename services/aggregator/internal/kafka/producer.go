@@ -13,10 +13,15 @@ import (
 
 // RawEvent is the canonical envelope for all events entering the pipeline.
 type RawEvent struct {
-	ID        string         `json:"id"`
-	Source    string         `json:"source"`
-	Timestamp time.Time      `json:"timestamp"`
-	Payload   map[string]any `json:"payload"`
+	ID              string         `json:"id"`
+	Source          string         `json:"source"`
+	Timestamp       time.Time      `json:"timestamp"`
+	Payload         map[string]any `json:"payload"`
+	PluginVersion   string         `json:"plugin_version,omitempty"`
+	PluginName      string         `json:"plugin_name,omitempty"`
+	IngestLatencyMs int64          `json:"ingest_latency_ms"`
+	SchemaVersion   string         `json:"schema_version"`
+	TenantID        string         `json:"tenant_id,omitempty"`
 }
 
 // Producer wraps confluent-kafka-go and exposes a high-level Publish method.
@@ -66,6 +71,9 @@ func (pr *Producer) Publish(ctx context.Context, event *RawEvent) error {
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
+	}
+	if event.SchemaVersion == "" {
+		event.SchemaVersion = "1.0"
 	}
 
 	payload, err := json.Marshal(event)
