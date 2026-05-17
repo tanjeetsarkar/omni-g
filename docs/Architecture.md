@@ -105,7 +105,7 @@ flowchart LR
 | Producer | Interface | Consumer | Contract |
 |---|---|---|---|
 | MCP Plugin | JSON-RPC/SSE | Aggregator Scheduler | `tools/list`, `tools/call` content blocks |
-| Aggregator | HTTP POST `/validate` | Processor | validation result `{valid, errors[]}` |
+| Aggregator | HTTP POST `/validate` | Processor (current impl) | validation result `{valid, errors[]}`; target is a decoupled validation sidecar/service |
 | Aggregator | Kafka `raw-feed` | Processor | `RawEvent` envelope |
 | Processor | Kafka `analyst-alerts` | Delivery Gateway | `AnalystAlert` payload |
 | Delivery API routes | HTTP REST | Processor | `/briefings`, `/briefings/generate` |
@@ -270,17 +270,19 @@ flowchart LR
 ### 11.1 Vision vs Current Architecture Deviations
 1. **Tenant isolation remains partial**
    - tenant_id propagation exists, but Neo4j LBAC/federated authorization and end-to-end tenant auth boundaries are not yet complete.
-2. **Sandboxing target not implemented**
+2. **Ingress validation is tightly coupled to Processor availability**
+   - Aggregator currently depends on Processor `/validate`; this weakens ingestion/processing decoupling when Processor is degraded.
+3. **Sandboxing target not implemented**
    - MCP plugin isolation/runtime policies (gVisor/Firecracker/network allow-list) are not active.
-3. **Delivery graph source is still mock**
+4. **Delivery graph source is still mock**
    - `/api/graph` serves fixture data instead of Processor-mediated graph query results.
-4. **Provenance linkage gap (`created_by_ref`)**
+5. **Provenance linkage gap (`created_by_ref`)**
    - model field exists; extraction metadata path currently does not guarantee full plugin+analyst provenance population.
-5. **Architecture drift in Delivery API contracts**
+6. **Architecture drift in Delivery API contracts**
    - Delivery route expects `/briefings/{id}` while Processor exposes `/briefings` and `/briefings/generate` (contract mismatch risk).
-6. **Duplicate persistence pathways**
+7. **Duplicate persistence pathways**
    - resolver persistence and graph persistence both write to Neo4j in pipeline sequence, increasing model/label consistency risk.
-7. **Roadmap/document drift**
+8. **Roadmap/document drift**
    - roadmap marks M5 as not started, while implementation and gap matrix indicate substantial M5 completion.
 
 ### 11.2 Anti-Pattern Watchlist (for upcoming phases)
@@ -291,13 +293,15 @@ flowchart LR
 
 ## 12. Recommended Next Architecture Actions
 
-1. **Close tenancy enforcement gap:** implement query-time tenant enforcement + authorization model (M6.1).
-2. **Normalize Delivery↔Processor API contracts:** reconcile briefing endpoints and document canonical interfaces.
-3. **Replace mock graph API with Processor-backed graph query endpoint** while preserving tenant filtering.
-4. **Harden provenance model:** guarantee `created_by_ref` population and persistence for all graph writes.
-5. **Converge Neo4j write model:** unify resolver and persistence write strategy to one canonical graph schema path.
-6. **Implement sandboxing baseline:** container isolation + network policy now; gVisor evolution per roadmap.
-7. **Reconcile roadmap status artifacts** with actual codebase to prevent planning/implementation divergence.
+1. **Replace mock graph API first:** prioritize Processor-backed graph query endpoint so analysts see live intelligence instead of fixtures.
+2. **Remove direct graph credentials from Delivery runtime:** enforce delivery→processor-only graph access and keep tenant/audit controls centralized.
+3. **Close tenancy enforcement gap:** implement query-time tenant enforcement + authorization model (M6.1).
+4. **Decouple ingress validation path:** move `/validate` dependency to a dedicated sidecar/service boundary so ingestion survives Processor partial outages.
+5. **Normalize Delivery↔Processor API contracts:** adopt one canonical briefing contract (`GET /briefings`, `GET /briefings/{id}`, `POST /briefings`) and align both services.
+6. **Harden provenance model:** guarantee `created_by_ref` population and persistence for all graph writes.
+7. **Converge Neo4j write model:** use resolver as match-only and keep graph persistence as the single write authority for nodes/edges.
+8. **Implement sandboxing baseline:** container isolation + network policy now; gVisor evolution per roadmap.
+9. **Reconcile roadmap status artifacts** with actual codebase to prevent planning/implementation divergence.
 
 ---
 
