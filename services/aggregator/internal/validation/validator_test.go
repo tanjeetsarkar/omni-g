@@ -17,7 +17,7 @@ func TestValidator_ValidPayload(t *testing.T) {
 		assert.Equal(t, "/validate", r.URL.Path)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"valid": true})
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"valid": true}))
 	}))
 	defer srv.Close()
 
@@ -32,10 +32,10 @@ func TestValidator_ValidPayload(t *testing.T) {
 func TestValidator_InvalidPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]any{
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"valid":  false,
 			"errors": []map[string]string{{"field": "source", "message": "field 'source' is required"}},
-		})
+		}))
 	}))
 	defer srv.Close()
 

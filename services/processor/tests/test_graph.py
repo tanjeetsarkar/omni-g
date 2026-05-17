@@ -57,9 +57,7 @@ def _make_mock_session() -> MagicMock:
     session = MagicMock()
     result_mock = AsyncMock()
     result_mock.single = AsyncMock(
-        return_value={
-            "entity_id": "threat-actor--00000000-0000-0000-0000-000000000001"
-        }
+        return_value={"entity_id": "threat-actor--00000000-0000-0000-0000-000000000001"}
     )
     session.run = AsyncMock(return_value=result_mock)
     return session
@@ -187,9 +185,7 @@ async def test_persist_extraction_transaction() -> None:
     # Build a driver that yields a transaction mock
     tx_mock = AsyncMock()
     result_mock = AsyncMock()
-    result_mock.single = AsyncMock(
-        return_value={"entity_id": actor.id}
-    )
+    result_mock.single = AsyncMock(return_value={"entity_id": actor.id})
     tx_mock.run = AsyncMock(return_value=result_mock)
     tx_mock.commit = AsyncMock()
 

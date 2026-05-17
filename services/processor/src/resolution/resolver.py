@@ -166,9 +166,7 @@ class EntityResolver:
                 entity,
             )
         finally:
-            RESOLUTION_LATENCY.labels(tenant_id=tenant_id).observe(
-                time.perf_counter() - t0
-            )
+            RESOLUTION_LATENCY.labels(tenant_id=tenant_id).observe(time.perf_counter() - t0)
 
         RESOLUTION_DECISIONS.labels(
             decision=result.decision.value,
@@ -211,9 +209,7 @@ class EntityResolver:
         tenant_label = _safe_label(tenant_id)
 
         if decision == ResolutionDecision.NEW_ENTITY:
-            return await self._create_node(
-                entity.id, props, type_label, tenant_label
-            )
+            return await self._create_node(entity.id, props, type_label, tenant_label)
 
         if decision == ResolutionDecision.AUTO_MERGE:
             matched_id = resolution.matched_entity_id or entity.id
@@ -239,9 +235,7 @@ class EntityResolver:
             )
         return new_id
 
-    async def resolve_and_persist(
-        self, tenant_id: str, entity: STIXObject
-    ) -> ResolutionResult:
+    async def resolve_and_persist(self, tenant_id: str, entity: STIXObject) -> ResolutionResult:
         """Convenience: resolve *entity* then persist the result in one call."""
         result = await self.resolve(tenant_id, entity)
         await self.persist_entity(tenant_id, entity, result)
@@ -251,9 +245,7 @@ class EntityResolver:
     # Vector blocking (Qdrant)
     # ------------------------------------------------------------------
 
-    async def find_candidates(
-        self, tenant_id: str, entity: STIXObject
-    ) -> list[CandidateMatch]:
+    async def find_candidates(self, tenant_id: str, entity: STIXObject) -> list[CandidateMatch]:
         """Upsert entity embedding into Qdrant then return top-5 similar entities.
 
         The upsert step ensures that every entity flowing through the pipeline

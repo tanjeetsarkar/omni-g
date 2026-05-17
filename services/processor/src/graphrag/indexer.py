@@ -137,9 +137,7 @@ class GraphRAGIndexer:
         summaries_generated = await self._summarize_and_store(communities, tenant_id)
 
         duration = time.perf_counter() - t0
-        GRAPHRAG_INDEX_LATENCY.labels(
-            tenant_id=tenant_id, mode="incremental"
-        ).observe(duration)
+        GRAPHRAG_INDEX_LATENCY.labels(tenant_id=tenant_id, mode="incremental").observe(duration)
 
         result = IndexingResult(
             tenant_id=tenant_id,
@@ -208,9 +206,7 @@ class GraphRAGIndexer:
         stored = 0
         for community in communities:
             summary = await self._summarizer.summarize_community(community)
-            await self._summarizer.store_summary_for_community(
-                summary, community.entity_ids
-            )
+            await self._summarizer.store_summary_for_community(summary, community.entity_ids)
             GRAPHRAG_SUMMARIES_UPDATED.labels(tenant_id=tenant_id).inc()
             stored += 1
         return stored

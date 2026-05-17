@@ -194,9 +194,7 @@ async def test_summarize_community_llm() -> None:
         {"eid": community.entity_ids[0], "name": "APT28", "stype": "threat-actor"},
         {"eid": community.entity_ids[1], "name": "Windows", "stype": "identity"},
     ]
-    rel_records = [
-        {"src_name": "APT28", "rel_type": "TARGETS", "tgt_name": "Windows"}
-    ]
+    rel_records = [{"src_name": "APT28", "rel_type": "TARGETS", "tgt_name": "Windows"}]
 
     async def fake_run(cypher: str, **kwargs: Any) -> AsyncMock:
         result = AsyncMock()
@@ -367,9 +365,7 @@ async def test_index_incremental() -> None:
     indexer = GraphRAGIndexer(detector, summarizer)
     result = await indexer.index_incremental(entity_id, "t1")
 
-    detector.detect_communities_for_entity.assert_called_once_with(
-        entity_id, "t1", hop_depth=2
-    )
+    detector.detect_communities_for_entity.assert_called_once_with(entity_id, "t1", hop_depth=2)
     assert result.incremental is True
     assert result.communities_detected == 1
     assert result.summaries_generated == 1
@@ -406,21 +402,13 @@ async def test_metrics_populated() -> None:
 
     indexer = GraphRAGIndexer(detector, summarizer)
 
-    before_freq = GRAPHRAG_UPDATE_FREQUENCY.labels(
-        tenant_id="tenant-metrics"
-    )._value.get()
-    before_summaries = GRAPHRAG_SUMMARIES_UPDATED.labels(
-        tenant_id="tenant-metrics"
-    )._value.get()
+    before_freq = GRAPHRAG_UPDATE_FREQUENCY.labels(tenant_id="tenant-metrics")._value.get()
+    before_summaries = GRAPHRAG_SUMMARIES_UPDATED.labels(tenant_id="tenant-metrics")._value.get()
 
     await indexer.index_full("tenant-metrics")
 
-    after_freq = GRAPHRAG_UPDATE_FREQUENCY.labels(
-        tenant_id="tenant-metrics"
-    )._value.get()
-    after_summaries = GRAPHRAG_SUMMARIES_UPDATED.labels(
-        tenant_id="tenant-metrics"
-    )._value.get()
+    after_freq = GRAPHRAG_UPDATE_FREQUENCY.labels(tenant_id="tenant-metrics")._value.get()
+    after_summaries = GRAPHRAG_SUMMARIES_UPDATED.labels(tenant_id="tenant-metrics")._value.get()
 
     assert after_freq > before_freq
     assert after_summaries > before_summaries

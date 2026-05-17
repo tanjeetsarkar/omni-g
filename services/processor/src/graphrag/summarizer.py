@@ -201,9 +201,7 @@ class CommunitySummarizer:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _fetch_community_context(
-        self, community: CommunityResult
-    ) -> dict[str, Any]:
+    async def _fetch_community_context(self, community: CommunityResult) -> dict[str, Any]:
         """Fetch entity names, types, and relationships for the community."""
         async with self._driver.session() as session:
             # Entities
@@ -240,8 +238,7 @@ class CommunitySummarizer:
             for e in context["entities"]
         )
         rel_list = ", ".join(
-            f"{r.get('src_name', '?')} --[{r.get('rel_type', '?')}]--> "
-            f"{r.get('tgt_name', '?')}"
+            f"{r.get('src_name', '?')} --[{r.get('rel_type', '?')}]--> " f"{r.get('tgt_name', '?')}"
             for r in context["relationships"]
         )
 

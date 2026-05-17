@@ -69,8 +69,7 @@ class GraphSchemaManager:
         """Create a composite index on (id, tenant_id) for *label*."""
         index_name = f"stix_{label.lower()}_tenant"
         cypher = (
-            f"CREATE INDEX {index_name} IF NOT EXISTS "
-            f"FOR (n:{label}) ON (n.id, n.tenant_id)"
+            f"CREATE INDEX {index_name} IF NOT EXISTS " f"FOR (n:{label}) ON (n.id, n.tenant_id)"
         )
         await session.run(cypher)
         logger.debug(
@@ -82,10 +81,7 @@ class GraphSchemaManager:
     async def _create_confidence_index(session: AsyncSession, label: str) -> None:
         """Create an index on confidence for *label*."""
         index_name = f"stix_{label.lower()}_confidence"
-        cypher = (
-            f"CREATE INDEX {index_name} IF NOT EXISTS "
-            f"FOR (n:{label}) ON (n.confidence)"
-        )
+        cypher = f"CREATE INDEX {index_name} IF NOT EXISTS " f"FOR (n:{label}) ON (n.confidence)"
         await session.run(cypher)
         logger.debug(
             "index_created",

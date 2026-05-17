@@ -412,9 +412,7 @@ class TestStructuralMatching:
 
         # First query (name match) returns one row; second returns nothing
         result_name = AsyncMock()
-        result_name.data = AsyncMock(
-            return_value=[{"entity_id": existing_id, "score": 1.0}]
-        )
+        result_name.data = AsyncMock(return_value=[{"entity_id": existing_id, "score": 1.0}])
         result_cooccur = AsyncMock()
         result_cooccur.data = AsyncMock(return_value=[])
 
@@ -509,9 +507,7 @@ class TestPersistEntity:
         mock_result_rel.single = AsyncMock(return_value=None)
         mock_result_rel.data = AsyncMock(return_value=[])
 
-        mock_session.run = AsyncMock(
-            side_effect=[mock_result_create, mock_result_rel]
-        )
+        mock_session.run = AsyncMock(side_effect=[mock_result_create, mock_result_rel])
 
         resolution = ResolutionResult(
             decision=ResolutionDecision.AMBIGUOUS,
@@ -583,9 +579,7 @@ class TestMetrics:
             patch.object(
                 resolver, "find_candidates", AsyncMock(return_value=[_candidate(existing_id, 0.97)])
             ),
-            patch.object(
-                resolver, "find_structural_matches", AsyncMock(return_value=[])
-            ),
+            patch.object(resolver, "find_structural_matches", AsyncMock(return_value=[])),
             patch.object(resolver, "persist_entity", AsyncMock(return_value=entity.id)),
         ):
             entity2 = _make_threat_actor("MetricActor2")
