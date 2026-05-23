@@ -327,6 +327,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         neo4j_driver = AsyncGraphDatabase.driver(
             cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
         )
+
         try:
             community_detector = CommunityDetector(neo4j_driver)
             summarizer = CommunitySummarizer(

@@ -133,21 +133,32 @@ class RawEventConsumer:
 
         Terminates cleanly on KeyboardInterrupt or asyncio.CancelledError,
         calling stop() before re-raising.
+
+        Uses poll() with a short timeout instead of the blocking iterator so
+        the asyncio event loop is never starved — this ensures CancelledError
+        (from Ctrl+C / uvicorn shutdown) is delivered promptly.
         """
         if self._consumer is None:
             raise RuntimeError("Consumer not started — call start() first")
         try:
-            for msg in self._consumer:
-                with PROCESSING_LATENCY.labels(topic=self._topic).time():
-                    try:
-                        await handler(msg.value)
-                        self._consumer.commit()
-                        EVENTS_CONSUMED.labels(topic=self._topic, status="success").inc()
-                    except Exception as exc:
-                        await self._send_to_dlq(msg, exc)
-                        self._consumer.commit()
-                        DLQ_EVENTS.labels(reason=type(exc).__name__).inc()
-                        EVENTS_CONSUMED.labels(topic=self._topic, status="dlq").inc()
+            while True:
+                msg_batch = self._consumer.poll(timeout_ms=200, max_records=10)
+                if not msg_batch:
+                    await asyncio.sleep(0)
+                    continue
+                for messages in msg_batch.values():
+                    for msg in messages:
+                        with PROCESSING_LATENCY.labels(topic=self._topic).time():
+                            try:
+                                await handler(msg.value)
+                                self._consumer.commit()
+                                EVENTS_CONSUMED.labels(topic=self._topic, status="success").inc()
+                            except Exception as exc:
+                                await self._send_to_dlq(msg, exc)
+                                self._consumer.commit()
+                                DLQ_EVENTS.labels(reason=type(exc).__name__).inc()
+                                EVENTS_CONSUMED.labels(topic=self._topic, status="dlq").inc()
+                await asyncio.sleep(0)
         except (KeyboardInterrupt, asyncio.CancelledError):
             self.stop()
             raise

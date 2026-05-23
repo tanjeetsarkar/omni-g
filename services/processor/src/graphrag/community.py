@@ -175,7 +175,7 @@ class CommunityDetector:
             result = await session.run(
                 "MATCH (origin:STIXEntity {id: $entity_id, tenant_id: $tenant_id})"
                 f"-[*1..{hop_depth}]-(neighbor:STIXEntity {{tenant_id: $tenant_id}}) "
-                "RETURN DISTINCT neighbor.id AS nid",
+                "RETURN DISTINCT neighbor.id AS nid",  # type: ignore
                 entity_id=entity_id,
                 tenant_id=tenant_id,
             )
