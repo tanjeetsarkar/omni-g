@@ -12,12 +12,16 @@
  */
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import AlertBadge from "@/components/graph/AlertBadge";
+import FilterToolbar from "@/components/graph/FilterToolbar";
 import FocusPanel from "@/components/graph/FocusPanel";
 import { useAlertHighlight } from "@/hooks/useAlertHighlight";
 import { useGraphData } from "@/hooks/useGraphData";
+import { useGraphFilter } from "@/hooks/useGraphFilter";
+import { useSemanticZoom } from "@/hooks/useSemanticZoom";
+import { buildClusterGraph } from "@/lib/buildClusterGraph";
 import { getSocket, joinTenant } from "@/lib/socket";
 
 // GraphView uses Sigma.js (WebGL) — must be client-only, no SSR
@@ -38,6 +42,33 @@ export default function DashboardPage() {
   const { highlightedNodeIds, alertCount } = useAlertHighlight(socket);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Semantic zoom
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sigmaRef = useRef<any>(null);
+  const [, setSigmaReady] = useState(false);
+  const { isClustered } = useSemanticZoom(sigmaRef);
+
+  // Filter state
+  const {
+    filteredNodes,
+    filteredEdges,
+    filterState,
+    availableTypes,
+    toggleType,
+    setMinConfidence,
+    setSearchQuery,
+    resetFilters,
+  } = useGraphFilter(nodes, edges);
+
+  // Cluster graph (computed when camera is zoomed out)
+  const { clusterNodes, clusterEdges } = useMemo(
+    () => buildClusterGraph(filteredNodes, filteredEdges),
+    [filteredNodes, filteredEdges],
+  );
+
+  const displayNodes = isClustered ? clusterNodes : filteredNodes;
+  const displayEdges = isClustered ? clusterEdges : filteredEdges;
+
   // Join the default tenant room on mount
   useEffect(() => {
     const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
@@ -57,6 +88,18 @@ export default function DashboardPage() {
         <AlertBadge count={alertCount} />
       </header>
 
+      {/* Filter Toolbar */}
+      <FilterToolbar
+        availableTypes={availableTypes}
+        filterState={filterState}
+        onToggleType={toggleType}
+        onConfidenceChange={setMinConfidence}
+        onSearchChange={setSearchQuery}
+        onReset={resetFilters}
+        shownNodes={filteredNodes.length}
+        totalNodes={nodes.length}
+      />
+
       {/* ── Main Area ─────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
         {/* Graph canvas */}
@@ -75,11 +118,15 @@ export default function DashboardPage() {
           )}
           {!loading && (
             <GraphView
-              nodes={nodes}
-              edges={edges}
+              nodes={displayNodes}
+              edges={displayEdges}
               highlightedNodeIds={highlightedNodeIds}
               selectedNodeId={selectedNodeId}
               onNodeClick={setSelectedNodeId}
+              onSigmaReady={(s) => {
+                sigmaRef.current = s;
+                setSigmaReady(true);
+              }}
               className="w-full h-full"
             />
           )}

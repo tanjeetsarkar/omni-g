@@ -12,6 +12,7 @@ export interface GraphNode {
   stixType?: string;
   confidence?: number;
   communitySummary?: string;
+  communityId?: string;
 }
 
 export interface GraphEdge {

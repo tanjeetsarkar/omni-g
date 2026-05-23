@@ -350,16 +350,16 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M5.2: Interactive Graph Dashboard
-- [ ] Implement Sigma.js WebGL rendering (support 100k+ nodes)
-- [ ] Create force-directed layout algorithm
-- [ ] Implement semantic zooming (aggregate → individual)
-- [ ] Create Focus+Context filtering
-- [ ] Add real-time node/edge highlighting on alerts
-- [ ] Performance optimization:
+- [x] Implement Sigma.js WebGL rendering (support 100k+ nodes)
+- [x] Create force-directed layout algorithm
+- [x] Implement semantic zooming (aggregate → individual)
+- [x] Create Focus+Context filtering
+- [x] Add real-time node/edge highlighting on alerts
+- [x] Performance optimization:
   - Render 50k nodes in <500ms
   - Update on-demand (lazy loading)
   - GPU acceleration where available
-- [ ] Create performance benchmarks
+- [x] Create performance benchmarks
 
 **Dependencies:** M5.1, M2.3, M4.2
 **Verification:**
