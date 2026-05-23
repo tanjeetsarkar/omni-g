@@ -1,7 +1,7 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 17, 2026
-**Status:** Foundation Phase Active
+**Last Updated:** May 23, 2026
+**Status:** M1 In Progress · M2–M4 Complete · M5 In Progress · M6 Not Started
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
 
@@ -9,7 +9,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M1: Project Foundation
 
-**Status:** 🟢 IN PROGRESS
+**Status:** 🟡 IN PROGRESS
 **Focus:** Infrastructure, version control, documentation framework
 
 ### Milestones
@@ -92,7 +92,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M2: Service Scaffolding
 
-**Status:** � COMPLETE
+**Status:** ✅ COMPLETE
 **Focus:** Service initialization, build pipelines, test frameworks
 
 ### Milestones
@@ -176,7 +176,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M3: Core Event Pipeline
 
-**Status:** � IN PROGRESS
+**Status:** ✅ COMPLETE
 **Focus:** Ingestion, deduplication, LLM extraction
 
 ### Milestones
@@ -255,7 +255,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M4: Knowledge Graph Construction
 
-**Status:** 🟢 COMPLETE
+**Status:** ✅ COMPLETE
 **Focus:** Entity resolution, graph persistence, GraphRAG indexing
 
 ### Milestones
@@ -324,21 +324,21 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M5: Delivery & Real-Time Alerting
 
-**Status:** 🔴 NOT STARTED
+**Status:** 🟡 IN PROGRESS
 **Focus:** WebSocket gateway, interactive dashboard, audio briefings
 
 ### Milestones
 
 #### M5.1: Kafka → WebSocket Gateway
-- [ ] Subscribe to `analyst-alerts` Kafka topic
-- [ ] Broadcast to connected WebSocket clients (Socket.io)
-- [ ] Route alerts by tenant/subscription
-- [ ] Implement connection pooling + heartbeat
-- [ ] Add Prometheus metrics:
+- [x] Subscribe to `analyst-alerts` Kafka topic
+- [x] Broadcast to connected WebSocket clients (Socket.io)
+- [x] Route alerts by tenant/subscription
+- [x] Implement connection pooling + heartbeat
+- [x] Add Prometheus metrics:
   - Connected clients count
   - Message broadcast latency
   - Connection lifecycle events
-- [ ] Create comprehensive tests
+- [x] Create comprehensive tests
 
 **Dependencies:** M1.3 (Kafka), M2.3
 **Verification:**
