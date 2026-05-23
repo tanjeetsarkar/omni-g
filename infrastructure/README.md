@@ -32,19 +32,19 @@ Omni-G uses **Docker Compose profiles** to let you start only the services you n
 
 ```bash
 # Start only core infrastructure (recommended to start)
-docker compose --env-file .env.local --profile core up -d
+docker compose --env-file .env.docker.local --profile core up -d
 
 # Add vector store
-docker compose --env-file .env.local --profile core --profile vector up -d
+docker compose --env-file .env.docker.local --profile core --profile vector up -d
 
 # Add LLM services (heavy — downloads model weights on first run)
-docker compose --env-file .env.local --profile core --profile vector --profile ai up -d
+docker compose --env-file .env.docker.local --profile core --profile vector --profile ai up -d
 
 # Add observability
-docker compose --env-file .env.local --profile core --profile observability up -d
+docker compose --env-file .env.docker.local --profile core --profile observability up -d
 
 # Full stack (Phase 3+ — requires all services to be built first)
-docker compose --env-file .env.local --profile all up -d
+docker compose --env-file .env.docker.local --profile all up -d
 ```
 
 ### Stopping
@@ -91,7 +91,7 @@ docker exec omni-g-redis redis-cli ping   # → PONG
 **Neo4j** Community Edition runs on ports `7474` (HTTP browser) and `7687` (Bolt). APOC plugin is pre-loaded.
 
 - Browser UI: http://localhost:7474
-- Default credentials: `neo4j` / value of `NEO4J_PASSWORD` in `.env.local`
+- Default credentials: `neo4j` / value of `NEO4J_PASSWORD` in `.env.docker.local`
 
 ```bash
 # Verify Neo4j
@@ -152,7 +152,7 @@ To add Loki as a Grafana data source: Grafana → Connections → Add Loki → U
 MinIO S3-compatible storage on port `9000` (API) and `9001` (Console UI).
 
 - Console: http://localhost:9001
-- Credentials: `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` from `.env.local`
+- Credentials: `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` from `.env.docker.local`
 
 ---
 
@@ -165,7 +165,7 @@ The `services` profile starts the built application containers (Aggregator, Proc
 docker compose build aggregator processor delivery
 
 # Then start with dependencies
-docker compose --env-file .env.local --profile core --profile services up -d
+docker compose --env-file .env.docker.local --profile core --profile services up -d
 ```
 
 ---
@@ -209,11 +209,14 @@ Omni-G is tuned for an **8 GB RAM development machine**:
 
 ## Environment Variables
 
-See [`.env.example`](../.env.example) for all supported environment variables with descriptions. Copy to `.env.local` (gitignored) for local secrets:
+Use split env files:
+- [`.env.docker.example`](../.env.docker.example) -> copy to `.env.docker.local` for Docker Compose
+- [`.env.services.example`](../.env.services.example) -> copy to `.env.services.local` for host-local service runs
 
 ```bash
-cp .env.example .env.local
-# Edit .env.local with your values
+cp .env.docker.example .env.docker.local
+cp .env.services.example .env.services.local
+# Edit local files with your values
 ```
 
-**Never commit `.env.local` — it contains secrets and is gitignored.**
+**Never commit `.env.docker.local` or `.env.services.local` — both contain secrets and are gitignored.**
