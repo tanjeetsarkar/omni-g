@@ -9,7 +9,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -263,14 +263,21 @@ services:
       dockerfile: Dockerfile
     container_name: omni-g-aggregator
     environment:
-      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
       LOG_LEVEL: ${AGGREGATOR_LOG_LEVEL:-info}
       VALIDATION_SERVICE_URL: ${AGGREGATOR_VALIDATION_SERVICE_URL:-http://processor:8001}
       TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
+      MCP_PLUGIN_URLS: ${MCP_PLUGIN_URLS:-http://mcp-echo:8090,http://mcp-wikipedia:8091,http://mcp-wikidata:8092,http://mcp-newsrss:8093,http://mcp-reuters:8094}
+      WIKIPEDIA_PLUGIN_URL: ${WIKIPEDIA_PLUGIN_URL:-http://mcp-wikipedia:8091}
+      WIKIDATA_PLUGIN_URL: ${WIKIDATA_PLUGIN_URL:-http://mcp-wikidata:8092}
+      NEWSRSS_PLUGIN_URL: ${NEWSRSS_PLUGIN_URL:-http://mcp-newsrss:8093}
+      REUTERS_PLUGIN_URL: ${REUTERS_PLUGIN_URL:-http://mcp-reuters:8094}
     ports:
       - "8080:8080"
     depends_on:
       kafka:
+        condition: service_healthy
+      processor:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -291,7 +298,7 @@ services:
     environment:
       LOG_LEVEL: ${PROCESSOR_LOG_LEVEL:-info}
       KAFKA_ENABLED: ${PROCESSOR_KAFKA_ENABLED:-true}
-      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       NEO4J_URL: ${NEO4J_URL:-neo4j://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
@@ -317,7 +324,7 @@ services:
       neo4j:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -339,22 +346,132 @@ services:
       PROCESSOR_URL: ${PROCESSOR_URL:-http://processor:8001}
       GATEWAY_PORT: ${GATEWAY_PORT:-3001}
       METRICS_PORT: ${METRICS_PORT:-9464}
-      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
       KAFKA_ALERTS_TOPIC: ${KAFKA_ALERTS_TOPIC:-analyst-alerts}
-      NEO4J_URL: ${NEO4J_URL:-neo4j://neo4j:7687}
+      NEO4J_URL: ${NEO4J_URL:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-omni-g-password}
+      AGGREGATOR_URL: ${AGGREGATOR_URL:-http://aggregator:8080}
     ports:
       - "3000:3000"
       - "3001:3001"
     depends_on:
       - processor
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 10s
       timeout: 5s
       retries: 5
     profiles:
+      - services
+      - all
+    networks:
+      - omni-g
+
+  # =============================================================================
+  # OSINT MCP PLUGINS (profile: services, all)
+  # =============================================================================
+
+  mcp-echo:
+    build:
+      context: ../mcp-plugins/echo
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-echo
+    environment:
+      PORT: "8090"
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-wikipedia:
+    build:
+      context: ../mcp-plugins/wikipedia
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-wikipedia
+    environment:
+      PORT: "8091"
+    ports:
+      - "8091:8091"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-wikidata:
+    build:
+      context: ../mcp-plugins/wikidata
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-wikidata
+    environment:
+      PORT: "8092"
+    ports:
+      - "8092:8092"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8092/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-newsrss:
+    build:
+      context: ../mcp-plugins/newsrss
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-newsrss
+    environment:
+      PORT: "8093"
+    ports:
+      - "8093:8093"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8093/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-reuters:
+    build:
+      context: ../mcp-plugins/reuters
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-reuters
+    environment:
+      PORT: "8094"
+    ports:
+      - "8094:8094"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8094/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
       - services
       - all
     networks:

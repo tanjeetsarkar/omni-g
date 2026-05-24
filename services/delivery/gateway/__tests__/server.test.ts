@@ -79,11 +79,23 @@ jest.mock("socket.io", () => {
       const emits: Array<{ room: string; event: string; payload: unknown }> =
         [];
 
-      const server = {
-        on: jest.fn((event: string, handler: (...args: unknown[]) => void) => {
-          handlers[event] = handler;
-          return server;
-        }),
+      type ServerMock = {
+        on: jest.Mock;
+        to: jest.Mock;
+        close: jest.Mock;
+        __handlers: Record<string, (...args: unknown[]) => void>;
+        __emits: Array<{ room: string; event: string; payload: unknown }>;
+      };
+      const server: ServerMock = {
+        on: jest.fn(
+          (
+            event: string,
+            handler: (...args: unknown[]) => void,
+          ): ServerMock => {
+            handlers[event] = handler;
+            return server;
+          },
+        ),
         to: jest.fn((room: string) => ({
           emit: jest.fn((event: string, payload: unknown) => {
             emits.push({ room, event, payload });

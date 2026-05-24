@@ -23,6 +23,12 @@ type Config struct {
 	MCPPluginURLs       []string `mapstructure:"MCP_PLUGIN_URLS"`
 	SchedulerIntervalMs int      `mapstructure:"SCHEDULER_INTERVAL_MS"`
 
+	// OSINT search plugin URLs (used by SearchHandler for on-demand queries).
+	WikipediaPluginURL string `mapstructure:"WIKIPEDIA_PLUGIN_URL"`
+	WikidataPluginURL  string `mapstructure:"WIKIDATA_PLUGIN_URL"`
+	NewsRSSPluginURL   string `mapstructure:"NEWSRSS_PLUGIN_URL"`
+	ReutersPluginURL   string `mapstructure:"REUTERS_PLUGIN_URL"`
+
 	// DLQTopic is the Kafka topic for dead-lettered events.
 	// Unused in M3.1; wired in M3.4.
 	DLQTopic string `mapstructure:"KAFKA_DLQ_TOPIC"`
@@ -46,6 +52,10 @@ func Load() (*Config, error) {
 	v.SetDefault("SCHEDULER_INTERVAL_MS", 30000)
 	v.SetDefault("KAFKA_DLQ_TOPIC", "raw-feed.dlq")
 	v.SetDefault("TENANT_ID", "default")
+	v.SetDefault("WIKIPEDIA_PLUGIN_URL", "")
+	v.SetDefault("WIKIDATA_PLUGIN_URL", "")
+	v.SetDefault("NEWSRSS_PLUGIN_URL", "")
+	v.SetDefault("REUTERS_PLUGIN_URL", "")
 
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

@@ -1,22 +1,16 @@
 /**
- * GET /api/graph — mock graph data (M5.2)
+ * GET /api/graph — live Neo4j Knowledge Graph data
  *
- * Returns seeded fixture data: 20 nodes + 15 edges.
- * Real Neo4j wiring is M6 scope.
+ * Queries STIXEntity nodes and their relationships for the requested tenant.
+ * Falls back to empty arrays on Neo4j connection errors so the UI degrades
+ * gracefully when the database is unavailable.
+ *
+ * Query param: ?tenant_id=<id>  (default: "dev-tenant")
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { GraphNode, GraphEdge } from "@/types/graph";
-
-function rng(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 1664525 + 1013904223) & 0xffffffff;
-    return (s >>> 0) / 0xffffffff;
-  };
-}
-
-const rand = rng(42);
+import { getDriver } from "@/lib/neo4j";
 
 const STIX_COLORS: Record<string, string> = {
   "threat-actor": "#ef4444",
@@ -29,155 +23,100 @@ const STIX_COLORS: Record<string, string> = {
   vulnerability: "#f43f5e",
 };
 
-const COMMUNITIES = [
-  "APT group linked to state-sponsored operations targeting financial institutions.",
-  "Commodity malware family distributed via phishing campaigns.",
-  "Infrastructure used in credential-harvesting operations.",
-  "Threat cluster targeting critical energy sector.",
-] as const;
+function randomCoord() {
+  return Math.round(Math.random() * 1000);
+}
 
-const nodeFixtures: GraphNode[] = [
-  {
-    id: "n1",
-    label: "Emotet",
-    stixType: "malware",
-    communityId: "ransomware-actors",
-  },
-  {
-    id: "n2",
-    label: "APT28",
-    stixType: "threat-actor",
-    communityId: "apt-east",
-  },
-  {
-    id: "n3",
-    label: "Spear Phishing",
-    stixType: "attack-pattern",
-    communityId: "misc",
-  },
-  {
-    id: "n4",
-    label: "Operation Ghostnet",
-    stixType: "campaign",
-    communityId: "misc",
-  },
-  { id: "n5", label: "MiniDuke", stixType: "malware", communityId: "apt-east" },
-  {
-    id: "n6",
-    label: "CVE-2021-44228",
-    stixType: "vulnerability",
-    communityId: "vuln-infra",
-  },
-  {
-    id: "n7",
-    label: "Cobalt Strike",
-    stixType: "tool",
-    communityId: "financial-crime",
-  },
-  {
-    id: "n8",
-    label: "Fancy Bear",
-    stixType: "threat-actor",
-    communityId: "apt-east",
-  },
-  { id: "n9", label: "ACME Corp", stixType: "identity", communityId: "misc" },
-  {
-    id: "n10",
-    label: "Moscow, Russia",
-    stixType: "location",
-    communityId: "apt-east",
-  },
-  {
-    id: "n11",
-    label: "Log4Shell Exploit",
-    stixType: "attack-pattern",
-    communityId: "vuln-infra",
-  },
-  {
-    id: "n12",
-    label: "DarkSide",
-    stixType: "malware",
-    communityId: "ransomware-actors",
-  },
-  {
-    id: "n13",
-    label: "REvil",
-    stixType: "threat-actor",
-    communityId: "ransomware-actors",
-  },
-  {
-    id: "n14",
-    label: "Colonial Pipeline",
-    stixType: "campaign",
-    communityId: "ransomware-actors",
-  },
-  {
-    id: "n15",
-    label: "Mimikatz",
-    stixType: "tool",
-    communityId: "financial-crime",
-  },
-  {
-    id: "n16",
-    label: "CVE-2022-30190",
-    stixType: "vulnerability",
-    communityId: "vuln-infra",
-  },
-  {
-    id: "n17",
-    label: "North Korea (DPRK)",
-    stixType: "location",
-    communityId: "misc",
-  },
-  {
-    id: "n18",
-    label: "Lazarus Group",
-    stixType: "threat-actor",
-    communityId: "apt-east",
-  },
-  {
-    id: "n19",
-    label: "WannaCry",
-    stixType: "malware",
-    communityId: "ransomware-actors",
-  },
-  {
-    id: "n20",
-    label: "SolarWinds Attack",
-    stixType: "campaign",
-    communityId: "apt-east",
-  },
-].map((n, i) => ({
-  ...n,
-  x: Math.round(rand() * 500),
-  y: Math.round(rand() * 500),
-  size: 5 + Math.round(rand() * 10),
-  color: STIX_COLORS[n.stixType!] ?? "#6366f1",
-  confidence: parseFloat((0.5 + rand() * 0.5).toFixed(2)),
-  communitySummary: COMMUNITIES[i % COMMUNITIES.length],
-}));
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const tenantId = searchParams.get("tenant_id") ?? "dev-tenant";
 
-const edgeFixtures: GraphEdge[] = [
-  { id: "e1", source: "n2", target: "n3", label: "uses" },
-  { id: "e2", source: "n2", target: "n1", label: "uses" },
-  { id: "e3", source: "n4", target: "n2", label: "attributed-to" },
-  { id: "e4", source: "n2", target: "n9", label: "targets" },
-  { id: "e5", source: "n5", target: "n4", label: "indicates" },
-  { id: "e6", source: "n11", target: "n6", label: "uses" },
-  { id: "e7", source: "n8", target: "n7", label: "uses" },
-  { id: "e8", source: "n8", target: "n2", label: "related-to" },
-  { id: "e9", source: "n13", target: "n14", label: "attributed-to" },
-  { id: "e10", source: "n12", target: "n14", label: "uses" },
-  { id: "e11", source: "n15", target: "n13", label: "uses" },
-  { id: "e12", source: "n18", target: "n17", label: "attributed-to" },
-  { id: "e13", source: "n19", target: "n18", label: "attributed-to" },
-  { id: "e14", source: "n20", target: "n9", label: "targets" },
-  { id: "e15", source: "n2", target: "n10", label: "attributed-to" },
-];
+  try {
+    const driver = getDriver();
+    const session = driver.session({ defaultAccessMode: "READ" });
 
-export async function GET() {
-  return NextResponse.json({
-    nodes: nodeFixtures,
-    edges: edgeFixtures,
-  });
+    try {
+      const result = await session.run(
+        `MATCH (n:STIXEntity {tenant_id: $t})
+         OPTIONAL MATCH (n)-[r]->(m:STIXEntity {tenant_id: $t})
+         RETURN n, r, m
+         LIMIT 500`,
+        { t: tenantId },
+      );
+
+      const nodeMap = new Map<string, GraphNode>();
+      const edges: GraphEdge[] = [];
+
+      for (const record of result.records) {
+        const n = record.get("n");
+        const r = record.get("r");
+        const m = record.get("m");
+
+        if (n) {
+          const id: string = n.properties.id ?? n.identity.toString();
+          if (!nodeMap.has(id)) {
+            const stixType: string = n.properties.stix_type ?? "";
+            nodeMap.set(id, {
+              id,
+              label: n.properties.name ?? n.properties.id ?? id,
+              stixType,
+              communityId: n.properties.community_id ?? undefined,
+              communitySummary: n.properties.community_summary ?? undefined,
+              confidence: n.properties.confidence ?? undefined,
+              x: randomCoord(),
+              y: randomCoord(),
+              size: 6,
+              color: STIX_COLORS[stixType] ?? "#6366f1",
+            });
+          }
+        }
+
+        if (m) {
+          const id: string = m.properties.id ?? m.identity.toString();
+          if (!nodeMap.has(id)) {
+            const stixType: string = m.properties.stix_type ?? "";
+            nodeMap.set(id, {
+              id,
+              label: m.properties.name ?? m.properties.id ?? id,
+              stixType,
+              communityId: m.properties.community_id ?? undefined,
+              communitySummary: m.properties.community_summary ?? undefined,
+              confidence: m.properties.confidence ?? undefined,
+              x: randomCoord(),
+              y: randomCoord(),
+              size: 6,
+              color: STIX_COLORS[stixType] ?? "#6366f1",
+            });
+          }
+        }
+
+        if (r) {
+          const sourceId: string =
+            record.get("n")?.properties.id ??
+            record.get("n")?.identity.toString();
+          const targetId: string =
+            record.get("m")?.properties.id ??
+            record.get("m")?.identity.toString();
+          if (sourceId && targetId) {
+            edges.push({
+              id: r.identity.toString(),
+              source: sourceId,
+              target: targetId,
+              label: r.type,
+            });
+          }
+        }
+      }
+
+      return NextResponse.json({
+        nodes: Array.from(nodeMap.values()),
+        edges,
+      });
+    } finally {
+      await session.close();
+    }
+  } catch (err) {
+    console.error("Neo4j graph query error:", err);
+    return NextResponse.json({ nodes: [], edges: [] });
+  }
 }

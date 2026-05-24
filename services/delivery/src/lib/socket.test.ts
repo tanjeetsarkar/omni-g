@@ -23,7 +23,18 @@ jest.mock("socket.io-client", () => {
 
   const createMockSocket = () => {
     const listeners: Record<string, MockListener[]> = {};
-    const mockSocket = {
+    type MockSocketType = {
+      connected: boolean;
+      connect: jest.Mock;
+      disconnect: jest.Mock;
+      emit: jest.Mock;
+      on: jest.Mock;
+      off: jest.Mock;
+      _listeners: Record<string, MockListener[]>;
+      _triggerConnect: () => void;
+      rooms: Set<string>;
+    };
+    const mockSocket: MockSocketType = {
       connected: false,
       connect: jest.fn(() => {
         mockSocket.connected = true;
@@ -32,7 +43,7 @@ jest.mock("socket.io-client", () => {
         mockSocket.connected = false;
       }),
       emit: jest.fn(),
-      on: jest.fn((event: string, handler: MockListener) => {
+      on: jest.fn((event: string, handler: MockListener): MockSocketType => {
         if (!listeners[event]) listeners[event] = [];
         listeners[event].push(handler);
         return mockSocket;

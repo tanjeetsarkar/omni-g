@@ -24,7 +24,7 @@ type Publisher interface {
 // SchemaValidator validates an event payload against the schema sidecar.
 // validation.Validator satisfies this interface.
 type SchemaValidator interface {
-	Validate(ctx context.Context, payload map[string]any) (*validation.ValidationResult, error)
+	Validate(ctx context.Context, source string, payload map[string]any) (*validation.ValidationResult, error)
 }
 
 // Pipeline validates and publishes events from MCP plugin content blocks.
@@ -57,7 +57,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	start := time.Now()
 
 	// ── validate ──────────────────────────────────────────────────────────
-	result, err := p.validator.Validate(ctx, payload)
+	result, err := p.validator.Validate(ctx, source, payload)
 	if err != nil {
 		log.Error().Str("source", source).Err(err).Msg("validation sidecar unreachable")
 		metrics.IngestTotal.WithLabelValues(source, "validation_error").Inc()

@@ -77,7 +77,23 @@ func main() {
 	})
 
 	// ── HTTP server ───────────────────────────────────────────────────────
-	srv := server.New(cfg, pl, sched, mcpHandler)
+	searchHandler := server.NewSearchHandler(
+		map[string]string{
+			"wikipedia": cfg.WikipediaPluginURL,
+			"wikidata":  cfg.WikidataPluginURL,
+			"newsrss":   cfg.NewsRSSPluginURL,
+			"reuters":   cfg.ReutersPluginURL,
+		},
+		map[string]string{
+			"wikipedia": "fetch_wikipedia_article",
+			"wikidata":  "fetch_wikidata_facts",
+			"newsrss":   "search_news",
+			"reuters":   "fetch_reuters_rss",
+		},
+		pl,
+	)
+
+	srv := server.New(cfg, pl, sched, mcpHandler, searchHandler)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

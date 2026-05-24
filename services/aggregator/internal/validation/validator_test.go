@@ -16,13 +16,17 @@ func TestValidator_ValidPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/validate", r.URL.Path)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "http://plugin:8090", body["source"])
+		require.IsType(t, map[string]any{}, body["payload"])
 		w.WriteHeader(http.StatusOK)
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"valid": true}))
 	}))
 	defer srv.Close()
 
 	v := validation.NewValidator(srv.URL)
-	result, err := v.Validate(context.Background(), map[string]any{"text": "hello"})
+	result, err := v.Validate(context.Background(), "http://plugin:8090", map[string]any{"text": "hello"})
 
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
@@ -40,7 +44,7 @@ func TestValidator_InvalidPayload(t *testing.T) {
 	defer srv.Close()
 
 	v := validation.NewValidator(srv.URL)
-	result, err := v.Validate(context.Background(), map[string]any{})
+	result, err := v.Validate(context.Background(), "http://plugin:8090", map[string]any{})
 
 	require.NoError(t, err)
 	assert.False(t, result.Valid)
@@ -50,6 +54,6 @@ func TestValidator_InvalidPayload(t *testing.T) {
 func TestValidator_ServiceUnavailable(t *testing.T) {
 	v := validation.NewValidator("http://localhost:1") // unreachable
 
-	_, err := v.Validate(context.Background(), map[string]any{"text": "test"})
+	_, err := v.Validate(context.Background(), "http://plugin:8090", map[string]any{"text": "test"})
 	assert.Error(t, err)
 }

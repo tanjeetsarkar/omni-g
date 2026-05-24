@@ -167,6 +167,7 @@ class ProcessingPipeline:
         metadata: dict[str, Any] = {
             "plugin_name": envelope.plugin_name,
             "plugin_version": envelope.plugin_version,
+            "source_type": envelope.payload.get("source_type", "general"),
         }
         extraction = await self._extractor.extract(envelope.id, text, metadata)
 

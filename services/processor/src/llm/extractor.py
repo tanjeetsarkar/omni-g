@@ -21,6 +21,7 @@ from ..models.stix import (
     Relationship,
     ThreatActor,
 )
+from .prompts import PromptRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +33,10 @@ LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "10"))
 LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 LLM_RATE_LIMIT_RPS: int = int(os.getenv("LLM_RATE_LIMIT_RPS", "10"))
 
-_SYSTEM_PRIMARY = (
-    "You are a STIX 2.1 threat intelligence extractor. "
-    "Extract all entities from the text and return structured JSON matching the ExtractionResult \
-        schema."
-)
-_SYSTEM_FALLBACK = (
-    "Extract threat actors and malware from this text. "
-    "Return JSON with threat_actors and malware arrays."
-)
+# System prompts are now managed by PromptRegistry in prompts.py.
+# The constants below are kept for backward compatibility in tests that
+# import them directly.
+_SYSTEM_FALLBACK = PromptRegistry.SYSTEM_PROMPT_FALLBACK
 
 
 class _LLMEntities(BaseModel):
@@ -82,10 +78,11 @@ class LLMExtractor:
         metadata: dict[str, Any] | None = None,
     ) -> ExtractionResult:
         """Extract STIX entities from text, with automatic fallback on LLM errors."""
+        source_type: str = (metadata.get("source_type") or "general") if metadata else "general"
         async with self._semaphore:
-            entities = await self._try_extract(text)
+            entities = await self._try_extract(text, source_type)
 
-        confidence = self._calculate_confidence(entities)
+        confidence = self._calculate_confidence(entities, source_type)
         return ExtractionResult(
             source_event_id=event_id,
             threat_actors=entities.threat_actors,
@@ -101,18 +98,18 @@ class LLMExtractor:
             plugin_version=metadata.get("plugin_version") if metadata else None,
         )
 
-    async def _try_extract(self, text: str) -> _LLMEntities:
+    async def _try_extract(self, text: str, source_type: str = "general") -> _LLMEntities:
         """Try primary model; fall back to fallback model on timeout/API error."""
         try:
             return await asyncio.wait_for(
-                self._call_primary(text),
+                self._call_primary(text, source_type),
                 timeout=LLM_TIMEOUT_SECONDS,
             )
         except (TimeoutError, openai.APIError) as exc:
             logger.warning("Primary LLM failed (%s), trying fallback", type(exc).__name__)
             try:
                 return await asyncio.wait_for(
-                    self._call_fallback(text),
+                    self._call_fallback(text, source_type),
                     timeout=LLM_TIMEOUT_SECONDS,
                 )
             except (TimeoutError, openai.APIError) as exc2:
@@ -122,30 +119,35 @@ class LLMExtractor:
                 )
                 return _LLMEntities()
 
-    async def _call_primary(self, text: str) -> _LLMEntities:
+    async def _call_primary(self, text: str, source_type: str = "general") -> _LLMEntities:
+        system_prompt = PromptRegistry.get_prompt(source_type)
         return await self._client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": _SYSTEM_PRIMARY},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ],
             response_model=_LLMEntities,
             max_tokens=LLM_MAX_TOKENS,
         )
 
-    async def _call_fallback(self, text: str) -> _LLMEntities:
+    async def _call_fallback(self, text: str, source_type: str = "general") -> _LLMEntities:  # noqa: ARG002
         return await self._client.chat.completions.create(
             model=LLM_FALLBACK_MODEL,
             messages=[
-                {"role": "system", "content": _SYSTEM_FALLBACK},
+                {"role": "system", "content": PromptRegistry.SYSTEM_PROMPT_FALLBACK},
                 {"role": "user", "content": text},
             ],
             response_model=_LLMEntities,
             max_tokens=LLM_MAX_TOKENS,
         )
 
-    def _calculate_confidence(self, entities: _LLMEntities) -> float:
-        """Scale confidence 0→1 based on entity count and type diversity."""
+    def _calculate_confidence(self, entities: _LLMEntities, source_type: str = "general") -> float:
+        """Scale confidence 0→1 based on entity count and type diversity.
+
+        Authoritative structured sources (biographical, wikidata) receive a +0.1
+        boost because their facts are explicitly asserted rather than inferred.
+        """
         all_lists: tuple[Sequence[object], ...] = (
             entities.threat_actors,
             entities.malware,
@@ -159,7 +161,9 @@ class LLMExtractor:
         if total == 0:
             return 0.0
         diversity = sum(1 for lst in all_lists if lst)
-        return min(1.0, total * 0.1 + diversity * 0.05)
+        base = min(1.0, total * 0.1 + diversity * 0.05)
+        boost = 0.1 if source_type in ("biographical", "wikidata") else 0.0
+        return min(1.0, base + boost)
 
     async def extract_batch(self, events: list[dict[str, Any]]) -> list[ExtractionResult]:
         """Extract entities from multiple events concurrently.
