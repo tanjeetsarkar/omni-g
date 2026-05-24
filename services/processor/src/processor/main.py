@@ -56,6 +56,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     from ..resolution.resolver import EntityResolver
     from .alert_publisher import AlertPublisher
     from .pipeline import ProcessingPipeline
+    from .stage_publisher import StageEventPublisher
 
     consumer = RawEventConsumer(
         brokers=cfg.kafka_brokers,
@@ -103,6 +104,11 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         topic=cfg.kafka_alerts_topic,
     )
 
+    stage_publisher = StageEventPublisher(
+        brokers=cfg.kafka_brokers,
+        topic=cfg.kafka_processor_events_topic,
+    )
+
     pipeline = ProcessingPipeline(
         deduplicator=deduplicator,
         extractor=extractor,
@@ -110,6 +116,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         graph_persistence=graph_persistence,
         graphrag_indexer=graphrag_indexer,
         alert_publisher=alert_publisher,
+        stage_publisher=stage_publisher,
     )
     consumer.start()
 
@@ -136,6 +143,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         await neo4j_driver.close()
         await qdrant_client.close()
         alert_publisher.close()
+        stage_publisher.close()
         logger.info(
             "Kafka consumer worker shut down; connections closed",
             extra={"worker_id": worker_id},
@@ -237,6 +245,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recognised content key (text, content, data, url).
         """
         errors: list[dict[str, str]] = []
+
+        logger.debug(f"validate body: {body.model_dump()}")
 
         if not body.source:
             errors.append({"field": "source", "message": "field 'source' is required"})

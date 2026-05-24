@@ -59,10 +59,16 @@ type searchRequest struct {
 	Sources []string `json:"sources"`
 }
 
+type sourceResultCount struct {
+	Source       string `json:"source"`
+	BlocksQueued int    `json:"blocks_queued"`
+}
+
 // searchResponse is returned with HTTP 202.
 type searchResponse struct {
-	SearchID     string `json:"search_id"`
-	EventsQueued int    `json:"events_queued"`
+	SearchID       string              `json:"search_id"`
+	EventsQueued   int                 `json:"events_queued"`
+	QueuedBySource []sourceResultCount `json:"queued_by_source"`
 }
 
 // ServeHTTP handles POST /search.
@@ -90,7 +96,10 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Fan out to each requested plugin in background goroutines.
 	// We count events queued synchronously via a channel so we can return
 	// the total in the 202 response without blocking.
-	type result struct{ count int }
+	type result struct {
+		source string
+		count  int
+	}
 	resultCh := make(chan result, len(sources))
 
 	bgCtx := context.Background()
@@ -99,38 +108,41 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		client, ok := h.pluginClients[source]
 		if !ok {
 			log.Warn().Str("source", source).Msg("/search: no plugin configured for source")
-			resultCh <- result{0}
+			resultCh <- result{source: source, count: 0}
 			continue
 		}
 		pluginURL, ok := h.pluginURLs[source]
 		if !ok || pluginURL == "" {
 			log.Warn().Str("source", source).Msg("/search: no plugin URL configured for source")
-			resultCh <- result{0}
+			resultCh <- result{source: source, count: 0}
 			continue
 		}
 		toolName, ok := h.pluginTools[source]
 		if !ok {
 			log.Warn().Str("source", source).Msg("/search: no tool configured for source")
-			resultCh <- result{0}
+			resultCh <- result{source: source, count: 0}
 			continue
 		}
 
 		go func(src string, srcURL string, c *mcp.Client, tool string) {
 			count := h.callPlugin(bgCtx, searchID, src, srcURL, c, tool, req.Query)
-			resultCh <- result{count}
+			resultCh <- result{source: src, count: count}
 		}(source, pluginURL, client, toolName)
 	}
 
 	// Collect counts — wait for all goroutines.
 	total := 0
+	bySource := make([]sourceResultCount, 0, len(sources))
 	for range sources {
 		r := <-resultCh
 		total += r.count
+		bySource = append(bySource, sourceResultCount{Source: r.source, BlocksQueued: r.count})
 	}
 
 	writeJSON(w, http.StatusAccepted, searchResponse{
-		SearchID:     searchID,
-		EventsQueued: total,
+		SearchID:       searchID,
+		EventsQueued:   total,
+		QueuedBySource: bySource,
 	})
 }
 

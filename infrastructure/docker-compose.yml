@@ -8,8 +8,8 @@ services:
     container_name: omni-g-kafka
     environment:
       KAFKA_BROKER_ID: 1
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -18,11 +18,12 @@ services:
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_NODE_ID: 1
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092,CONTROLLER://0.0.0.0:29093
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
     ports:
       - "9092:9092"
+      - "19092:19092"
       - "29093:29093"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9092'"]
@@ -32,6 +33,28 @@ services:
       start_period: 20s
     profiles:
       - core
+      - all
+    networks:
+      - omni-g
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console
+    container_name: omni-g-redpanda-console
+    environment:
+      KAFKA_BROKERS: ${KAFKA_BROKERS_UI:-kafka:9092}
+      SERVER_LISTENPORT: "8080"
+    ports:
+      - "8088:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - kafka-ui
       - all
     networks:
       - omni-g
@@ -272,6 +295,8 @@ services:
       WIKIDATA_PLUGIN_URL: ${WIKIDATA_PLUGIN_URL:-http://mcp-wikidata:8092}
       NEWSRSS_PLUGIN_URL: ${NEWSRSS_PLUGIN_URL:-http://mcp-newsrss:8093}
       REUTERS_PLUGIN_URL: ${REUTERS_PLUGIN_URL:-http://mcp-reuters:8094}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     depends_on:
@@ -305,7 +330,8 @@ services:
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-omni-g-password}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_API_KEY: ${QDRANT_API_KEY:-omni-g-api-key}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_MODEL: ${LLM_MODEL:-qwen2.5:3b}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MINIO_URL: ${MINIO_URL:-http://minio:9000}
@@ -314,6 +340,8 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-omni-g-briefings}
       KOKORO_URL: ${KOKORO_URL:-http://kokoro-tts:8880}
       BRIEFING_PREFLIGHT_ENABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
     depends_on:
@@ -331,8 +359,6 @@ services:
     profiles:
       - services
       - all
-    networks:
-      - omni-g
 
   delivery:
     build:

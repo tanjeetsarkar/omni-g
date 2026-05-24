@@ -15,6 +15,7 @@ import dynamic from "next/dynamic";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
+import ActivityDrawer from "@/components/graph/ActivityDrawer";
 import AlertBadge from "@/components/graph/AlertBadge";
 import FilterToolbar from "@/components/graph/FilterToolbar";
 import FocusPanel from "@/components/graph/FocusPanel";
@@ -154,6 +155,9 @@ function DashboardContent() {
           onClose={() => setSelectedNodeId(null)}
         />
       </div>
+
+      {/* ── Pipeline Activity Drawer ───────────────────────────────────── */}
+      <ActivityDrawer socket={socket} />
     </div>
   );
 }

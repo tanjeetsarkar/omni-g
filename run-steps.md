@@ -80,7 +80,7 @@ Open **http://localhost:3000** in your browser.
 
 ```bash
 # Infrastructure
-curl http://localhost:9092          # Kafka (TCP open)
+curl http://localhost:19092         # Kafka (TCP open for host-run services)
 curl http://localhost:7474          # Neo4j Browser
 curl http://localhost:6379          # Redis (PONG via redis-cli ping)
 

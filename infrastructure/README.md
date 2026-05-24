@@ -21,6 +21,7 @@ Omni-G uses **Docker Compose profiles** to let you start only the services you n
 | Profile | Services | Approx RAM | Use When |
 |---------|----------|------------|----------|
 | `core` | Kafka, Redis, Neo4j | ~2.5 GB | Backend development, pipeline testing |
+| `kafka-ui` | Redpanda Console | ~256 MB | Visual topic/message inspection and Kafka admin |
 | `vector` | Qdrant | ~512 MB | Entity resolution development |
 | `ai` | Ollama, Kokoro TTS | ~3 GB (+ model weights) | LLM extraction, audio briefings |
 | `observability` | Prometheus, Grafana, Loki | ~512 MB | Monitoring and dashboards |
@@ -36,6 +37,9 @@ docker compose --env-file .env.docker.local --profile core up -d
 
 # Add vector store
 docker compose --env-file .env.docker.local --profile core --profile vector up -d
+
+# Add Kafka UI (Redpanda Console)
+docker compose --env-file .env.docker.local --profile core --profile kafka-ui up -d
 
 # Add LLM services (heavy — downloads model weights on first run)
 docker compose --env-file .env.docker.local --profile core --profile vector --profile ai up -d
@@ -79,6 +83,21 @@ docker exec omni-g-kafka kafka-topics.sh --bootstrap-server=localhost:9092 \
   --create --topic analyst-alerts --partitions 3 --replication-factor 1
 docker exec omni-g-kafka kafka-topics.sh --bootstrap-server=localhost:9092 \
   --create --topic dead-letter-queue --partitions 1 --replication-factor 1
+```
+
+### `kafka-ui` — Redpanda Console
+
+Redpanda Console provides a browser UI for Kafka topics, partitions, consumer groups, and message browsing.
+
+- UI URL: http://localhost:8088
+- Backing broker: `kafka:9092` (inside Docker network)
+
+```bash
+# Start Kafka + Redpanda Console
+docker compose --env-file .env.docker.local --profile core --profile kafka-ui up -d
+
+# Verify UI health endpoint
+curl http://localhost:8088/admin/health
 ```
 
 **Redis** runs with [Redis Stack](https://redis.io/docs/stack/) (includes RediSearch and RedisJSON) on port `6379`. RedisInsight UI is available on port `8001`.

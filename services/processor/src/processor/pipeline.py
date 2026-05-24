@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from prometheus_client import Counter, Histogram
@@ -14,6 +15,7 @@ from ..llm.extractor import LLMExtractor
 from ..models.stix import ExtractionResult
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
+from .stage_publisher import StageEventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,13 @@ DEDUP_DROPS = Counter(
     "processor_dedup_drops_total",
     "Events dropped as duplicates by the deduplication layer",
     ["tenant_id"],
+)
+
+PIPELINE_STAGE_DURATION = Histogram(
+    "processor_pipeline_stage_duration_seconds",
+    "Time spent in each pipeline stage",
+    ["stage"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
 )
 
 
@@ -136,6 +145,7 @@ class ProcessingPipeline:
         graph_persistence: GraphPersistenceService | None = None,
         graphrag_indexer: GraphRAGIndexer | None = None,
         alert_publisher: AlertPublisher | None = None,
+        stage_publisher: StageEventPublisher | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
@@ -143,17 +153,42 @@ class ProcessingPipeline:
         self._graph_persistence = graph_persistence
         self._graphrag_indexer = graphrag_indexer
         self._alert_publisher = alert_publisher
+        self._stage_publisher = stage_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         # ── Step 1: Schema validation ──────────────────────────────────────
+        logger.info(
+            "pipeline_stage_start",
+            extra={"stage": "schema_validation", "event_id": event.get("id", "")},
+        )
+        t0 = time.monotonic()
         try:
             envelope = RawEventEnvelope.model_validate(event)
         except PydanticValidationError as exc:
             SCHEMA_VIOLATIONS.inc()
             raise SchemaViolationError(str(exc)) from exc
+        PIPELINE_STAGE_DURATION.labels(stage="schema_validation").observe(time.monotonic() - t0)
+        logger.info(
+            "pipeline_stage_done",
+            extra={
+                "stage": "schema_validation",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+            },
+        )
 
         # ── Step 2: Deduplication ──────────────────────────────────────────
+        logger.info(
+            "pipeline_stage_start",
+            extra={
+                "stage": "deduplication",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+            },
+        )
+        t0 = time.monotonic()
         dedup_result = await self._deduplicator.check_and_set(envelope.tenant_id, event)
+        PIPELINE_STAGE_DURATION.labels(stage="deduplication").observe(time.monotonic() - t0)
         if dedup_result.is_duplicate:
             DEDUP_DROPS.labels(tenant_id=envelope.tenant_id).inc()
             logger.debug(
@@ -161,8 +196,29 @@ class ProcessingPipeline:
                 extra={"event_id": envelope.id, "tenant_id": envelope.tenant_id},
             )
             return None
+        logger.info(
+            "pipeline_stage_done",
+            extra={
+                "stage": "deduplication",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+            },
+        )
 
         # ── Step 3: LLM entity extraction ─────────────────────────────────
+        logger.info(
+            "pipeline_stage_start",
+            extra={
+                "stage": "llm_extraction",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+            },
+        )
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "llm_extraction", "active"
+            )
+        t0 = time.monotonic()
         text: str = str(envelope.payload.get("text") or envelope.payload.get("content", ""))
         metadata: dict[str, Any] = {
             "plugin_name": envelope.plugin_name,
@@ -170,11 +226,14 @@ class ProcessingPipeline:
             "source_type": envelope.payload.get("source_type", "general"),
         }
         extraction = await self._extractor.extract(envelope.id, text, metadata)
-
+        PIPELINE_STAGE_DURATION.labels(stage="llm_extraction").observe(time.monotonic() - t0)
+        if self._stage_publisher:
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "llm_extraction", "done")
         EXTRACTION_CONFIDENCE.observe(extraction.extraction_confidence)
         logger.info(
-            "extraction_complete",
+            "pipeline_stage_done",
             extra={
+                "stage": "llm_extraction",
                 "event_id": envelope.id,
                 "tenant_id": envelope.tenant_id,
                 "entities": len(extraction.threat_actors) + len(extraction.malware),
@@ -184,20 +243,107 @@ class ProcessingPipeline:
 
         # ── Step 4: Entity resolution ──────────────────────────────────────
         if self._resolver is not None:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "entity_resolution",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "entity_resolution", "active"
+                )
+            t0 = time.monotonic()
             for entity in extraction.all_entities():
                 await self._resolver.resolve_and_persist(envelope.tenant_id, entity)
+            PIPELINE_STAGE_DURATION.labels(stage="entity_resolution").observe(time.monotonic() - t0)
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "entity_resolution",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "entity_resolution", "done"
+                )
 
         # ── Step 5: Graph persistence ──────────────────────────────────────
         if self._graph_persistence is not None:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "graph_persistence",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "graph_persistence", "active"
+                )
+            t0 = time.monotonic()
             await self._graph_persistence.persist_extraction(extraction, envelope.tenant_id)
+            PIPELINE_STAGE_DURATION.labels(stage="graph_persistence").observe(time.monotonic() - t0)
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "graph_persistence",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "graph_persistence", "done"
+                )
 
         # ── Step 6: GraphRAG incremental index ────────────────────────────
         if self._graphrag_indexer is not None:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "graphrag_index",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "graphrag_index", "active"
+                )
+            t0 = time.monotonic()
             for entity_id in [e.id for e in extraction.all_entities()]:
                 await self._graphrag_indexer.index_incremental(entity_id, envelope.tenant_id)
+            PIPELINE_STAGE_DURATION.labels(stage="graphrag_index").observe(time.monotonic() - t0)
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "graphrag_index",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "graphrag_index", "done"
+                )
 
         # ── Step 7: Alert publishing ───────────────────────────────────────
         if self._alert_publisher is not None and extraction.extraction_confidence > 0.5:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "alert_publishing",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
+            t0 = time.monotonic()
             summary_text: str
             if hasattr(extraction, "summary_text"):
                 summary_text = str(getattr(extraction, "summary_text", ""))[:500]
@@ -212,5 +358,14 @@ class ProcessingPipeline:
                 source_event_id=envelope.id,
             )
             await self._alert_publisher.publish(alert)
+            PIPELINE_STAGE_DURATION.labels(stage="alert_publishing").observe(time.monotonic() - t0)
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "alert_publishing",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
 
         return extraction

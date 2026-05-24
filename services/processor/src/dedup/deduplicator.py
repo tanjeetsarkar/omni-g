@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import redis.asyncio as aioredis
-from redis.exceptions import ConnectionError, ResponseError
+from redis.exceptions import ConnectionError, NoScriptError, ResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,13 @@ class ContentDeduplicator:
                 extra={"metric": "dedup_redis_unavailable", "value": 1},
             )
             return DedupResult(is_duplicate=False, content_hash=content_hash, event_id=event_id)
+        except ResponseError as exc:
+            logger.warning(
+                "Redis response error in check_and_set — failing open: %s",
+                exc,
+                extra={"metric": "dedup_redis_error", "value": 1},
+            )
+            return DedupResult(is_duplicate=False, content_hash=content_hash, event_id=event_id)
 
     # ------------------------------------------------------------------
     # Botnet / source clustering via RediSearch
@@ -174,9 +181,13 @@ class ContentDeduplicator:
                 )
                 return str(raw_evalsha)
             except ResponseError as exc:
-                if "noscript" in str(exc).lower() or "unknown" in str(exc).lower():
-                    # Script was flushed or Lua not available — fall through
-                    logger.warning("EVALSHA failed (%s) — falling back", exc)
+                if (
+                    isinstance(exc, NoScriptError)
+                    or "noscript" in str(exc).lower()
+                    or "unknown" in str(exc).lower()
+                ):
+                    # Script was flushed (e.g. Redis restart) or Lua not available — fall through
+                    logger.warning("EVALSHA failed (%s) — falling back to EVAL", exc)
                     self._script_sha = None
                 else:
                     raise

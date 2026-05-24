@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync"
 	"time"
@@ -150,6 +151,11 @@ func (s *Scheduler) pollOnce(ctx context.Context, p pluginEntry, onBlock OnBlock
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if toolHasRequiredParams(tool) {
+			log.Debug().Str("plugin", p.url).Str("tool", tool.Name).
+				Msg("tool has required parameters, skipping scheduled poll (use /search instead)")
+			continue
+		}
 		if err := s.callTool(ctx, p, tool, onBlock); err != nil {
 			log.Warn().Str("plugin", p.url).Str("tool", tool.Name).
 				Err(err).Msg("tool call failed")
@@ -173,6 +179,23 @@ func (s *Scheduler) callTool(ctx context.Context, p pluginEntry, tool mcp.Tool, 
 	}
 
 	return nil
+}
+
+// toolHasRequiredParams reports whether a tool's inputSchema declares any
+// required parameters. Tools with required params cannot be polled by the
+// scheduler (which calls them with nil arguments); they must be invoked
+// explicitly via POST /search with a user-supplied query.
+func toolHasRequiredParams(tool mcp.Tool) bool {
+	if len(tool.InputSchema) == 0 {
+		return false
+	}
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+		return false
+	}
+	return len(schema.Required) > 0
 }
 
 // backoffDuration returns the exponential backoff for the given attempt number,

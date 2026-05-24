@@ -27,6 +27,8 @@ const KAFKA_BROKERS = (process.env.KAFKA_BROKERS ?? "localhost:9092").split(
   ",",
 );
 const KAFKA_ALERTS_TOPIC = process.env.KAFKA_ALERTS_TOPIC ?? "analyst-alerts";
+const KAFKA_PROCESSOR_EVENTS_TOPIC =
+  process.env.KAFKA_PROCESSOR_EVENTS_TOPIC ?? "processor-events";
 
 // ─── Prometheus registry ─────────────────────────────────────────────────────
 const registry = new Registry();
@@ -330,6 +332,24 @@ export function handleKafkaMessageValue(messageValue: Buffer | null): void {
   broadcastAlert(parsed);
 }
 
+export function handleStageEventValue(messageValue: Buffer | null): void {
+  if (!messageValue) return;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(messageValue.toString()) as unknown;
+  } catch {
+    return;
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const ev = raw as Record<string, unknown>;
+  if (typeof ev.tenant_id !== "string" || !ev.tenant_id) return;
+
+  const room = `tenant:${ev.tenant_id}`;
+  io.to(room).emit("pipeline_stage", ev);
+}
+
 export function createKafkaConsumer(): Consumer {
   const kafka = new Kafka({
     clientId: "delivery-gateway",
@@ -346,11 +366,19 @@ export async function startConsumer(consumer: Consumer): Promise<void> {
     topic: KAFKA_ALERTS_TOPIC,
     fromBeginning: false,
   });
+  await consumer.subscribe({
+    topic: KAFKA_PROCESSOR_EVENTS_TOPIC,
+    fromBeginning: false,
+  });
 
   await consumer.run({
     autoCommit: true,
-    eachMessage: async ({ message }) => {
-      handleKafkaMessageValue(message.value);
+    eachMessage: async ({ topic, message }) => {
+      if (topic === KAFKA_ALERTS_TOPIC) {
+        handleKafkaMessageValue(message.value);
+      } else if (topic === KAFKA_PROCESSOR_EVENTS_TOPIC) {
+        handleStageEventValue(message.value);
+      }
     },
   });
 }

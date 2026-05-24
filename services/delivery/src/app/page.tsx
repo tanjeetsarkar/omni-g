@@ -6,12 +6,22 @@ import PipelineProgress from "@/components/PipelineProgress";
 
 type Phase = "search" | "processing";
 
+type SearchProgress = {
+  search_id: string;
+  events_queued: number;
+  queued_by_source: Array<{
+    source: string;
+    blocks_queued: number;
+  }>;
+};
+
 export default function Home() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [phase, setPhase] = useState<Phase>("search");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState<SearchProgress | null>(null);
 
   async function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -31,6 +41,8 @@ export default function Home() {
         const text = await res.text();
         throw new Error(`Search failed: ${text}`);
       }
+      const data: SearchProgress = await res.json();
+      setProgress(data);
       setPhase("processing");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -90,7 +102,11 @@ export default function Home() {
         )}
 
         {phase === "processing" && (
-          <PipelineProgress query={query} onReady={handleReady} />
+          <PipelineProgress
+            query={query}
+            progress={progress}
+            onReady={handleReady}
+          />
         )}
       </div>
     </div>

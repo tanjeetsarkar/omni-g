@@ -64,10 +64,18 @@ type StageStatus = "pending" | "active" | "done" | "error";
 
 interface Props {
   query: string;
+  progress: {
+    search_id: string;
+    events_queued: number;
+    queued_by_source: Array<{
+      source: string;
+      blocks_queued: number;
+    }>;
+  } | null;
   onReady: () => void;
 }
 
-export default function PipelineProgress({ query, onReady }: Props) {
+export default function PipelineProgress({ query, progress, onReady }: Props) {
   const [statuses, setStatuses] = useState<StageStatus[]>(
     STAGES.map(() => "pending"),
   );
@@ -118,9 +126,35 @@ export default function PipelineProgress({ query, onReady }: Props) {
       setDone(true);
     }
 
+    // Map processor stage names to STAGES indices.
+    const STAGE_INDEX: Record<string, number> = {
+      llm_extraction: 2,
+      entity_resolution: 3,
+      graph_persistence: 3,
+      graphrag_index: 4,
+    };
+
+    function handlePipelineStage(ev: {
+      stage: string;
+      status: "active" | "done";
+    }) {
+      if (doneRef.current) return;
+      const idx = STAGE_INDEX[ev.stage];
+      if (idx === undefined) return;
+      setStatuses((prev) => {
+        const next = [...prev] as StageStatus[];
+        if (ev.status === "active" && next[idx] === "pending")
+          next[idx] = "active";
+        if (ev.status === "done") next[idx] = "done";
+        return next;
+      });
+    }
+
     socket.on("alert", handleAlert);
+    socket.on("pipeline_stage", handlePipelineStage);
     return () => {
       socket.off("alert", handleAlert);
+      socket.off("pipeline_stage", handlePipelineStage);
     };
   }, []);
 
@@ -134,7 +168,18 @@ export default function PipelineProgress({ query, onReady }: Props) {
 
       <ol className="space-y-3">
         {STAGES.map((stage, i) => (
-          <StageRow key={stage.id} stage={stage} status={statuses[i]} />
+          <StageRow
+            key={stage.id}
+            stage={stage}
+            status={statuses[i]}
+            progress={
+              i === 0 && progress
+                ? formatSourceCounts(progress.queued_by_source)
+                : i <= 3 && progress
+                  ? `${progress.events_queued} results in flight`
+                  : undefined
+            }
+          />
         ))}
       </ol>
 
@@ -153,7 +198,15 @@ export default function PipelineProgress({ query, onReady }: Props) {
   );
 }
 
-function StageRow({ stage, status }: { stage: Stage; status: StageStatus }) {
+function StageRow({
+  stage,
+  status,
+  progress,
+}: {
+  stage: Stage;
+  status: StageStatus;
+  progress?: string;
+}) {
   return (
     <li className="flex items-start gap-3">
       <StatusIcon status={status} />
@@ -169,7 +222,10 @@ function StageRow({ stage, status }: { stage: Stage; status: StageStatus }) {
         >
           {stage.label}
         </p>
-        <p className="text-xs text-slate-600">{stage.detail}</p>
+        <p className="text-xs text-slate-600">
+          {stage.detail}
+          {progress ? ` · ${progress}` : ""}
+        </p>
       </div>
     </li>
   );
@@ -190,4 +246,21 @@ function StatusIcon({ status }: { status: StageStatus }) {
     default:
       return <Circle className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />;
   }
+}
+
+function formatSourceCounts(
+  queuedBySource: Array<{ source: string; blocks_queued: number }>,
+): string {
+  if (!queuedBySource.length) {
+    return "0 results queued";
+  }
+
+  const total = queuedBySource.reduce(
+    (acc, entry) => acc + entry.blocks_queued,
+    0,
+  );
+  const summary = queuedBySource
+    .map((entry) => `${entry.source}: ${entry.blocks_queued}`)
+    .join(" · ");
+  return `${total} queued (${summary})`;
 }
