@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync"
 	"time"
@@ -72,6 +73,7 @@ func (s *Scheduler) Start(ctx context.Context, onBlock OnBlockFunc) {
 	plugins := make([]pluginEntry, len(s.plugins))
 	copy(plugins, s.plugins)
 	s.mu.Unlock()
+	log.Info().Int("plugin_count", len(plugins)).Msg("scheduler starting")
 
 	var wg sync.WaitGroup
 	for _, p := range plugins {
@@ -82,20 +84,24 @@ func (s *Scheduler) Start(ctx context.Context, onBlock OnBlockFunc) {
 		}(p)
 	}
 	wg.Wait()
+	log.Info().Msg("scheduler stopped")
 }
 
 // ─── internal ────────────────────────────────────────────────────────────────
 
 func (s *Scheduler) runPlugin(ctx context.Context, p pluginEntry, onBlock OnBlockFunc) {
 	logger := log.With().Str("plugin", p.url).Logger()
+	logger.Info().Dur("interval", p.interval).Msg("plugin polling loop started")
 
 	for {
+		logger.Info().Msg("starting plugin poll cycle")
 		if err := s.pollOnce(ctx, p, onBlock); err != nil {
 			logger.Error().Err(err).Msg("plugin poll failed")
 		}
 
 		select {
 		case <-ctx.Done():
+			logger.Info().Msg("plugin polling loop stopping")
 			return
 		case <-time.After(p.interval):
 		}
@@ -112,6 +118,7 @@ func (s *Scheduler) pollOnce(ctx context.Context, p pluginEntry, onBlock OnBlock
 	)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		log.Info().Str("plugin", p.url).Int("attempt", attempt+1).Msg("requesting tools/list from plugin")
 		tools, err = p.client.ListTools(ctx)
 		if err == nil {
 			break
@@ -136,6 +143,7 @@ func (s *Scheduler) pollOnce(ctx context.Context, p pluginEntry, onBlock OnBlock
 	}
 
 	metrics.SchedulerPollTotal.WithLabelValues(p.url, "ok").Inc()
+	log.Info().Str("plugin", p.url).Int("tool_count", len(tools)).Msg("tools/list succeeded")
 
 	// Notify the discovery callback with freshly-listed tools so the MCP
 	// handler registry stays current without a separate ListTools call.
@@ -150,6 +158,12 @@ func (s *Scheduler) pollOnce(ctx context.Context, p pluginEntry, onBlock OnBlock
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if toolHasRequiredParams(tool) {
+			log.Info().Str("plugin", p.url).Str("tool", tool.Name).
+				Msg("tool has required parameters, skipping scheduled poll (use /search instead)")
+			continue
+		}
+		log.Info().Str("plugin", p.url).Str("tool", tool.Name).Msg("calling plugin tool")
 		if err := s.callTool(ctx, p, tool, onBlock); err != nil {
 			log.Warn().Str("plugin", p.url).Str("tool", tool.Name).
 				Err(err).Msg("tool call failed")
@@ -165,14 +179,35 @@ func (s *Scheduler) callTool(ctx context.Context, p pluginEntry, tool mcp.Tool, 
 		return err
 	}
 
+	count := 0
 	for block := range ch {
+		log.Debug().Str("plugin", p.url).Str("tool", tool.Name).Interface("content_block", block).Msg("received content block from plugin tool")
 		if err := onBlock(ctx, p.url, block, tool); err != nil {
 			log.Warn().Str("plugin", p.url).Str("tool", tool.Name).
 				Err(err).Msg("onBlock handler returned error")
 		}
+		count++
 	}
+	log.Info().Str("plugin", p.url).Str("tool", tool.Name).Int("blocks_processed", count).Msg("plugin tool call completed")
 
 	return nil
+}
+
+// toolHasRequiredParams reports whether a tool's inputSchema declares any
+// required parameters. Tools with required params cannot be polled by the
+// scheduler (which calls them with nil arguments); they must be invoked
+// explicitly via POST /search with a user-supplied query.
+func toolHasRequiredParams(tool mcp.Tool) bool {
+	if len(tool.InputSchema) == 0 {
+		return false
+	}
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+		return false
+	}
+	return len(schema.Required) > 0
 }
 
 // backoffDuration returns the exponential backoff for the given attempt number,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -717,3 +717,66 @@ class TestHelpers:
 
         v = _embed("test string")
         assert len(v) == EMBEDDING_DIM
+
+
+class TestResolverEmbedding:
+    @pytest.mark.asyncio
+    async def test_ollama_embedding_success(self) -> None:
+        """Test successful Ollama embedding API call returning 768-D representation."""
+        resolver = _make_resolver()
+
+        # We want to mock httpx async post to return a 768-D dummy vector
+        mock_embedding = [0.1] * 768
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={"embedding": mock_embedding})
+        mock_response.raise_for_status = MagicMock()
+
+        async def mock_post(*args: object, **kwargs: object) -> MagicMock:
+            return mock_response
+
+        with patch("httpx.AsyncClient.post", side_effect=mock_post):
+            vector = await resolver._embed("APT28")
+
+        assert len(vector) == 768
+        assert vector == mock_embedding
+
+    @pytest.mark.asyncio
+    async def test_ollama_embedding_underflow_padded(self) -> None:
+        """Test Ollama embedding with size less than EMBEDDING_DIM is padded with zeros."""
+        resolver = _make_resolver()
+        mock_embedding = [0.1] * 100
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={"embedding": mock_embedding})
+        mock_response.raise_for_status = MagicMock()
+
+        async def mock_post(*args: object, **kwargs: object) -> MagicMock:
+            return mock_response
+
+        with patch("httpx.AsyncClient.post", side_effect=mock_post):
+            vector = await resolver._embed("APT28")
+
+        assert len(vector) == 768
+        assert vector[:100] == mock_embedding
+        assert vector[100:] == [0.0] * 668
+
+    @pytest.mark.asyncio
+    async def test_ollama_embedding_fails_graceful_hash_fallback(self) -> None:
+        """Test HTTP/connection error or invalid JSON structure.
+
+        Should gracefully fall back to hash embedding.
+        """
+        resolver = _make_resolver()
+
+        async def mock_post_fail(*args: object, **kwargs: object) -> NoReturn:
+            import httpx
+
+            raise httpx.ConnectError("Ollama offline")
+
+        with patch("httpx.AsyncClient.post", side_effect=mock_post_fail):
+            vector = await resolver._embed("APT28")
+
+        assert len(vector) == 768
+        # Should match deterministic hashing
+        assert vector == _embed("APT28", 768)

@@ -24,25 +24,28 @@ const (
 
 // Server is the HTTP server for the Aggregator.
 type Server struct {
-	cfg        *config.Config
-	mux        *http.ServeMux
-	httpSrv    *http.Server
-	pipeline   *pipeline.Pipeline
-	scheduler  *scheduler.Scheduler
-	mcpHandler *mcp.Handler
+	cfg           *config.Config
+	mux           *http.ServeMux
+	httpSrv       *http.Server
+	pipeline      *pipeline.Pipeline
+	scheduler     *scheduler.Scheduler
+	mcpHandler    *mcp.Handler
+	searchHandler *SearchHandler
 }
 
 // New creates a configured Server.
 //
-// pipeline, sched, and mcpHandler may be nil (e.g. in health-only tests);
-// their routes are still registered but are no-ops in that case.
-func New(cfg *config.Config, pl *pipeline.Pipeline, sched *scheduler.Scheduler, mcpHandler *mcp.Handler) *Server {
+// pipeline, sched, mcpHandler, and searchHandler may be nil (e.g. in
+// health-only tests); their routes are still registered but are no-ops in
+// that case.
+func New(cfg *config.Config, pl *pipeline.Pipeline, sched *scheduler.Scheduler, mcpHandler *mcp.Handler, searchHandler *SearchHandler) *Server {
 	s := &Server{
-		cfg:        cfg,
-		mux:        http.NewServeMux(),
-		pipeline:   pl,
-		scheduler:  sched,
-		mcpHandler: mcpHandler,
+		cfg:           cfg,
+		mux:           http.NewServeMux(),
+		pipeline:      pl,
+		scheduler:     sched,
+		mcpHandler:    mcpHandler,
+		searchHandler: searchHandler,
 	}
 	s.registerRoutes()
 	s.httpSrv = &http.Server{
@@ -60,6 +63,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /ready", s.handleReady)
 	s.mux.HandleFunc("GET /mcp/tools", s.handleMCPTools)
 	s.mux.Handle("GET /metrics", metrics.Handler())
+	if s.searchHandler != nil {
+		s.mux.Handle("POST /search", s.searchHandler)
+	}
 }
 
 // ServeHTTP implements http.Handler so Server can be used directly in tests.

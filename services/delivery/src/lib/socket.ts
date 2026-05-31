@@ -8,6 +8,23 @@
 import { io, type Socket } from "socket.io-client";
 
 let socket: Socket | undefined;
+let currentSubscription: SubscriptionParams | null = null;
+
+export interface SubscriptionParams {
+  tenant_id: string;
+  community_id?: string;
+  severity?: string;
+}
+
+function handleSocketConnect(): void {
+  if (socket && currentSubscription) {
+    socket.emit("subscribe", currentSubscription);
+  }
+}
+
+function bindSubscriptionHandler(s: Socket): void {
+  s.off("connect", handleSocketConnect).on("connect", handleSocketConnect);
+}
 
 export function getSocket(): Socket {
   if (socket) return socket;
@@ -21,7 +38,27 @@ export function getSocket(): Socket {
     transports: ["websocket"],
   });
 
+  bindSubscriptionHandler(socket);
+
   return socket;
+}
+
+export function subscribe(params: SubscriptionParams): void {
+  const s = getSocket();
+
+  currentSubscription = params;
+  bindSubscriptionHandler(s);
+
+  if (!s.connected) {
+    s.connect();
+    return;
+  }
+
+  s.emit("subscribe", params, () => undefined);
+}
+
+export function getCurrentSubscription(): SubscriptionParams | null {
+  return currentSubscription;
 }
 
 export function disconnectSocket(): void {
@@ -29,6 +66,7 @@ export function disconnectSocket(): void {
     socket.disconnect();
   }
   socket = undefined;
+  currentSubscription = null;
 }
 
 /**
@@ -36,7 +74,5 @@ export function disconnectSocket(): void {
  * The gateway will add the socket to room `tenant:{tenantId}`.
  */
 export function joinTenant(tenantId: string): void {
-  const s = getSocket();
-  if (!s.connected) s.connect();
-  s.emit("join", { tenant_id: tenantId });
+  subscribe({ tenant_id: tenantId });
 }

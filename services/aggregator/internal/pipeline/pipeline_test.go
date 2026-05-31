@@ -19,7 +19,7 @@ type mockValidator struct {
 	err    error
 }
 
-func (m *mockValidator) Validate(_ context.Context, _ map[string]any) (*validation.ValidationResult, error) {
+func (m *mockValidator) Validate(_ context.Context, _ string, _ map[string]any) (*validation.ValidationResult, error) {
 	return m.result, m.err
 }
 

@@ -27,6 +27,8 @@ const KAFKA_BROKERS = (process.env.KAFKA_BROKERS ?? "localhost:9092").split(
   ",",
 );
 const KAFKA_ALERTS_TOPIC = process.env.KAFKA_ALERTS_TOPIC ?? "analyst-alerts";
+const KAFKA_PROCESSOR_EVENTS_TOPIC =
+  process.env.KAFKA_PROCESSOR_EVENTS_TOPIC ?? "processor-events";
 
 // ─── Prometheus registry ─────────────────────────────────────────────────────
 const registry = new Registry();
@@ -84,6 +86,64 @@ export const io = new Server(httpServer, {
   pingInterval: 30000,
 });
 
+connectedClients.set(0);
+
+export interface SubscribeParams {
+  tenant_id: string;
+  community_id?: string;
+  severity?: string;
+}
+
+export interface SubscribeAck {
+  ok: true;
+  rooms: string[];
+}
+
+type GatewaySocket = {
+  id: string;
+  join: (room: string) => void;
+  leave?: (room: string) => void;
+  on: (event: string, handler: (...args: unknown[]) => void) => void;
+  rooms?: Set<string>;
+  data?: {
+    subscriptionRooms?: string[];
+  };
+};
+
+function deriveSubscriptionRooms(params: SubscribeParams): string[] {
+  const rooms = [`tenant:${params.tenant_id}`];
+
+  if (params.community_id) {
+    rooms.push(`tenant:${params.tenant_id}:community:${params.community_id}`);
+  }
+
+  if (params.severity) {
+    rooms.push(`tenant:${params.tenant_id}:severity:${params.severity}`);
+  }
+
+  return rooms;
+}
+
+function setSubscriptionRooms(
+  socket: GatewaySocket,
+  params: SubscribeParams,
+): string[] {
+  const nextRooms = deriveSubscriptionRooms(params);
+  const previousRooms = socket.data?.subscriptionRooms ?? [];
+
+  previousRooms
+    .filter((room) => !nextRooms.includes(room))
+    .forEach((room) => socket.leave?.(room));
+
+  nextRooms.forEach((room) => socket.join(room));
+  socket.data = {
+    ...(socket.data ?? {}),
+    subscriptionRooms: nextRooms,
+  };
+
+  return socket.rooms ? [...socket.rooms] : [socket.id, ...nextRooms];
+}
+
 io.on("connection", (socket) => {
   console.log(`[gateway] client connected: ${socket.id}`);
   connectedClients.inc();
@@ -91,10 +151,25 @@ io.on("connection", (socket) => {
 
   socket.on("join", ({ tenant_id }: { tenant_id: string }) => {
     if (!tenant_id) return;
-    const room = `tenant:${tenant_id}`;
-    socket.join(room);
-    console.log(`[gateway] ${socket.id} joined room ${room}`);
+    setSubscriptionRooms(socket, { tenant_id });
+    console.log(`[gateway] ${socket.id} joined room tenant:${tenant_id}`);
   });
+
+  socket.on(
+    "subscribe",
+    (params: SubscribeParams, ack?: (response: SubscribeAck) => void) => {
+      if (!params?.tenant_id) return;
+
+      const rooms = setSubscriptionRooms(socket, params);
+      connectionLifecycle.inc({ event: "subscribe" });
+
+      console.log(`[gateway] ${socket.id} subscribed`, params);
+
+      if (typeof ack === "function") {
+        ack({ ok: true, rooms });
+      }
+    },
+  );
 
   socket.on("disconnect", (reason) => {
     console.log(`[gateway] client disconnected: ${socket.id} (${reason})`);
@@ -110,11 +185,169 @@ httpServer.listen(GATEWAY_PORT, () => {
 // ─── Kafka consumer ──────────────────────────────────────────────────────────
 export interface AlertMessage {
   tenant_id: string;
+  timestamp: string | number;
   entity_ids?: string[];
+  community_id?: string;
   severity?: string;
   message?: string;
-  timestamp?: number;
   [key: string]: unknown;
+}
+
+const invalidAlerts = new Counter({
+  name: "delivery_invalid_alerts_total",
+  help: "Total Kafka messages that failed alert schema validation",
+  registers: [registry],
+});
+
+function warnInvalidAlert(reason: string, raw: unknown): void {
+  console.warn("[gateway] invalid alert payload", { reason, raw });
+  invalidAlerts.inc();
+}
+
+export function parseAlert(raw: unknown): AlertMessage | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    warnInvalidAlert("payload must be an object", raw);
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+
+  if (
+    typeof candidate.tenant_id !== "string" ||
+    candidate.tenant_id.trim() === ""
+  ) {
+    warnInvalidAlert("tenant_id must be a non-empty string", raw);
+    return null;
+  }
+
+  if (
+    typeof candidate.timestamp !== "number" &&
+    typeof candidate.timestamp !== "string"
+  ) {
+    warnInvalidAlert("timestamp must be a string or number", raw);
+    return null;
+  }
+
+  if (
+    typeof candidate.timestamp === "number" &&
+    !Number.isFinite(candidate.timestamp)
+  ) {
+    warnInvalidAlert("timestamp number must be finite", raw);
+    return null;
+  }
+
+  if (
+    typeof candidate.timestamp === "string" &&
+    (candidate.timestamp.trim() === "" ||
+      Number.isNaN(Date.parse(candidate.timestamp)))
+  ) {
+    warnInvalidAlert("timestamp string must be parseable", raw);
+    return null;
+  }
+
+  if (
+    candidate.entity_ids !== undefined &&
+    (!Array.isArray(candidate.entity_ids) ||
+      candidate.entity_ids.some((value) => typeof value !== "string"))
+  ) {
+    warnInvalidAlert("entity_ids must be an array of strings", raw);
+    return null;
+  }
+
+  if (
+    candidate.community_id !== undefined &&
+    typeof candidate.community_id !== "string"
+  ) {
+    warnInvalidAlert("community_id must be a string", raw);
+    return null;
+  }
+
+  if (
+    candidate.severity !== undefined &&
+    typeof candidate.severity !== "string"
+  ) {
+    warnInvalidAlert("severity must be a string", raw);
+    return null;
+  }
+
+  if (
+    candidate.message !== undefined &&
+    typeof candidate.message !== "string"
+  ) {
+    warnInvalidAlert("message must be a string", raw);
+    return null;
+  }
+
+  return {
+    ...candidate,
+    tenant_id: candidate.tenant_id,
+    timestamp: candidate.timestamp,
+    entity_ids: candidate.entity_ids as string[] | undefined,
+    community_id: candidate.community_id as string | undefined,
+    severity: candidate.severity as string | undefined,
+    message: candidate.message as string | undefined,
+  };
+}
+
+export function parseTimestampMs(ts: string | number): number {
+  if (typeof ts === "number") return ts;
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? Date.now() : ms;
+}
+
+function broadcastAlert(alert: AlertMessage): void {
+  const rooms = [`tenant:${alert.tenant_id}`];
+
+  if (alert.community_id) {
+    rooms.push(`tenant:${alert.tenant_id}:community:${alert.community_id}`);
+  }
+
+  if (alert.severity) {
+    rooms.push(`tenant:${alert.tenant_id}:severity:${alert.severity}`);
+  }
+
+  rooms.forEach((room) => {
+    io.to(room).emit("alert", alert);
+    console.log(`[gateway] broadcast to ${room}:`, alert);
+  });
+}
+
+export function handleKafkaMessageValue(messageValue: Buffer | null): void {
+  if (!messageValue) return;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(messageValue.toString()) as unknown;
+  } catch {
+    warnInvalidAlert("payload must be valid JSON", messageValue.toString());
+    return;
+  }
+
+  const parsed = parseAlert(raw);
+  if (!parsed) return;
+
+  const latency = Date.now() - parseTimestampMs(parsed.timestamp);
+  broadcastLatency.observe(latency);
+
+  broadcastAlert(parsed);
+}
+
+export function handleStageEventValue(messageValue: Buffer | null): void {
+  if (!messageValue) return;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(messageValue.toString()) as unknown;
+  } catch {
+    return;
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const ev = raw as Record<string, unknown>;
+  if (typeof ev.tenant_id !== "string" || !ev.tenant_id) return;
+
+  const room = `tenant:${ev.tenant_id}`;
+  io.to(room).emit("pipeline_stage", ev);
 }
 
 export function createKafkaConsumer(): Consumer {
@@ -127,36 +360,25 @@ export function createKafkaConsumer(): Consumer {
   return kafka.consumer({ groupId: "delivery-gateway" });
 }
 
-async function startConsumer(consumer: Consumer): Promise<void> {
+export async function startConsumer(consumer: Consumer): Promise<void> {
   await consumer.connect();
   await consumer.subscribe({
     topic: KAFKA_ALERTS_TOPIC,
     fromBeginning: false,
   });
+  await consumer.subscribe({
+    topic: KAFKA_PROCESSOR_EVENTS_TOPIC,
+    fromBeginning: false,
+  });
 
   await consumer.run({
     autoCommit: true,
-    eachMessage: async ({ message }) => {
-      if (!message.value) return;
-
-      let parsed: AlertMessage;
-      try {
-        parsed = JSON.parse(message.value.toString()) as AlertMessage;
-      } catch {
-        console.warn("[gateway] failed to parse Kafka message");
-        return;
+    eachMessage: async ({ topic, message }) => {
+      if (topic === KAFKA_ALERTS_TOPIC) {
+        handleKafkaMessageValue(message.value);
+      } else if (topic === KAFKA_PROCESSOR_EVENTS_TOPIC) {
+        handleStageEventValue(message.value);
       }
-
-      const room = `tenant:${parsed.tenant_id}`;
-
-      // Measure broadcast latency from message timestamp
-      if (parsed.timestamp) {
-        const latency = Date.now() - parsed.timestamp;
-        broadcastLatency.observe(latency);
-      }
-
-      io.to(room).emit("alert", parsed);
-      console.log(`[gateway] broadcast to ${room}:`, parsed);
     },
   });
 }

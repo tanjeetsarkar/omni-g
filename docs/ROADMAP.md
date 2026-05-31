@@ -1,7 +1,7 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 17, 2026
-**Status:** Foundation Phase Active
+**Last Updated:** May 23, 2026
+**Status:** M1 In Progress · M2–M5 Complete · M6 Not Started
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
 
@@ -9,7 +9,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M1: Project Foundation
 
-**Status:** 🟢 IN PROGRESS
+**Status:** 🟡 IN PROGRESS
 **Focus:** Infrastructure, version control, documentation framework
 
 ### Milestones
@@ -92,7 +92,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M2: Service Scaffolding
 
-**Status:** � COMPLETE
+**Status:** ✅ COMPLETE
 **Focus:** Service initialization, build pipelines, test frameworks
 
 ### Milestones
@@ -176,7 +176,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M3: Core Event Pipeline
 
-**Status:** � IN PROGRESS
+**Status:** ✅ COMPLETE
 **Focus:** Ingestion, deduplication, LLM extraction
 
 ### Milestones
@@ -255,7 +255,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M4: Knowledge Graph Construction
 
-**Status:** 🟢 COMPLETE
+**Status:** ✅ COMPLETE
 **Focus:** Entity resolution, graph persistence, GraphRAG indexing
 
 ### Milestones
@@ -324,21 +324,21 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ## M5: Delivery & Real-Time Alerting
 
-**Status:** 🔴 NOT STARTED
+**Status:** 🟡 IN PROGRESS
 **Focus:** WebSocket gateway, interactive dashboard, audio briefings
 
 ### Milestones
 
 #### M5.1: Kafka → WebSocket Gateway
-- [ ] Subscribe to `analyst-alerts` Kafka topic
-- [ ] Broadcast to connected WebSocket clients (Socket.io)
-- [ ] Route alerts by tenant/subscription
-- [ ] Implement connection pooling + heartbeat
-- [ ] Add Prometheus metrics:
+- [x] Subscribe to `analyst-alerts` Kafka topic
+- [x] Broadcast to connected WebSocket clients (Socket.io)
+- [x] Route alerts by tenant/subscription
+- [x] Implement connection pooling + heartbeat
+- [x] Add Prometheus metrics:
   - Connected clients count
   - Message broadcast latency
   - Connection lifecycle events
-- [ ] Create comprehensive tests
+- [x] Create comprehensive tests
 
 **Dependencies:** M1.3 (Kafka), M2.3
 **Verification:**
@@ -350,16 +350,16 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M5.2: Interactive Graph Dashboard
-- [ ] Implement Sigma.js WebGL rendering (support 100k+ nodes)
-- [ ] Create force-directed layout algorithm
-- [ ] Implement semantic zooming (aggregate → individual)
-- [ ] Create Focus+Context filtering
-- [ ] Add real-time node/edge highlighting on alerts
-- [ ] Performance optimization:
+- [x] Implement Sigma.js WebGL rendering (support 100k+ nodes)
+- [x] Create force-directed layout algorithm
+- [x] Implement semantic zooming (aggregate → individual)
+- [x] Create Focus+Context filtering
+- [x] Add real-time node/edge highlighting on alerts
+- [x] Performance optimization:
   - Render 50k nodes in <500ms
   - Update on-demand (lazy loading)
   - GPU acceleration where available
-- [ ] Create performance benchmarks
+- [x] Create performance benchmarks
 
 **Dependencies:** M5.1, M2.3, M4.2
 **Verification:**
@@ -371,14 +371,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M5.3: Audio Briefing Pipeline
-- [ ] Create GraphRAG → briefing script generation
-- [ ] Implement Kokoro TTS synthesis (fallback: ElevenLabs API)
-- [ ] Store audio files in MinIO
-- [ ] Schedule briefings:
+- [x] Create GraphRAG → briefing script generation
+- [x] Implement Kokoro TTS synthesis (fallback: ElevenLabs API)
+- [x] Store audio files in MinIO
+- [x] Schedule briefings:
   - Daily summary at 08:00 user timezone
   - On-demand alerts
-- [ ] Generate secure signed URLs for download
-- [ ] Create comprehensive tests
+- [x] Generate secure signed URLs for download
+- [x] Create comprehensive tests
 
 **Dependencies:** M4.3, M1.3 (MinIO), M2.2
 **Verification:**

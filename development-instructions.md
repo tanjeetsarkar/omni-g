@@ -70,9 +70,9 @@ omni-g/
 
 ---
 
-#### 📋 Next: Create `.env.example` & `.env.local`
+#### 📋 Next: Create split env files (`.env.docker.local` + `.env.services.local`)
 
-**File: `.env.example`** (commit to git)
+**File: `.env.docker.example`** (commit to git)
 ```bash
 # Kafka
 KAFKA_BROKERS=kafka:9092
@@ -113,9 +113,9 @@ LOG_LEVEL=info
 DEBUG=false
 ```
 
-**File: `.env.local`** (gitignored, local overrides)
+**File: `.env.services.example`** (commit to git)
 ```bash
-# Local development overrides
+# Host-local service runtime values
 KAFKA_BROKERS=localhost:9092
 REDIS_URL=redis://localhost:6379
 NEO4J_URL=neo4j://localhost:7687
@@ -127,9 +127,9 @@ LOG_LEVEL=debug
 
 **To use:**
 ```bash
-# In each service, load from .env.local if it exists:
+# In each service, load from .env.services.local if it exists:
 # Python: from pydantic_settings import BaseSettings
-# Go: viper.SetConfigFile(".env.local")
+# Go: viper.SetConfigFile(".env.services.local")
 # Node.js: dotenv.config()
 ```
 

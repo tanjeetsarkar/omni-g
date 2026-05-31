@@ -27,6 +27,8 @@ interface GraphViewProps {
   highlightedNodeIds?: Set<string>;
   selectedNodeId?: string | null;
   onNodeClick?: (nodeId: string) => void;
+  /** Called once after the Sigma instance is created (useful for zoom listeners). */
+  onSigmaReady?: (sigma: Sigma) => void;
 }
 
 /** Default colour palette by STIX type */
@@ -52,6 +54,7 @@ export default function GraphView({
   highlightedNodeIds,
   selectedNodeId,
   onNodeClick,
+  onSigmaReady,
 }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -97,6 +100,9 @@ export default function GraphView({
       defaultEdgeColor: "#e5e7eb",
       defaultNodeColor: "#6366f1",
     });
+
+    // Notify parent so it can attach zoom/camera listeners
+    onSigmaReady?.(sigmaRef.current);
 
     // Node click → call onNodeClick prop
     sigmaRef.current.on("clickNode", ({ node }: { node: string }) => {

@@ -308,7 +308,8 @@ omni-g/
 ├── docker-compose.yml          # All infra services
 ├── docker-compose.override.yml # Local dev overrides
 ├── Makefile                    # make up, make down, make lint, make test
-├── .env.example                # All service configs (copy to .env)
+├── .env.docker.example         # Docker Compose config template
+├── .env.services.example       # Host-local services config template
 ├── prerequisites.md            # This file
 │
 ├── aggregator/                 # Go service — MCP client, Kafka producer

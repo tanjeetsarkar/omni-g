@@ -8,8 +8,8 @@ services:
     container_name: omni-g-kafka
     environment:
       KAFKA_BROKER_ID: 1
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -18,11 +18,12 @@ services:
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_NODE_ID: 1
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092,CONTROLLER://0.0.0.0:29093
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
     ports:
       - "9092:9092"
+      - "19092:19092"
       - "29093:29093"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9092'"]
@@ -36,6 +37,28 @@ services:
     networks:
       - omni-g
 
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console
+    container_name: omni-g-redpanda-console
+    environment:
+      KAFKA_BROKERS: ${KAFKA_BROKERS_UI:-kafka:9092}
+      SERVER_LISTENPORT: "8080"
+    ports:
+      - "8088:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - kafka-ui
+      - all
+    networks:
+      - omni-g
+
   redis:
     image: redis/redis-stack:7.4.0-v8
     container_name: omni-g-redis
@@ -43,7 +66,7 @@ services:
       - "6379:6379"
       # - "8001:8001"  # RedisInsight
     environment:
-      - REDIS_PORT=6379
+      - REDIS_PORT=${REDIS_PORT:-6379}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -62,17 +85,17 @@ services:
     container_name: omni-g-neo4j
     environment:
       NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
-      NEO4J_AUTH: neo4j/omni-g-password
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/omni-g-password}
       NEO4J_PLUGINS: '["apoc"]'
-      NEO4J_dbms_memory_heap_max__size: 2G
-      NEO4J_dbms_memory_pagecache_size: 512M
+      NEO4J_dbms_memory_heap_max__size: ${NEO4J_HEAP_MAX:-2G}
+      NEO4J_dbms_memory_pagecache_size: ${NEO4J_PAGECACHE:-512M}
     ports:
       - "7474:7474"
       - "7687:7687"
     volumes:
       - neo4j_data:/data
     healthcheck:
-      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "omni-g-password", "RETURN 1"]
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-omni-g-password}", "RETURN 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,7 +116,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     environment:
-      QDRANT_API_KEY: "omni-g-api-key"
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-omni-g-api-key}
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -143,7 +166,7 @@ services:
     ports:
       - "8000:8880"
     environment:
-      - WORKERS=1
+      - WORKERS=${KOKORO_WORKERS:-1}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
       interval: 10s
@@ -187,8 +210,8 @@ services:
     ports:
       - "3002:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
       GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
     volumes:
       - grafana_data:/var/lib/grafana
@@ -237,8 +260,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio_data:/minio_data
     command: server /minio_data --console-address ":9001"
@@ -263,13 +286,23 @@ services:
       dockerfile: Dockerfile
     container_name: omni-g-aggregator
     environment:
-      KAFKA_BROKERS: kafka:9092
-      LOG_LEVEL: info
-      VALIDATION_SERVICE_URL: http://validation-sidecar:8001
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      LOG_LEVEL: ${AGGREGATOR_LOG_LEVEL:-info}
+      VALIDATION_SERVICE_URL: ${AGGREGATOR_VALIDATION_SERVICE_URL:-http://processor:8001}
+      TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
+      MCP_PLUGIN_URLS: ${MCP_PLUGIN_URLS:-http://mcp-echo:8090,http://mcp-wikipedia:8091,http://mcp-wikidata:8092,http://mcp-newsrss:8093,http://mcp-reuters:8094}
+      WIKIPEDIA_PLUGIN_URL: ${WIKIPEDIA_PLUGIN_URL:-http://mcp-wikipedia:8091}
+      WIKIDATA_PLUGIN_URL: ${WIKIDATA_PLUGIN_URL:-http://mcp-wikidata:8092}
+      NEWSRSS_PLUGIN_URL: ${NEWSRSS_PLUGIN_URL:-http://mcp-newsrss:8093}
+      REUTERS_PLUGIN_URL: ${REUTERS_PLUGIN_URL:-http://mcp-reuters:8094}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     depends_on:
       kafka:
+        condition: service_healthy
+      processor:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -288,19 +321,27 @@ services:
       dockerfile: Dockerfile
     container_name: omni-g-processor
     environment:
-      KAFKA_BROKERS: kafka:9092
-      REDIS_URL: redis://redis:6379
-      NEO4J_URL: neo4j://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: omni-g-password
-      QDRANT_URL: http://qdrant:6333
-      OLLAMA_URL: http://ollama:11434
-      MINIO_URL: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-      MINIO_BUCKET: omni-g-briefings
+      LOG_LEVEL: ${PROCESSOR_LOG_LEVEL:-info}
+      KAFKA_ENABLED: ${PROCESSOR_KAFKA_ENABLED:-true}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      NEO4J_URL: ${NEO4J_URL:-neo4j://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-omni-g-password}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-omni-g-api-key}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      OLLAMA_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MINIO_URL: ${MINIO_URL:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-omni-g-briefings}
+      KOKORO_URL: ${KOKORO_URL:-http://kokoro-tts:8880}
       BRIEFING_PREFLIGHT_ENABLED: "true"
-      LOG_LEVEL: info
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
     depends_on:
@@ -311,7 +352,39 @@ services:
       neo4j:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - services
+      - all
+
+  delivery:
+    build:
+      context: ../services/delivery
+      dockerfile: Dockerfile
+    container_name: omni-g-delivery
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
+      NEXT_PUBLIC_TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
+      PROCESSOR_URL: ${PROCESSOR_URL:-http://processor:8001}
+      GATEWAY_PORT: ${GATEWAY_PORT:-3001}
+      METRICS_PORT: ${METRICS_PORT:-9464}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      KAFKA_ALERTS_TOPIC: ${KAFKA_ALERTS_TOPIC:-analyst-alerts}
+      NEO4J_URL: ${NEO4J_URL:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-omni-g-password}
+      AGGREGATOR_URL: ${AGGREGATOR_URL:-http://aggregator:8080}
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    depends_on:
+      - processor
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -321,28 +394,110 @@ services:
     networks:
       - omni-g
 
-  delivery:
+  # =============================================================================
+  # OSINT MCP PLUGINS (profile: services, all)
+  # =============================================================================
+
+  mcp-echo:
     build:
-      context: ../services/delivery
+      context: ../mcp-plugins/echo
       dockerfile: Dockerfile
-    container_name: omni-g-delivery
+    container_name: omni-g-mcp-echo
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8001
-      NEXT_PUBLIC_WS_URL: ws://localhost:3001
-      NEO4J_URL: neo4j://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: omni-g-password
+      PORT: "8090"
     ports:
-      - "3000:3000"
-      - "3001:3001"
-    depends_on:
-      - processor
+      - "8090:8090"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8090/health"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
     profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-wikipedia:
+    build:
+      context: ../mcp-plugins/wikipedia
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-wikipedia
+    environment:
+      PORT: "8091"
+    ports:
+      - "8091:8091"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-wikidata:
+    build:
+      context: ../mcp-plugins/wikidata
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-wikidata
+    environment:
+      PORT: "8092"
+    ports:
+      - "8092:8092"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8092/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-newsrss:
+    build:
+      context: ../mcp-plugins/newsrss
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-newsrss
+    environment:
+      PORT: "8093"
+    ports:
+      - "8093:8093"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8093/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
+      - services
+      - all
+    networks:
+      - omni-g
+
+  mcp-reuters:
+    build:
+      context: ../mcp-plugins/reuters
+      dockerfile: Dockerfile
+    container_name: omni-g-mcp-reuters
+    environment:
+      PORT: "8094"
+    ports:
+      - "8094:8094"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8094/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - mcp
       - services
       - all
     networks:

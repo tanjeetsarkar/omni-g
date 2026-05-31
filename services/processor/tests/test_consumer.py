@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from src.dedup.deduplicator import ContentDeduplicator
 from src.kafka.consumer import RawEventConsumer
@@ -23,19 +26,32 @@ def _make_consumer(topic: str = "raw-feed") -> RawEventConsumer:
     )
 
 
+def _mock_kafka_with_messages(topic: str, *message_batches: list[Any]) -> MagicMock:
+    """Return a mock KafkaConsumer whose poll() yields each batch then raises CancelledError.
+
+    process_messages uses poll() in a while-True loop; CancelledError is the
+    standard exit signal that triggers graceful shutdown.
+    """
+    mock_kafka = MagicMock()
+    poll_returns: list[Any] = [{topic: list(batch)} for batch in message_batches]
+    poll_returns.append(asyncio.CancelledError())
+    mock_kafka.poll.side_effect = poll_returns
+    return mock_kafka
+
+
 class TestProcessMessages:
     async def test_happy_path_handler_called_and_committed(self) -> None:
         """process_messages calls handler for each message and commits offset."""
         consumer = _make_consumer()
 
         msg = _make_mock_message({"id": "evt-001", "payload": {"text": "hello"}})
-        mock_kafka = MagicMock()
-        mock_kafka.__iter__ = MagicMock(return_value=iter([msg]))
+        mock_kafka = _mock_kafka_with_messages("raw-feed", [msg])
         consumer._consumer = mock_kafka
         consumer._producer = MagicMock()
 
         handler = AsyncMock()
-        await consumer.process_messages(handler)
+        with pytest.raises(asyncio.CancelledError):
+            await consumer.process_messages(handler)
 
         handler.assert_called_once_with(msg.value)
         mock_kafka.commit.assert_called_once()
@@ -45,14 +61,14 @@ class TestProcessMessages:
         consumer = _make_consumer()
 
         msg = _make_mock_message({"id": "evt-002", "payload": {"text": "bad event"}})
-        mock_kafka = MagicMock()
-        mock_kafka.__iter__ = MagicMock(return_value=iter([msg]))
+        mock_kafka = _mock_kafka_with_messages("raw-feed", [msg])
         consumer._consumer = mock_kafka
         mock_producer = MagicMock()
         consumer._producer = mock_producer
 
         handler = AsyncMock(side_effect=ValueError("processing failed"))
-        await consumer.process_messages(handler)
+        with pytest.raises(asyncio.CancelledError):
+            await consumer.process_messages(handler)
 
         # DLQ send must have been called with the DLQ topic as first arg
         mock_producer.send.assert_called_once()
@@ -76,8 +92,7 @@ class TestProcessMessages:
         msg1 = _make_mock_message(event)
         msg2 = _make_mock_message(event)  # identical payload
 
-        mock_kafka = MagicMock()
-        mock_kafka.__iter__ = MagicMock(return_value=iter([msg1, msg2]))
+        mock_kafka = _mock_kafka_with_messages("raw-feed", [msg1, msg2])
         consumer._consumer = mock_kafka
         consumer._producer = MagicMock()
 
@@ -90,7 +105,8 @@ class TestProcessMessages:
                 return
             await handler(event_dict)
 
-        await consumer.process_messages(handle_with_dedup)
+        with pytest.raises(asyncio.CancelledError):
+            await consumer.process_messages(handle_with_dedup)
 
         # Handler invoked exactly once — second message was a duplicate
         handler.assert_called_once_with(event)
@@ -104,14 +120,14 @@ class TestProcessMessages:
         consumer = _make_consumer()
 
         msg = _make_mock_message({"id": "evt-schema-bad", "payload": {}})
-        mock_kafka = MagicMock()
-        mock_kafka.__iter__ = MagicMock(return_value=iter([msg]))
+        mock_kafka = _mock_kafka_with_messages("raw-feed", [msg])
         consumer._consumer = mock_kafka
         mock_producer = MagicMock()
         consumer._producer = mock_producer
 
         handler = AsyncMock(side_effect=SchemaViolationError("payload must not be empty"))
-        await consumer.process_messages(handler)
+        with pytest.raises(asyncio.CancelledError):
+            await consumer.process_messages(handler)
 
         # The message must land in the DLQ
         mock_producer.send.assert_called_once()

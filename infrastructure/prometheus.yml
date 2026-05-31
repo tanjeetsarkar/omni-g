@@ -9,12 +9,12 @@ scrape_configs:
 
   - job_name: 'aggregator'
     static_configs:
-      - targets: ['aggregator:8080']
+      - targets: ['localhost:8080']
     metrics_path: '/metrics'
 
   - job_name: 'processor'
     static_configs:
-      - targets: ['processor:8001']
+      - targets: ['localhost:8003']
     metrics_path: '/metrics'
 
   # Note: Kafka and Redis do not expose Prometheus metrics natively on their

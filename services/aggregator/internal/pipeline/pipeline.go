@@ -24,7 +24,7 @@ type Publisher interface {
 // SchemaValidator validates an event payload against the schema sidecar.
 // validation.Validator satisfies this interface.
 type SchemaValidator interface {
-	Validate(ctx context.Context, payload map[string]any) (*validation.ValidationResult, error)
+	Validate(ctx context.Context, source string, payload map[string]any) (*validation.ValidationResult, error)
 }
 
 // Pipeline validates and publishes events from MCP plugin content blocks.
@@ -55,21 +55,33 @@ func New(validator SchemaValidator, publisher Publisher, topic string, tenantID 
 // a validation failure and dropped without an error (the rejection is expected).
 func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string) error {
 	start := time.Now()
+	logger := log.With().
+		Str("source", source).
+		Str("plugin_name", pluginName).
+		Str("plugin_version", pluginVersion).
+		Str("topic", p.topic).
+		Str("tenant_id", p.tenantID).
+		Logger()
+
+	logger.Info().Msg("pipeline processing started")
+	logger.Debug().Interface("payload", payload).Msg("pipeline received payload")
 
 	// ── validate ──────────────────────────────────────────────────────────
-	result, err := p.validator.Validate(ctx, payload)
+	logger.Info().Msg("validating payload against sidecar schema")
+	result, err := p.validator.Validate(ctx, source, payload)
 	if err != nil {
-		log.Error().Str("source", source).Err(err).Msg("validation sidecar unreachable")
+		logger.Error().Err(err).Msg("validation sidecar unreachable")
 		metrics.IngestTotal.WithLabelValues(source, "validation_error").Inc()
 		return fmt.Errorf("validation sidecar: %w", err)
 	}
+	logger.Info().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation sidecar responded")
 
 	if !result.Valid {
 		reason := "schema_violation"
 		if len(result.Errors) > 0 {
 			reason = result.Errors[0].Field + ":" + result.Errors[0].Message
 		}
-		log.Warn().Str("source", source).Str("reason", reason).
+		logger.Warn().Str("reason", reason).Interface("validation_errors", result.Errors).
 			Msg("event failed schema validation, dropping")
 		metrics.ValidationFailureTotal.WithLabelValues(source, reason).Inc()
 		metrics.IngestTotal.WithLabelValues(source, "validation_failed").Inc()
@@ -77,6 +89,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	}
 
 	// ── publish ───────────────────────────────────────────────────────────
+	logger.Info().Msg("payload valid, building kafka event")
 	elapsed := time.Since(start).Milliseconds()
 	event := &kafkainternal.RawEvent{
 		ID:              uuid.New().String(),
@@ -89,8 +102,10 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		TenantID:        p.tenantID,
 	}
 
+	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
+
 	if err := p.publisher.Publish(ctx, event); err != nil {
-		log.Error().Str("source", source).Err(err).Msg("kafka publish failed")
+		logger.Error().Err(err).Msg("kafka publish failed")
 		metrics.KafkaPublishTotal.WithLabelValues(p.topic, "error").Inc()
 		metrics.IngestTotal.WithLabelValues(source, "publish_error").Inc()
 		return fmt.Errorf("publish event: %w", err)
@@ -99,6 +114,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	metrics.KafkaPublishTotal.WithLabelValues(p.topic, "ok").Inc()
 	metrics.IngestTotal.WithLabelValues(source, "published").Inc()
 	metrics.EventProcessingDuration.Observe(time.Since(start).Seconds())
+	logger.Info().Str("event_id", event.ID).Int64("ingest_latency_ms", elapsed).Msg("pipeline processing completed")
 
 	return nil
 }
@@ -106,6 +122,9 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 // ProcessBlock parses a ContentBlock's text as a JSON payload and forwards it
 // to Process. Malformed JSON is dropped and logged.
 func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string) error {
+	log.Info().Str("source", source).Str("plugin_name", pluginName).Msg("processing content block")
+	log.Debug().Str("source", source).Str("content_block_text", text).Msg("received content block text")
+
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		log.Warn().Str("source", source).Str("text", text).
@@ -113,5 +132,6 @@ func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string,
 		metrics.IngestTotal.WithLabelValues(source, "parse_error").Inc()
 		return nil // non-fatal
 	}
+	log.Debug().Str("source", source).Interface("payload", payload).Msg("parsed content block JSON payload")
 	return p.Process(ctx, source, payload, pluginName, pluginVersion)
 }

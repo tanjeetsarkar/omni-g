@@ -100,16 +100,20 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the echo payload.
+	// "data" satisfies the validator's requirement for at least one of:
+	// text, content, data, url.
+	echoSource := params.Arguments["source"]
+	if echoSource == nil {
+		echoSource = "echo-plugin"
+	}
+	echoData := params.Arguments["payload"]
+	if echoData == nil {
+		echoData = map[string]any{}
+	}
 	echoPayload := map[string]any{
-		"source":    params.Arguments["source"],
-		"payload":   params.Arguments["payload"],
+		"source":    echoSource,
+		"data":      echoData,
 		"echoed_at": time.Now().UTC().Format(time.RFC3339),
-	}
-	if echoPayload["source"] == nil {
-		echoPayload["source"] = "echo-plugin"
-	}
-	if echoPayload["payload"] == nil {
-		echoPayload["payload"] = map[string]any{}
 	}
 
 	echoText, _ := json.Marshal(echoPayload)

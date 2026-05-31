@@ -12,12 +12,18 @@
  */
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
+import ActivityDrawer from "@/components/graph/ActivityDrawer";
 import AlertBadge from "@/components/graph/AlertBadge";
+import FilterToolbar from "@/components/graph/FilterToolbar";
 import FocusPanel from "@/components/graph/FocusPanel";
 import { useAlertHighlight } from "@/hooks/useAlertHighlight";
 import { useGraphData } from "@/hooks/useGraphData";
+import { useGraphFilter } from "@/hooks/useGraphFilter";
+import { useSemanticZoom } from "@/hooks/useSemanticZoom";
+import { buildClusterGraph } from "@/lib/buildClusterGraph";
 import { getSocket, joinTenant } from "@/lib/socket";
 
 // GraphView uses Sigma.js (WebGL) — must be client-only, no SSR
@@ -32,11 +38,49 @@ const GraphView = dynamic(() => import("@/components/graph/GraphView"), {
   ),
 });
 
-export default function DashboardPage() {
+function DashboardContent() {
   const socket = getSocket();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
+
   const { nodes, edges, loading, error } = useGraphData();
   const { highlightedNodeIds, alertCount } = useAlertHighlight(socket);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  // Semantic zoom
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sigmaRef = useRef<any>(null);
+  const [, setSigmaReady] = useState(false);
+  const { isClustered } = useSemanticZoom(sigmaRef);
+
+  // Filter state
+  const {
+    filteredNodes,
+    filteredEdges,
+    filterState,
+    availableTypes,
+    toggleType,
+    setMinConfidence,
+    setSearchQuery,
+    resetFilters,
+  } = useGraphFilter(nodes, edges);
+
+  // Cluster graph (computed when camera is zoomed out)
+  const { clusterNodes, clusterEdges } = useMemo(
+    () => buildClusterGraph(filteredNodes, filteredEdges),
+    [filteredNodes, filteredEdges],
+  );
+
+  const displayNodes = isClustered ? clusterNodes : filteredNodes;
+  const displayEdges = isClustered ? clusterEdges : filteredEdges;
+
+  // Pre-fill filter search from ?q= URL param on mount.
+  useEffect(() => {
+    if (initialQuery) {
+      setSearchQuery(initialQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery]);
 
   // Join the default tenant room on mount
   useEffect(() => {
@@ -45,7 +89,10 @@ export default function DashboardPage() {
   }, []);
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100">
+    <div
+      className="flex flex-col h-screen bg-slate-950 text-slate-100"
+      data-testid="dashboard-content"
+    >
       {/* ── Top Bar ───────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-700 shrink-0">
         <div className="flex items-center gap-3">
@@ -56,6 +103,18 @@ export default function DashboardPage() {
         </div>
         <AlertBadge count={alertCount} />
       </header>
+
+      {/* Filter Toolbar */}
+      <FilterToolbar
+        availableTypes={availableTypes}
+        filterState={filterState}
+        onToggleType={toggleType}
+        onConfidenceChange={setMinConfidence}
+        onSearchChange={setSearchQuery}
+        onReset={resetFilters}
+        shownNodes={filteredNodes.length}
+        totalNodes={nodes.length}
+      />
 
       {/* ── Main Area ─────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
@@ -75,11 +134,15 @@ export default function DashboardPage() {
           )}
           {!loading && (
             <GraphView
-              nodes={nodes}
-              edges={edges}
+              nodes={displayNodes}
+              edges={displayEdges}
               highlightedNodeIds={highlightedNodeIds}
               selectedNodeId={selectedNodeId}
               onNodeClick={setSelectedNodeId}
+              onSigmaReady={(s) => {
+                sigmaRef.current = s;
+                setSigmaReady(true);
+              }}
               className="w-full h-full"
             />
           )}
@@ -92,6 +155,17 @@ export default function DashboardPage() {
           onClose={() => setSelectedNodeId(null)}
         />
       </div>
+
+      {/* ── Pipeline Activity Drawer ───────────────────────────────────── */}
+      <ActivityDrawer socket={socket} />
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardContent />
+    </Suspense>
   );
 }

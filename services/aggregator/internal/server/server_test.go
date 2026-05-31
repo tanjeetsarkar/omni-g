@@ -22,7 +22,7 @@ func testConfig() *config.Config {
 
 // newTestServer creates a Server with nil optional dependencies (health-only).
 func newTestServer() *server.Server {
-	return server.New(testConfig(), nil, nil, nil)
+	return server.New(testConfig(), nil, nil, nil, nil)
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -98,7 +98,7 @@ func TestMCPToolsEndpoint_WithRegisteredTools(t *testing.T) {
 	h := mcp.NewHandler()
 	h.RegisterTool(mcp.Tool{Name: "echo", Description: "echo tool"})
 
-	srv := server.New(testConfig(), nil, nil, h)
+	srv := server.New(testConfig(), nil, nil, h, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp/tools", nil)
 	rec := httptest.NewRecorder()

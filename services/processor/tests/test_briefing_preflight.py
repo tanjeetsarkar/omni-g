@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from src.processor.main import create_app
 
 
 def _settings(**overrides: object) -> Settings:
-    base = {
+    base: dict[str, Any] = {
         "LOG_LEVEL": "debug",
         "HTTP_PORT": 8001,
         "KAFKA_ENABLED": False,
