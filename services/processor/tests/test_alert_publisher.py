@@ -36,7 +36,7 @@ def _make_alert(**overrides: Any) -> AnalystAlert:
         source_event_id="evt-001",
     )
     base.update(overrides)
-    return AnalystAlert(**base)
+    return AnalystAlert(**cast(dict[str, Any], base))
 
 
 # ---------------------------------------------------------------------------

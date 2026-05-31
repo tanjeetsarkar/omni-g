@@ -9,6 +9,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from neo4j import AsyncDriver
 from prometheus_client import Counter, Histogram
 from qdrant_client import AsyncQdrantClient
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 # Module-level config
 # ---------------------------------------------------------------------------
 
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
 EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
 
 # ---------------------------------------------------------------------------
@@ -256,7 +259,7 @@ class EntityResolver:
         await self._ensure_collection(collection)
 
         text = f"{entity.type.value} {_get_entity_name(entity)}"
-        vector = self._embed(text)
+        vector = await self._embed(text)
         qdrant_id = _stix_id_to_qdrant_id(entity.id)
 
         await self._qdrant.upsert(
@@ -529,39 +532,59 @@ class EntityResolver:
             )
 
     # ------------------------------------------------------------------
-    # Embedding (placeholder — Phase 5 TODO)
+    # Embedding (Ollama nomic-embed-text)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _embed(text: str) -> list[float]:
-        """Delegate to the module-level :func:`_embed` function.
+    async def _embed(self, text: str) -> list[float]:
+        """Generate semantic embedding using local nomic-embed-text model on Ollama.
 
-        .. todo:: Phase 5 — Replace with a real embedding model, e.g.
-            ``sentence-transformers/all-MiniLM-L6-v2`` or a dedicated
-            embedding API endpoint, for semantically meaningful similarity.
+        Falls back on deterministic hash-based generator if Ollama is unreachable.
         """
-        return _embed(text)
+        base_url = OLLAMA_URL.rstrip("/")
+        url = f"{base_url}/api/embeddings"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    url,
+                    json={
+                        "model": EMBEDDING_MODEL,
+                        "prompt": text,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                embedding = data.get("embedding")
+                if embedding and isinstance(embedding, list):
+                    vector = [float(v) for v in embedding if isinstance(v, int | float)]
+                    if len(vector) < self._embedding_dim:
+                        return vector + [0.0] * (self._embedding_dim - len(vector))
+                    return vector[: self._embedding_dim]
+                logger.warning(
+                    "invalid_ollama_embedding_response_structure", extra={"response": data}
+                )
+        except Exception as exc:
+            logger.warning(
+                "ollama_embedding_failed_using_fallback_hash",
+                extra={"error": str(exc), "url": url, "model": EMBEDDING_MODEL},
+            )
+
+        return _embed(text, self._embedding_dim)
 
 
-def _embed(text: str) -> list[float]:
+def _embed(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
     """Generate a deterministic hash-based float vector for *text*.
 
     Each byte of successive SHA-256 blocks is mapped linearly to
-    the range ``[-1.0, 1.0]`` to fill a vector of length
-    :data:`EMBEDDING_DIM`.
-
-    .. todo:: Phase 5 — Replace with a real embedding model, e.g.
-        ``sentence-transformers/all-MiniLM-L6-v2`` or a dedicated
-        embedding API endpoint, for semantically meaningful similarity.
+    the range ``[-1.0, 1.0]`` to fill a vector of length *dim*.
     """
     seed = hashlib.sha256(text.encode()).digest()
     floats: list[float] = []
     block_idx = 0
-    while len(floats) < EMBEDDING_DIM:
+    while len(floats) < dim:
         block = hashlib.sha256(seed + block_idx.to_bytes(4, "big")).digest()
         for byte in block:
             floats.append((byte - 127.5) / 127.5)
-            if len(floats) >= EMBEDDING_DIM:
+            if len(floats) >= dim:
                 break
         block_idx += 1
-    return floats[:EMBEDDING_DIM]
+    return floats[:dim]

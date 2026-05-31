@@ -77,6 +77,15 @@ class RawEventConsumer:
 
     def start(self) -> None:
         """Connect to Kafka, create the DLQ producer, and begin subscribing."""
+        logger.info(
+            "Initialising Kafka consumer",
+            extra={
+                "topic": self._topic,
+                "group_id": self._group_id,
+                "brokers": self._brokers,
+                "dlq_topic": self._dlq_topic,
+            },
+        )
         self._producer = KafkaProducer(
             bootstrap_servers=self._brokers.split(","),
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -146,6 +155,10 @@ class RawEventConsumer:
         if self._consumer is None:
             raise RuntimeError("Consumer not started — call start() first")
         try:
+            logger.info(
+                "Kafka message processing loop started",
+                extra={"topic": self._topic, "group_id": self._group_id},
+            )
             while True:
                 msg_batch = self._consumer.poll(timeout_ms=200)
                 if not msg_batch:
@@ -153,14 +166,49 @@ class RawEventConsumer:
                     continue
                 for messages in msg_batch.values():
                     for msg in messages:
+                        logger.info(
+                            "Kafka message received",
+                            extra={
+                                "topic": self._topic,
+                                "partition": msg.partition,
+                                "offset": msg.offset,
+                            },
+                        )
+                        logger.debug(
+                            "Kafka message payload",
+                            extra={
+                                "topic": self._topic,
+                                "partition": msg.partition,
+                                "offset": msg.offset,
+                                "payload": msg.value,
+                            },
+                        )
                         with PROCESSING_LATENCY.labels(topic=self._topic).time():
                             try:
                                 await handler(msg.value)
                             except Exception as exc:
+                                logger.warning(
+                                    "Kafka message handler failed; routing to DLQ",
+                                    extra={
+                                        "topic": self._topic,
+                                        "partition": msg.partition,
+                                        "offset": msg.offset,
+                                        "error_type": type(exc).__name__,
+                                        "error": str(exc),
+                                    },
+                                )
                                 await self._send_to_dlq(msg, exc)
                                 DLQ_EVENTS.labels(reason=type(exc).__name__).inc()
                                 EVENTS_CONSUMED.labels(topic=self._topic, status="dlq").inc()
                             else:
+                                logger.info(
+                                    "Kafka message processed successfully",
+                                    extra={
+                                        "topic": self._topic,
+                                        "partition": msg.partition,
+                                        "offset": msg.offset,
+                                    },
+                                )
                                 EVENTS_CONSUMED.labels(topic=self._topic, status="success").inc()
                             finally:
                                 # Commit regardless of processing outcome so the offset advances.
@@ -169,6 +217,14 @@ class RawEventConsumer:
                                 # the deduplicator will suppress any replay after the rebalance.
                                 try:
                                     self._consumer.commit()
+                                    logger.debug(
+                                        "Kafka offset committed",
+                                        extra={
+                                            "topic": self._topic,
+                                            "partition": msg.partition,
+                                            "offset": msg.offset,
+                                        },
+                                    )
                                 except CommitFailedError:
                                     logger.warning(
                                         "Offset commit failed due to consumer group rebalance "
@@ -181,6 +237,7 @@ class RawEventConsumer:
                                     )
                 await asyncio.sleep(0)
         except (KeyboardInterrupt, asyncio.CancelledError):
+            logger.info("Kafka message processing loop stopping", extra={"topic": self._topic})
             self.stop()
             raise
 
@@ -204,6 +261,10 @@ class RawEventConsumer:
             "partition": msg.partition,
             "offset": msg.offset,
         }
+        logger.debug(
+            "DLQ payload",
+            extra={"dlq_topic": self._dlq_topic, "payload": dlq_payload},
+        )
         self._producer.send(self._dlq_topic, dlq_payload)
         logger.warning(
             "Event sent to DLQ",

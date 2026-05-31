@@ -62,6 +62,7 @@ class AlertPublisher:
         from kafka import KafkaProducer
 
         self._topic = topic
+        logger.info("Initialising AlertPublisher", extra={"topic": topic, "brokers": brokers})
         self._producer: Any = KafkaProducer(
             bootstrap_servers=brokers.split(","),
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -71,6 +72,10 @@ class AlertPublisher:
         """Serialize *alert* to JSON and send it to the configured Kafka topic."""
         try:
             payload = json.loads(alert.model_dump_json())
+            logger.debug(
+                "alert_publish_payload",
+                extra={"topic": self._topic, "payload": payload},
+            )
             self._producer.send(self._topic, payload)
             ALERTS_PUBLISHED.labels(tenant_id=alert.tenant_id).inc()
             logger.info(
@@ -92,5 +97,7 @@ class AlertPublisher:
 
     def close(self) -> None:
         """Flush pending messages and close the underlying producer."""
+        logger.info("Closing AlertPublisher", extra={"topic": self._topic})
         self._producer.flush()
         self._producer.close()
+        logger.info("AlertPublisher closed", extra={"topic": self._topic})

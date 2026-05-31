@@ -156,6 +156,9 @@ class ProcessingPipeline:
         self._stage_publisher = stage_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
+        logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
+        logger.debug("pipeline_input_event", extra={"event": event})
+
         # ── Step 1: Schema validation ──────────────────────────────────────
         logger.info(
             "pipeline_stage_start",
@@ -166,6 +169,10 @@ class ProcessingPipeline:
             envelope = RawEventEnvelope.model_validate(event)
         except PydanticValidationError as exc:
             SCHEMA_VIOLATIONS.inc()
+            logger.warning(
+                "pipeline_schema_validation_failed",
+                extra={"event_id": event.get("id", ""), "error": str(exc)},
+            )
             raise SchemaViolationError(str(exc)) from exc
         PIPELINE_STAGE_DURATION.labels(stage="schema_validation").observe(time.monotonic() - t0)
         logger.info(
@@ -191,8 +198,8 @@ class ProcessingPipeline:
         PIPELINE_STAGE_DURATION.labels(stage="deduplication").observe(time.monotonic() - t0)
         if dedup_result.is_duplicate:
             DEDUP_DROPS.labels(tenant_id=envelope.tenant_id).inc()
-            logger.debug(
-                "Duplicate event dropped",
+            logger.info(
+                "pipeline_duplicate_event_dropped",
                 extra={"event_id": envelope.id, "tenant_id": envelope.tenant_id},
             )
             return None
@@ -226,6 +233,14 @@ class ProcessingPipeline:
             "source_type": envelope.payload.get("source_type", "general"),
         }
         extraction = await self._extractor.extract(envelope.id, text, metadata)
+        logger.debug(
+            "pipeline_extraction_payload",
+            extra={
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+                "extraction": extraction.model_dump(mode="json"),
+            },
+        )
         PIPELINE_STAGE_DURATION.labels(stage="llm_extraction").observe(time.monotonic() - t0)
         if self._stage_publisher:
             self._stage_publisher.publish(envelope.id, envelope.tenant_id, "llm_extraction", "done")
@@ -257,6 +272,14 @@ class ProcessingPipeline:
                 )
             t0 = time.monotonic()
             for entity in extraction.all_entities():
+                logger.debug(
+                    "pipeline_entity_resolution_input",
+                    extra={
+                        "event_id": envelope.id,
+                        "tenant_id": envelope.tenant_id,
+                        "entity": entity.model_dump(mode="json"),
+                    },
+                )
                 await self._resolver.resolve_and_persist(envelope.tenant_id, entity)
             PIPELINE_STAGE_DURATION.labels(stage="entity_resolution").observe(time.monotonic() - t0)
             logger.info(
@@ -288,6 +311,14 @@ class ProcessingPipeline:
                 )
             t0 = time.monotonic()
             await self._graph_persistence.persist_extraction(extraction, envelope.tenant_id)
+            logger.debug(
+                "pipeline_graph_persistence_payload",
+                extra={
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "extraction": extraction.model_dump(mode="json"),
+                },
+            )
             PIPELINE_STAGE_DURATION.labels(stage="graph_persistence").observe(time.monotonic() - t0)
             logger.info(
                 "pipeline_stage_done",
@@ -318,6 +349,14 @@ class ProcessingPipeline:
                 )
             t0 = time.monotonic()
             for entity_id in [e.id for e in extraction.all_entities()]:
+                logger.debug(
+                    "pipeline_graphrag_incremental_input",
+                    extra={
+                        "event_id": envelope.id,
+                        "tenant_id": envelope.tenant_id,
+                        "entity_id": entity_id,
+                    },
+                )
                 await self._graphrag_indexer.index_incremental(entity_id, envelope.tenant_id)
             PIPELINE_STAGE_DURATION.labels(stage="graphrag_index").observe(time.monotonic() - t0)
             logger.info(
@@ -357,6 +396,14 @@ class ProcessingPipeline:
                 confidence=extraction.extraction_confidence,
                 source_event_id=envelope.id,
             )
+            logger.debug(
+                "pipeline_alert_payload",
+                extra={
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "alert": alert.model_dump(mode="json"),
+                },
+            )
             await self._alert_publisher.publish(alert)
             PIPELINE_STAGE_DURATION.labels(stage="alert_publishing").observe(time.monotonic() - t0)
             logger.info(
@@ -368,4 +415,12 @@ class ProcessingPipeline:
                 },
             )
 
+        logger.info(
+            "pipeline_run_done",
+            extra={
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+                "confidence": extraction.extraction_confidence,
+            },
+        )
         return extraction

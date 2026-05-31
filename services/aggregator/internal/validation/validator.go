@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ErrorDetail is a single structured validation error from the sidecar.
@@ -45,6 +47,10 @@ func NewValidator(baseURL string) *Validator {
 
 // Validate sends the source+payload envelope to the sidecar and returns the result.
 func (v *Validator) Validate(ctx context.Context, source string, payload map[string]any) (*ValidationResult, error) {
+	logger := log.With().Str("source", source).Str("validation_url", v.baseURL+"/validate").Logger()
+	logger.Info().Msg("sending payload to validation sidecar")
+	logger.Debug().Interface("payload", payload).Msg("validation request payload")
+
 	body, err := json.Marshal(validateRequest{Source: source, Payload: payload})
 	if err != nil {
 		return nil, fmt.Errorf("marshal validate request: %w", err)
@@ -62,15 +68,25 @@ func (v *Validator) Validate(ctx context.Context, source string, payload map[str
 	}
 	defer resp.Body.Close()
 
+	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read validation response: %w", err)
+	}
+	logger.Debug().Int("status_code", resp.StatusCode).Str("response_body", string(rawBody)).Msg("validation sidecar response received")
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, raw)
+		if len(rawBody) > 4096 {
+			rawBody = rawBody[:4096]
+		}
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, rawBody)
 	}
 
 	var result ValidationResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(rawBody, &result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	logger.Info().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation completed")
 
 	return &result, nil
 }

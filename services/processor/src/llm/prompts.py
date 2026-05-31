@@ -86,6 +86,46 @@ class PromptRegistry:
         "Return JSON with threat_actors and malware arrays."
     )
 
+    ID_BINDING_INSTRUCTIONS: str = (
+        "\n\n=== CRITICAL STRUCTURAL & ID BINDING RULES ===\n"
+        "1. Every extracted entity must be assigned a unique temporary ID "
+        "(e.g., 'id-1', 'id-2') in its 'id' field.\n"
+        "2. When extracting relationships, the 'source_ref' and 'target_ref' "
+        "fields MUST match the temporary 'id' values of the corresponding "
+        "entities exactly.\n"
+        "3. Never output null for critical fields. Do NOT use null/None where "
+        "empty arrays/strings or default placeholders can be used.\n"
+        "4. Your output must strictly match the few-shot JSON structure example below.\n\n"
+        "=== FEW-SHOT STRUCTURAL JSON EXAMPLE ===\n"
+        "{\n"
+        '  "threat_actors": [\n'
+        "    {\n"
+        '      "id": "id-1",\n'
+        '      "name": "APT28",\n'
+        '      "aliases": ["Fancy Bear"],\n'
+        '      "threat_actor_types": ["nation-state"],\n'
+        '      "description": "Russian military intelligence group"\n'
+        "    }\n"
+        "  ],\n"
+        '  "locations": [\n'
+        "    {\n"
+        '      "id": "id-2",\n'
+        '      "name": "Moscow",\n'
+        '      "country": "Russia"\n'
+        "    }\n"
+        "  ],\n"
+        '  "relationships": [\n'
+        "    {\n"
+        '      "relationship_type": "located-at",\n'
+        '      "source_ref": "id-1",\n'
+        '      "target_ref": "id-2",\n'
+        '      "description": "APT28 is located-at Moscow, Russia.",\n'
+        '      "confidence": 95\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
     # ── Version registry for future A/B testing ──────────────────────────────
     _PROMPT_VERSIONS: dict[str, list[str]] = {
         "general": ["general-v1"],
@@ -107,4 +147,5 @@ class PromptRegistry:
             "news": cls.SYSTEM_PROMPT_NEWS,
             "threat_intel": cls.SYSTEM_PROMPT_THREAT_INTEL,
         }
-        return mapping.get(source_type, cls.SYSTEM_PROMPT_GENERAL)
+        base_prompt = mapping.get(source_type, cls.SYSTEM_PROMPT_GENERAL)
+        return f"{base_prompt}{cls.ID_BINDING_INSTRUCTIONS}"

@@ -1,7 +1,7 @@
 # Omni-G Roadmap (Milestone-Based)
 
 **Last Updated:** May 23, 2026
-**Status:** M1 In Progress · M2–M4 Complete · M5 In Progress · M6 Not Started
+**Status:** M1 In Progress · M2–M5 Complete · M6 Not Started
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
 
@@ -371,14 +371,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M5.3: Audio Briefing Pipeline
-- [ ] Create GraphRAG → briefing script generation
-- [ ] Implement Kokoro TTS synthesis (fallback: ElevenLabs API)
-- [ ] Store audio files in MinIO
-- [ ] Schedule briefings:
+- [x] Create GraphRAG → briefing script generation
+- [x] Implement Kokoro TTS synthesis (fallback: ElevenLabs API)
+- [x] Store audio files in MinIO
+- [x] Schedule briefings:
   - Daily summary at 08:00 user timezone
   - On-demand alerts
-- [ ] Generate secure signed URLs for download
-- [ ] Create comprehensive tests
+- [x] Generate secure signed URLs for download
+- [x] Create comprehensive tests
 
 **Dependencies:** M4.3, M1.3 (MinIO), M2.2
 **Verification:**

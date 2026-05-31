@@ -84,6 +84,8 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchID := uuid.New().String()
+	log.Info().Str("search_id", searchID).Msg("received /search request")
+	log.Debug().Str("search_id", searchID).Interface("request", req).Msg("search request payload")
 
 	// If no sources specified, use all configured plugins.
 	sources := req.Sources
@@ -125,6 +127,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		go func(src string, srcURL string, c *mcp.Client, tool string) {
+			log.Info().Str("search_id", searchID).Str("source", src).Str("tool", tool).Msg("starting search source fan-out")
 			count := h.callPlugin(bgCtx, searchID, src, srcURL, c, tool, req.Query)
 			resultCh <- result{source: src, count: count}
 		}(source, pluginURL, client, toolName)
@@ -144,6 +147,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		EventsQueued:   total,
 		QueuedBySource: bySource,
 	})
+	log.Info().Str("search_id", searchID).Int("events_queued", total).Interface("queued_by_source", bySource).Msg("/search request completed")
 }
 
 // callPlugin calls a single tool and forwards each content block into the
@@ -158,6 +162,8 @@ func (h *SearchHandler) callPlugin(
 	query string,
 ) int {
 	logger := log.With().Str("search_id", searchID).Str("source", sourceName).Logger()
+	logger.Info().Str("tool", toolName).Str("plugin_url", sourceURL).Msg("calling search plugin tool")
+	logger.Debug().Str("query", query).Msg("search query payload")
 
 	ch, err := client.CallTool(ctx, toolName, map[string]any{"query": query})
 	if err != nil {
@@ -167,6 +173,7 @@ func (h *SearchHandler) callPlugin(
 
 	count := 0
 	for block := range ch {
+		logger.Debug().Interface("content_block", block).Msg("received search content block")
 		if block.Type != mcp.ContentTypeText || block.Text == "" {
 			continue
 		}

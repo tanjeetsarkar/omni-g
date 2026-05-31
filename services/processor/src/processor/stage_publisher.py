@@ -33,6 +33,7 @@ class StageEventPublisher:
         from kafka import KafkaProducer
 
         self._topic = topic
+        logger.info("Initialising StageEventPublisher", extra={"topic": topic, "brokers": brokers})
         self._producer: Any = KafkaProducer(
             bootstrap_servers=brokers.split(","),
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
@@ -53,7 +54,22 @@ class StageEventPublisher:
                 stage=stage,
                 status=status,
             )
-            self._producer.send(self._topic, json.loads(ev.model_dump_json()))
+            payload = json.loads(ev.model_dump_json())
+            logger.debug(
+                "stage_event_publish_payload",
+                extra={"topic": self._topic, "payload": payload},
+            )
+            self._producer.send(self._topic, payload)
+            logger.info(
+                "stage_event_published",
+                extra={
+                    "event_id": event_id,
+                    "tenant_id": tenant_id,
+                    "stage": stage,
+                    "status": status,
+                    "topic": self._topic,
+                },
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "stage_event_publish_failed",
@@ -61,4 +77,6 @@ class StageEventPublisher:
             )
 
     def close(self) -> None:
+        logger.info("Closing StageEventPublisher", extra={"topic": self._topic})
         self._producer.close()
+        logger.info("StageEventPublisher closed", extra={"topic": self._topic})
