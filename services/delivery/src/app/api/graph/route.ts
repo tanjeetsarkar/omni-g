@@ -9,8 +9,20 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { isInt, type Integer } from "neo4j-driver";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 import { getDriver } from "@/lib/neo4j";
+
+/**
+ * Coerce a Neo4j Integer object ({low, high}) to a plain JS number.
+ * Floats and plain numbers pass through unchanged. Null/undefined → undefined.
+ */
+function toNum(val: unknown): number | undefined {
+  if (val == null) return undefined;
+  if (isInt(val)) return (val as Integer).toNumber();
+  if (typeof val === "number") return val;
+  return undefined;
+}
 
 const STIX_COLORS: Record<string, string> = {
   "threat-actor": "#ef4444",
@@ -60,9 +72,9 @@ export async function GET(req: NextRequest) {
               id,
               label: n.properties.name ?? n.properties.id ?? id,
               stixType,
-              communityId: n.properties.community_id ?? undefined,
+              communityId: toNum(n.properties.community_id),
               communitySummary: n.properties.community_summary ?? undefined,
-              confidence: n.properties.confidence ?? undefined,
+              confidence: toNum(n.properties.confidence),
               x: randomCoord(),
               y: randomCoord(),
               size: 6,
@@ -79,9 +91,9 @@ export async function GET(req: NextRequest) {
               id,
               label: m.properties.name ?? m.properties.id ?? id,
               stixType,
-              communityId: m.properties.community_id ?? undefined,
+              communityId: toNum(m.properties.community_id),
               communitySummary: m.properties.community_summary ?? undefined,
-              confidence: m.properties.confidence ?? undefined,
+              confidence: toNum(m.properties.confidence),
               x: randomCoord(),
               y: randomCoord(),
               size: 6,
@@ -103,6 +115,7 @@ export async function GET(req: NextRequest) {
               source: sourceId,
               target: targetId,
               label: r.type,
+              confidence: toNum(r.properties?.confidence),
             });
           }
         }

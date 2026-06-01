@@ -12,7 +12,7 @@ export interface GraphNode {
   stixType?: string;
   confidence?: number;
   communitySummary?: string;
-  communityId?: string;
+  communityId?: number;
 }
 
 export interface GraphEdge {
@@ -20,4 +20,6 @@ export interface GraphEdge {
   source: string;
   target: string;
   label?: string;
+  /** Confidence score [0.0–1.0] from the resolved relationship — drives SVG path colour in ConceptFlowView */
+  confidence?: number;
 }

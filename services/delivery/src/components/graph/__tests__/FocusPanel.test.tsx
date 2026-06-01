@@ -25,39 +25,88 @@ const mockNodes: GraphNode[] = [
 
 describe("FocusPanel", () => {
   it("shows placeholder when nodeId is null", () => {
-    render(<FocusPanel nodeId={null} nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId={null}
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText(/click a node to inspect/i)).toBeInTheDocument();
   });
 
   it("shows node label when nodeId is provided", () => {
-    render(<FocusPanel nodeId="n1" nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId="n1"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText("Emotet")).toBeInTheDocument();
   });
 
   it("shows STIX type badge for the selected node", () => {
-    render(<FocusPanel nodeId="n1" nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId="n1"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText("malware")).toBeInTheDocument();
   });
 
   it("shows confidence percentage", () => {
-    render(<FocusPanel nodeId="n1" nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId="n1"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText(/85%/)).toBeInTheDocument();
   });
 
   it("shows community summary", () => {
-    render(<FocusPanel nodeId="n1" nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId="n1"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText("Commodity malware family.")).toBeInTheDocument();
   });
 
   it("calls onClose when close button is clicked", () => {
     const onClose = jest.fn();
-    render(<FocusPanel nodeId="n1" nodes={mockNodes} onClose={onClose} />);
+    render(
+      <FocusPanel
+        nodeId="n1"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={onClose}
+      />,
+    );
     screen.getByRole("button", { name: /close panel/i }).click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("shows different node when nodeId changes to n2", () => {
-    render(<FocusPanel nodeId="n2" nodes={mockNodes} onClose={jest.fn()} />);
+    render(
+      <FocusPanel
+        nodeId="n2"
+        nodes={mockNodes}
+        tenantId="test"
+        onClose={jest.fn()}
+      />,
+    );
     expect(screen.getByText("APT28")).toBeInTheDocument();
   });
 });

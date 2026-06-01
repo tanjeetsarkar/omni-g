@@ -23,10 +23,10 @@ export function buildClusterGraph(
   edges: GraphEdge[],
 ): { clusterNodes: GraphNode[]; clusterEdges: GraphEdge[] } {
   // ── Group nodes by communityId ─────────────────────────────────────────────
-  const communities = new Map<string, GraphNode[]>();
+  const communities = new Map<string | number, GraphNode[]>();
 
   for (const node of nodes) {
-    const cid = node.communityId ?? `__solo__${node.id}`;
+    const cid: string | number = node.communityId ?? `__solo__${node.id}`;
     const group = communities.get(cid);
     if (group) {
       group.push(node);
@@ -69,13 +69,13 @@ export function buildClusterGraph(
 
     clusterNodes.push({
       id: clusterNodeId,
-      label: `${dominantType ?? cid} (${members.length})`,
+      label: `${dominantType ?? String(cid)} (${members.length})`,
       x: sumX / members.length,
       y: sumY / members.length,
       size: totalSize,
       color: STIX_COLORS[dominantType ?? ""] ?? "#6366f1",
       stixType: dominantType,
-      communityId: cid,
+      communityId: typeof cid === "number" ? cid : undefined,
       communitySummary: members[0]?.communitySummary,
     });
 

@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document outlines the complete 6-phase implementation strategy for Omni-G—a distributed, event-driven Knowledge Graph platform for the Intelligence Community. The plan spans from infrastructure setup through security hardening and production deployment.
+This document outlines the complete 6-phase implementation strategy for Omni-G—a distributed, event-driven Knowledge Graph platform for general intelligence gathering across any domain. The plan spans from infrastructure setup through security hardening and production deployment.
 
 ## Phase 1: Foundation & Infrastructure ✅ IN PROGRESS
 
@@ -113,7 +113,7 @@ This document outlines the complete 6-phase implementation strategy for Omni-G�
 
 - **LLM Extraction:**
   - Instructor-based prompt engineering
-  - Pydantic STIX 2.1 model output
+  - Pydantic generic entity model output (LLM determines entity type: Person, Organization, Event, Location, Topic, Concept, etc.)
   - Fallback to Ollama if OpenAI unavailable
   - Confidence scoring + rate limiting
 
@@ -126,7 +126,7 @@ This document outlines the complete 6-phase implementation strategy for Omni-G�
 ### Verification Checklist
 - ✅ Raw event injected → Kafka `raw-feed` topic
 - ✅ Deduped in Redis with correct hash
-- ✅ Extracted to STIX object with confidence score
+- ✅ Extracted to generic entity with confidence score
 - ✅ Invalid schema → DLQ with error details
 - ✅ All pipeline steps logged with latency metrics
 
@@ -147,9 +147,9 @@ This document outlines the complete 6-phase implementation strategy for Omni-G�
   - False-positive rate monitoring
 
 - **Neo4j Graph Persistence:**
-  - Schema: nodes (Person, Org, Malware, Location, Campaign, AttackPattern)
-  - Edge types: attributed-to, targets, uses, located-at, etc.
-  - Index strategy: entity IDs, timestamps, confidence scores
+  - Schema: nodes with generic label `:Entity:{TypeLabel}:{tenant_label}` (Person, Organization, Location, Event, Topic, etc.)
+  - Edge types: open-ended strings (KNOWS, LOCATED_AT, PARTICIPATED_IN, ACQUIRED, RELATED_TO, etc.)
+  - Index strategy: entity IDs, tenant_id, type, timestamps, confidence scores
   - APOC procedures for community detection (Leiden/Louvain)
   - Transaction management + rollback on write failures
 
@@ -181,26 +181,33 @@ This document outlines the complete 6-phase implementation strategy for Omni-G�
   - Route alerts by tenant/subscription
   - Connection pooling + heartbeat management
 
-- **Interactive Graph Dashboard:**
-  - Sigma.js WebGL rendering (100k+ nodes)
-  - Force-directed layout algorithm
-  - Semantic zooming (aggregate → individual)
-  - Focus+Context filtering
-  - Real-time node/edge highlighting on alerts
-  - Performance: 50k+ node render in <500ms
+- **Search-First Graph Dashboard (React Flow):**
+  - Full-width search bar as entry point (no pre-loaded graph)
+  - `POST /api/search`: embed query → Qdrant semantic search → top-N entity IDs → fetch 1-2 hop Neo4j neighbors
+  - React Flow renders matched subgraph with custom inline node components
+  - Each node displays: type badge, name, confidence score, key properties (no sidebar)
+  - Click node → inline accordion expand for full properties
+  - dagre hierarchical layout for initial render
+  - Force re-simulation for incremental live updates
 
-- **Audio Briefing Pipeline:**
+- **Real-Time Graph Growth:**
+  - WebSocket delivers new entity events from `analyst-alerts`
+  - Connected nodes (linked to current graph) → animate into layout via force re-simulation
+  - Disconnected nodes → appear as floating incoming cluster at canvas edge
+
+- **Audio Briefing Pipeline (deprioritized):**
   - GraphRAG → briefing script generation
-  - Kokoro TTS synthesis (fallback: ElevenLabs)
+  - Kokoro TTS synthesis
   - Audio file storage in MinIO
-  - Scheduling: daily briefing + on-demand alerts
-  - Secure signed URLs for download
+  - Secure signed URLs for download via `/api/briefings`
 
 ### Verification Checklist
-- ✅ Dashboard loads 1000 nodes smoothly
-- ✅ WebSocket receives alerts in real-time
-- ✅ Audio file downloads without errors
-- ✅ Briefing script is grammatically correct
+- ✅ Search query returns relevant entities + neighbors as React Flow graph
+- ✅ Node components render type, name, confidence, key properties inline
+- ✅ WebSocket receives new entity alerts in real-time
+- ✅ Connected new entities animate into current layout
+- ✅ Disconnected new entities appear as floating cluster
+- ✅ <2s latency from search input to graph render
 - ✅ <2s latency from alert to UI update
 
 ---
@@ -226,12 +233,11 @@ This document outlines the complete 6-phase implementation strategy for Omni-G�
   - Output validation: malformed payload rejection
   - Audit logging: all plugin invocations
 
-- **STIX 2.1 Compliance & Audit Trail:**
-  - Map all nodes to STIX Domain Objects (SDOs)
-  - `created_by_ref` on every node (plugin + analyst ID)
-  - TAXII server for inter-agency sharing
-  - Immutable audit log for all mutations
-  - STIX bundle + TAXII feed exports
+- **Data Provenance & Audit Trail:**
+  - `source_id` + `plugin_version` on every entity node
+  - Immutable audit log for all mutations (timestamp, actor, action, entity, change)
+  - Confidence scores queryable from graph UI
+  - Export capabilities: JSON/CSV entity reports
 
 - **Observability & Alerting:**
   - Prometheus dashboards: Kafka lag, Neo4j latency, LLM tokens

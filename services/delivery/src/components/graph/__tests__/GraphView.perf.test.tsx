@@ -31,7 +31,7 @@ function generateNodes(count: number, numCommunities: number): GraphNode[] {
     size: 5 + (i % 10),
     stixType: STIX_TYPES[i % STIX_TYPES.length],
     confidence: 0.5 + (i % 100) / 200, // 0.5 – 1.0
-    communityId: `community-${i % numCommunities}`,
+    communityId: i % numCommunities,
   }));
 }
 

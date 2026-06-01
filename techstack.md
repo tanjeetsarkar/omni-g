@@ -46,14 +46,14 @@ A complete reference of every technology, library, and tool used across the Omni
 | Topic | Purpose |
 |-------|---------|
 | `raw-feed` | Raw ingested events from MCP plugins |
-| `processed-entities` | Extracted STIX entities from the Processor |
+| `processed-entities` | Extracted entities from the Processor |
 | `analyst-alerts` | High-priority alerts pushed to the Delivery layer |
 
 ### 3.2 Graph Database
 
 | Technology | Version / Image | Role |
 |-----------|----------------|------|
-| **Neo4j Community** | `neo4j:5.26.26-community` | Knowledge Graph store — nodes (Person, Org, Malware), edges (ATTRIBUTED_TO, TARGETS, USES) |
+| **Neo4j Community** | `neo4j:5.26.26-community` | Knowledge Graph store — nodes (Person, Organization, Location, Event, Topic), edges (KNOWS, LOCATED_AT, PARTICIPATED_IN, etc.) |
 | **APOC** | (plugin) | Stored procedures for Neo4j |
 
 > **Alternative:** `falkordb/falkordb:latest` — Redis-based graph DB, lower latency for high-throughput writes.
@@ -145,7 +145,6 @@ A complete reference of every technology, library, and tool used across the Omni
 | `instructor` | 1.7.0 | Structured LLM output extraction |
 | `openai` | 1.57.2 | OpenAI-compatible API client (used against Ollama) |
 | `sentence-transformers` | 3.3.1 | Local embedding generation |
-| `stix2` | 3.0.1 | STIX 2.x threat intelligence object serialization |
 
 ### 6.2 MCP Plugin SDK
 
@@ -182,11 +181,12 @@ A complete reference of every technology, library, and tool used across the Omni
 ### 8.2 Graph Visualization
 
 | Package | Version | Purpose |
-|---------|---------|---------|
-| `sigma` | 3.0.1 | WebGL-accelerated graph rendering |
-| `graphology` | 0.25.4 | In-memory graph data structure |
-| `graphology-layout-forceatlas2` | 0.10.1 | Force-directed graph layout algorithm |
-| `@nivo/network` | 0.88.0 | Network graph charts (D3-based) |
+|---------|---------|--------|
+| `@xyflow/react` | latest | React Flow — interactive node/edge canvas, custom node components, real-time layout updates |
+| `dagre` | latest | Hierarchical graph layout for initial render |
+| `elkjs` | latest | Alternative layout engine for complex graphs |
+
+> **Replaces:** `sigma` (Sigma.js), `graphology`, `graphology-layout-forceatlas2`, `@nivo/network` — removed in the delivery architecture pivot to search-first, inline-node UX.
 
 ### 8.3 Real-Time & UI
 
@@ -200,15 +200,7 @@ A complete reference of every technology, library, and tool used across the Omni
 
 ---
 
-## 9. Data Standards
-
-| Standard | Library | Purpose |
-|----------|---------|---------|
-| **STIX 2.x** | `stix2==3.0.1` | Structured Threat Information eXpression — canonical format for cyber threat entities and relationships |
-
----
-
-## 10. Security & Sandboxing
+## 9. Security & Sandboxing
 
 | Tool | Role |
 |------|------|
@@ -256,11 +248,10 @@ Aggregator (Go) ──────► Kafka (raw-feed) ──────► Pro
             WebSocket Gateway      Kokoro TTS
                     │
                     ▼
-           Next.js UI (Sigma.js)
+           Next.js UI (React Flow)
 ```
 
 **Cross-cutting concerns:**
 - Redis — deduplication and caching at every ingest stage
 - Prometheus + Grafana + Loki — observability across all services
-- STIX 2.x — canonical data format throughout the pipeline
 - OpenAI-compatible API contract — Processor talks to Ollama locally; swap to any cloud LLM without code changes
