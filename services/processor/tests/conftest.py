@@ -83,7 +83,7 @@ async def fake_deduplicator() -> AsyncGenerator[object]:
 @pytest.fixture()
 def mock_llm_extractor() -> AsyncMock:
     """Mock LLM extractor that returns an empty result."""
-    from src.models.stix import ExtractionResult
+    from src.models.entities import ExtractionResult
 
     mock = AsyncMock()
     mock.extract.return_value = ExtractionResult(

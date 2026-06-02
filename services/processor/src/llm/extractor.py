@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -15,18 +15,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ..models.stix import (
-    AttackPattern,
-    Campaign,
-    ExtractionResult,
-    Identity,
-    Indicator,
-    Location,
-    Malware,
-    Relationship,
-    STIXType,
-    ThreatActor,
-)
+from ..models.entities import Entity, ExtractionResult, Relationship
 from .prompts import PromptRegistry
 
 logger = logging.getLogger(__name__)
@@ -51,58 +40,21 @@ LLM_RATE_LIMIT_RPS: int = int(os.getenv("LLM_RATE_LIMIT_RPS", "10"))
 _SYSTEM_FALLBACK = PromptRegistry.SYSTEM_PROMPT_FALLBACK
 
 
-class _LLMEntityBase(BaseModel):
-    """Minimal base for LLM-extracted entities.
+class _LLMEntity(BaseModel):
+    """Generic LLM-extracted entity.
 
-    Only captures what a small model can reliably produce.
-    STIX IDs, created/modified timestamps are generated during normalisation.
+    The LLM assigns ``type`` freely from context (Person, Organization, Event, …).
+    STIX IDs and timestamps are generated during normalisation.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    id: str | None = None  # LLM's internal cross-ref (not a STIX UUID)
+    id: str | None = None  # LLM's internal cross-ref (not a real UUID)
+    type: str = "Unknown"  # LLM determines this freely
     name: str = "Unknown"
-    confidence: int | None = None
-
-
-class _LLMThreatActor(_LLMEntityBase):
-    aliases: list[str] = Field(default_factory=list)
-    threat_actor_types: list[str] = Field(default_factory=list)
     description: str | None = None
-
-
-class _LLMMalware(_LLMEntityBase):
-    malware_types: list[str] = Field(default_factory=list)
-    is_family: bool = False
-    description: str | None = None
-
-
-class _LLMIdentity(_LLMEntityBase):
-    identity_class: str = "unknown"
-    sectors: list[str] = Field(default_factory=list)
-
-
-class _LLMAttackPattern(_LLMEntityBase):
-    description: str | None = None
-
-
-class _LLMCampaign(_LLMEntityBase):
-    description: str | None = None
-
-
-class _LLMIndicator(_LLMEntityBase):
-    indicator_types: list[str] = Field(default_factory=list)
-    pattern: str | None = None
-    valid_from: str | None = None
-
-
-class _LLMLocation(_LLMEntityBase):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
-    country: str | None = None
-    region: str | None = None
-    latitude: float | None = Field(default=None, validation_alias=AliasChoices("latitude", "lat"))
-    longitude: float | None = Field(default=None, validation_alias=AliasChoices("longitude", "lon"))
+    confidence: float | None = None  # 0.0–1.0
+    properties: dict[str, Any] = Field(default_factory=dict)
 
 
 class _LLMRelationship(BaseModel):
@@ -110,9 +62,9 @@ class _LLMRelationship(BaseModel):
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    relationship_type: str = Field(
-        default="related-to",
-        validation_alias=AliasChoices("relationship_type", "type"),
+    type: str = Field(
+        default="RELATED_TO",
+        validation_alias=AliasChoices("type", "relationship_type"),
     )
     source_ref: str = Field(
         default="",
@@ -122,8 +74,7 @@ class _LLMRelationship(BaseModel):
         default="",
         validation_alias=AliasChoices("target_ref", "target_id"),
     )
-    description: str | None = None
-    confidence: int | None = None
+    confidence: float | None = None
 
     @field_validator("source_ref", "target_ref", mode="before")
     @classmethod
@@ -132,148 +83,45 @@ class _LLMRelationship(BaseModel):
 
 
 class _LLMEntities(BaseModel):
-    """Internal model used as instructor response_model.
+    """Internal model used as pydantic-ai output_type.
 
     Holds only the entity/relationship lists so the LLM never has to fill
     derived fields (source_event_id, extraction_confidence, plugin_*).
-    Uses simplified extraction types — STIX normalisation happens in
-    _normalize_llm_entities() after the LLM call.
     """
 
-    threat_actors: list[_LLMThreatActor] = Field(default_factory=list)
-    malware: list[_LLMMalware] = Field(default_factory=list)
-    identities: list[_LLMIdentity] = Field(default_factory=list)
-    attack_patterns: list[_LLMAttackPattern] = Field(default_factory=list)
-    campaigns: list[_LLMCampaign] = Field(default_factory=list)
-    indicators: list[_LLMIndicator] = Field(default_factory=list)
-    locations: list[_LLMLocation] = Field(default_factory=list)
+    entities: list[_LLMEntity] = Field(default_factory=list)
     relationships: list[_LLMRelationship] = Field(default_factory=list)
 
 
-def _parse_dt(value: str | None) -> datetime | None:
-    """Best-effort parse of a datetime string from LLM output."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
-
-
 def _normalize_llm_entities(raw: _LLMEntities) -> dict[str, list[Any]]:
-    """Convert simplified LLM extraction output into fully-valid STIX objects.
+    """Convert generic LLM extraction output into fully-validated Entity/Relationship objects.
 
-    Generates STIX-compliant UUIDs and timestamps, resolves internal cross-refs
-    in relationships, and drops relationships with unresolvable refs.
+    Generates UUID-based IDs, resolves internal cross-refs in relationships,
+    and drops relationships with unresolvable refs.
     """
     now = datetime.now(UTC)
     id_map: dict[str, str] = {}
 
-    def _make_id(stix_type: str, llm_id: str | None) -> str:
-        stix_id = f"{stix_type}--{uuid4()}"
+    def _make_id(llm_id: str | None) -> str:
+        entity_id = f"entity--{uuid4()}"
         if llm_id:
-            id_map[llm_id] = stix_id
-        return stix_id
+            id_map[llm_id] = entity_id
+        return entity_id
 
-    threat_actors = [
-        ThreatActor(
-            type=STIXType.THREAT_ACTOR,
-            id=_make_id("threat-actor", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            aliases=e.aliases,
-            threat_actor_types=e.threat_actor_types,
+    entities: list[Entity] = [
+        Entity(
+            id=_make_id(e.id),
+            type=e.type or "Unknown",
+            name=e.name or "Unknown",
             description=e.description,
-            confidence=e.confidence,
-        )
-        for e in raw.threat_actors
-    ]
-
-    malware = [
-        Malware(
-            type=STIXType.MALWARE,
-            id=_make_id("malware", e.id),
+            properties=e.properties,
+            confidence=e.confidence if e.confidence is not None else 0.5,
+            tenant_id="",  # filled in by the pipeline from the envelope
+            source_id=None,  # filled in by the pipeline from the envelope
             created=now,
             modified=now,
-            name=e.name,
-            malware_types=e.malware_types,
-            is_family=e.is_family,
-            description=e.description,
-            confidence=e.confidence,
         )
-        for e in raw.malware
-    ]
-
-    identities = [
-        Identity(
-            type=STIXType.IDENTITY,
-            id=_make_id("identity", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            identity_class=e.identity_class,
-            sectors=e.sectors,
-            confidence=e.confidence,
-        )
-        for e in raw.identities
-    ]
-
-    attack_patterns = [
-        AttackPattern(
-            type=STIXType.ATTACK_PATTERN,
-            id=_make_id("attack-pattern", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            description=e.description,
-            confidence=e.confidence,
-        )
-        for e in raw.attack_patterns
-    ]
-
-    campaigns = [
-        Campaign(
-            type=STIXType.CAMPAIGN,
-            id=_make_id("campaign", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            description=e.description,
-            confidence=e.confidence,
-        )
-        for e in raw.campaigns
-    ]
-
-    indicators = [
-        Indicator(
-            type=STIXType.INDICATOR,
-            id=_make_id("indicator", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            indicator_types=e.indicator_types,
-            pattern=e.pattern or "[unknown:value = 'unknown']",
-            valid_from=_parse_dt(e.valid_from) or now,
-            confidence=e.confidence,
-        )
-        for e in raw.indicators
-    ]
-
-    locations = [
-        Location(
-            type=STIXType.LOCATION,
-            id=_make_id("location", e.id),
-            created=now,
-            modified=now,
-            name=e.name,
-            country=e.country,
-            region=e.region,
-            latitude=e.latitude,
-            longitude=e.longitude,
-            confidence=e.confidence,
-        )
-        for e in raw.locations
+        for e in raw.entities
     ]
 
     relationships: list[Relationship] = []
@@ -285,28 +133,23 @@ def _normalize_llm_entities(raw: _LLMEntities) -> dict[str, list[Any]]:
                 "Dropping relationship with unresolvable ref: %s → %s", r.source_ref, r.target_ref
             )
             continue
+        # Normalise relationship type to UPPER_SNAKE_CASE
+        rel_type = re.sub(r"[^a-zA-Z0-9_]", "_", r.type).upper() if r.type else "RELATED_TO"
         relationships.append(
             Relationship(
-                type="relationship",
                 id=f"relationship--{uuid4()}",
-                created=now,
-                modified=now,
-                relationship_type=r.relationship_type,
+                type=rel_type,
                 source_ref=src,
                 target_ref=tgt,
-                description=r.description,
-                confidence=r.confidence,
+                confidence=r.confidence if r.confidence is not None else 0.5,
+                tenant_id="",  # filled in by the pipeline
+                created=now,
+                modified=now,
             )
         )
 
     return {
-        "threat_actors": threat_actors,
-        "malware": malware,
-        "identities": identities,
-        "attack_patterns": attack_patterns,
-        "campaigns": campaigns,
-        "indicators": indicators,
-        "locations": locations,
+        "entities": entities,
         "relationships": relationships,
     }
 
@@ -407,13 +250,7 @@ class LLMExtractor:
                 "model": LLM_MODEL,
                 "endpoint": LLM_BASE_URL,
                 "duration_ms": duration_ms,
-                "threat_actors": len(result.threat_actors),
-                "malware": len(result.malware),
-                "identities": len(result.identities),
-                "attack_patterns": len(result.attack_patterns),
-                "campaigns": len(result.campaigns),
-                "indicators": len(result.indicators),
-                "locations": len(result.locations),
+                "entities": len(result.entities),
                 "relationships": len(result.relationships),
             },
         )
@@ -452,13 +289,7 @@ class LLMExtractor:
                 "model": LLM_FALLBACK_MODEL,
                 "endpoint": LLM_BASE_URL,
                 "duration_ms": duration_ms,
-                "threat_actors": len(result.threat_actors),
-                "malware": len(result.malware),
-                "identities": len(result.identities),
-                "attack_patterns": len(result.attack_patterns),
-                "campaigns": len(result.campaigns),
-                "indicators": len(result.indicators),
-                "locations": len(result.locations),
+                "entities": len(result.entities),
                 "relationships": len(result.relationships),
                 "fallback": True,
             },
@@ -471,19 +302,12 @@ class LLMExtractor:
         Authoritative structured sources (biographical, wikidata) receive a +0.1
         boost because their facts are explicitly asserted rather than inferred.
         """
-        all_lists: tuple[Sequence[object], ...] = (
-            entities.threat_actors,
-            entities.malware,
-            entities.identities,
-            entities.attack_patterns,
-            entities.campaigns,
-            entities.indicators,
-            entities.locations,
-        )
-        total = sum(len(lst) for lst in all_lists)
+        total = len(entities.entities)
         if total == 0:
             return 0.0
-        diversity = sum(1 for lst in all_lists if lst)
+        # Diversity = number of unique non-Unknown entity types
+        types = {e.type for e in entities.entities if e.type and e.type != "Unknown"}
+        diversity = len(types)
         base = min(1.0, total * 0.1 + diversity * 0.05)
         boost = 0.1 if source_type in ("biographical", "wikidata") else 0.0
         return min(1.0, base + boost)

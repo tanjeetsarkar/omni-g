@@ -15,7 +15,7 @@ from prometheus_client import Counter, Histogram
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
-from ..models.stix import STIXObject
+from ..models.entities import Entity
 from .models import CandidateMatch, ResolutionDecision, ResolutionResult
 
 logger = logging.getLogger(__name__)
@@ -83,27 +83,25 @@ def _stix_id_to_qdrant_id(stix_id: str) -> str:
     return parts[1] if len(parts) == 2 else stix_id  # noqa: PLR2004
 
 
-def _get_entity_name(entity: STIXObject) -> str:
-    """Return the ``name`` attribute of *entity*, or an empty string if absent."""
-    name = getattr(entity, "name", None)
-    return str(name) if name is not None else ""
+def _get_entity_name(entity: Entity) -> str:
+    """Return the ``name`` of *entity*, or an empty string if absent."""
+    return entity.name if entity.name else ""
 
 
-def _get_entity_aliases(entity: STIXObject) -> list[str]:
-    """Return the ``aliases`` attribute of *entity*, or an empty list if absent."""
-    aliases = getattr(entity, "aliases", None)
+def _get_entity_aliases(entity: Entity) -> list[str]:
+    """Return aliases from *entity.properties*, or an empty list if absent."""
+    aliases = entity.properties.get("aliases", None)
     return list(aliases) if aliases else []
 
 
-def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
-    """Flatten a STIXObject into Neo4j-compatible node properties.
+def _props_from_entity(entity: Entity, tenant_id: str) -> dict[str, Any]:
+    """Flatten an Entity into Neo4j-compatible node properties.
 
     Complex nested types (lists, dicts) are serialised as JSON strings.
     ``datetime`` values are stored as ISO-8601 strings.
     """
     props: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "stix_type": entity.type.value,
     }
     for k, v in entity.model_dump().items():
         if isinstance(v, bool):
@@ -155,7 +153,7 @@ class EntityResolver:
     # Public API
     # ------------------------------------------------------------------
 
-    async def resolve(self, tenant_id: str, entity: STIXObject) -> ResolutionResult:
+    async def resolve(self, tenant_id: str, entity: Entity) -> ResolutionResult:
         """Resolve *entity* against the knowledge graph and return a decision.
 
         Emits Prometheus metrics for latency and decision outcome.
@@ -196,7 +194,7 @@ class EntityResolver:
     async def persist_entity(
         self,
         tenant_id: str,
-        entity: STIXObject,
+        entity: Entity,
         resolution: ResolutionResult,
     ) -> str:
         """Persist *entity* to Neo4j according to the resolution decision.
@@ -208,7 +206,7 @@ class EntityResolver:
         """
         decision = resolution.decision
         props = _props_from_entity(entity, tenant_id)
-        type_label = _safe_label(entity.type.value)
+        type_label = _safe_label(entity.type)
         tenant_label = _safe_label(tenant_id)
 
         if decision == ResolutionDecision.NEW_ENTITY:
@@ -238,7 +236,7 @@ class EntityResolver:
             )
         return new_id
 
-    async def resolve_and_persist(self, tenant_id: str, entity: STIXObject) -> ResolutionResult:
+    async def resolve_and_persist(self, tenant_id: str, entity: Entity) -> ResolutionResult:
         """Convenience: resolve *entity* then persist the result in one call."""
         result = await self.resolve(tenant_id, entity)
         await self.persist_entity(tenant_id, entity, result)
@@ -248,7 +246,7 @@ class EntityResolver:
     # Vector blocking (Qdrant)
     # ------------------------------------------------------------------
 
-    async def find_candidates(self, tenant_id: str, entity: STIXObject) -> list[CandidateMatch]:
+    async def find_candidates(self, tenant_id: str, entity: Entity) -> list[CandidateMatch]:
         """Upsert entity embedding into Qdrant then return top-5 similar entities.
 
         The upsert step ensures that every entity flowing through the pipeline
@@ -258,7 +256,7 @@ class EntityResolver:
         collection = f"entities_{tenant_id}"
         await self._ensure_collection(collection)
 
-        text = f"{entity.type.value} {_get_entity_name(entity)}"
+        text = f"{entity.type} {_get_entity_name(entity)}"
         vector = await self._embed(text)
         qdrant_id = _stix_id_to_qdrant_id(entity.id)
 
@@ -270,7 +268,7 @@ class EntityResolver:
                     vector=vector,
                     payload={
                         "entity_id": entity.id,
-                        "stix_type": entity.type.value,
+                        "entity_type": entity.type,
                         "tenant_id": tenant_id,
                         "name": _get_entity_name(entity),
                     },
@@ -311,9 +309,7 @@ class EntityResolver:
     # Graph structural matching (Neo4j)
     # ------------------------------------------------------------------
 
-    async def find_structural_matches(
-        self, tenant_id: str, entity: STIXObject
-    ) -> list[CandidateMatch]:
+    async def find_structural_matches(self, tenant_id: str, entity: Entity) -> list[CandidateMatch]:
         """Query Neo4j for structurally similar entities.
 
         Two sub-queries are executed:
@@ -322,7 +318,7 @@ class EntityResolver:
            targets — score proportional to shared-target count.
         """
         name = _get_entity_name(entity)
-        stix_type = entity.type.value
+        entity_type = entity.type
         entity_id = entity.id
 
         candidates: list[CandidateMatch] = []
@@ -333,7 +329,7 @@ class EntityResolver:
                 """
                 MATCH (e)
                 WHERE e.tenant_id = $tenant_id
-                  AND e.stix_type = $stix_type
+                  AND e.type = $entity_type
                   AND e.id <> $entity_id
                   AND (
                     e.name = $name
@@ -342,7 +338,7 @@ class EntityResolver:
                 RETURN e.id AS entity_id, 1.0 AS score
                 """,
                 tenant_id=tenant_id,
-                stix_type=stix_type,
+                entity_type=entity_type,
                 entity_id=entity_id,
                 name=name,
             )
@@ -397,7 +393,7 @@ class EntityResolver:
     @staticmethod
     def _apply_decision(
         candidates: list[CandidateMatch],
-        entity: STIXObject,
+        entity: Entity,
     ) -> ResolutionResult:
         """Combine *candidates*, deduplicate by entity_id (keep max score),
         and apply confidence-tier thresholds to produce a :class:`ResolutionResult`.

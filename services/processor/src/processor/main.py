@@ -503,7 +503,158 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return JSONResponse({"signed_url": signed_url})
 
+    # ── M4.2: Search endpoint ─────────────────────────────────────────────
+
+    class SearchRequest(BaseModel):
+        query: str
+        tenant_id: str
+        limit: int = 20
+
+    class SearchResponse(BaseModel):
+        entities: list[dict[str, Any]]
+        total: int
+
+    @app.post("/search", tags=["search"], response_model=SearchResponse)
+    async def search(body: SearchRequest) -> JSONResponse:
+        """Semantic entity search endpoint.
+
+        Embeds the query via Ollama nomic-embed-text, finds matching entities
+        via Qdrant vector search, fetches those entities plus their Neo4j
+        neighbours, and returns them.  Falls back to the most-recently modified
+        entities for the tenant if Qdrant or the embedding service is
+        unavailable.
+        """
+        from neo4j import AsyncGraphDatabase
+        from qdrant_client import AsyncQdrantClient
+
+        from ..graph.persistence import GraphPersistenceService
+
+        cfg: Settings = app.state.settings
+        logger.info(
+            "Search request received",
+            extra={"tenant_id": body.tenant_id, "query": body.query, "limit": body.limit},
+        )
+
+        neo4j_driver = AsyncGraphDatabase.driver(
+            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
+        )
+        qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
+        graph_persistence = GraphPersistenceService(neo4j_driver)
+
+        try:
+            # Attempt Qdrant-backed semantic search
+            entities = await _search_with_qdrant(
+                body.query,
+                body.tenant_id,
+                body.limit,
+                cfg.ollama_url,
+                qdrant_client,
+                graph_persistence,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Qdrant search failed, falling back to recency",
+                extra={"tenant_id": body.tenant_id, "error": str(exc)},
+            )
+            entities = await graph_persistence.search_entities(body.tenant_id, limit=body.limit)
+        finally:
+            await neo4j_driver.close()
+            await qdrant_client.close()
+
+        payload = [e.model_dump(mode="json") for e in entities]
+        logger.info(
+            "Search response",
+            extra={"tenant_id": body.tenant_id, "entity_count": len(payload)},
+        )
+        return JSONResponse({"entities": payload, "total": len(payload)})
+
     return app
+
+
+async def _search_with_qdrant(
+    query: str,
+    tenant_id: str,
+    limit: int,
+    ollama_url: str,
+    qdrant_client: Any,
+    graph_persistence: Any,
+) -> list[Any]:
+    """Embed query, search Qdrant, then fetch entities from Neo4j."""
+    import httpx
+
+    from ..models.entities import Entity
+
+    # 1. Embed the query via Ollama
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        resp = await http.post(
+            f"{ollama_url}/api/embeddings",
+            json={"model": "nomic-embed-text", "prompt": query},
+        )
+        resp.raise_for_status()
+        embedding: list[float] = resp.json()["embedding"]
+
+    # 2. Search Qdrant
+    collection = f"entities_{tenant_id}"
+    hits = await qdrant_client.search(
+        collection_name=collection,
+        query_vector=embedding,
+        limit=limit,
+    )
+    entity_ids: list[str] = [
+        str(hit.payload.get("entity_id", ""))
+        for hit in hits
+        if hit.payload and hit.payload.get("entity_id")
+    ]
+
+    if not entity_ids:
+        return await graph_persistence.search_entities(tenant_id, limit=limit)
+
+    # 3. Fetch matched entities from Neo4j (+ return in order of relevance)
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    try:
+        async with graph_persistence._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e:Entity)
+                WHERE e.tenant_id = $tenant_id AND e.id IN $entity_ids
+                RETURN e
+                """,
+                tenant_id=tenant_id,
+                entity_ids=entity_ids,
+            )
+            rows = await result.data()
+    except Exception:
+        return await graph_persistence.search_entities(tenant_id, limit=limit)
+
+    now = _dt.now(UTC)
+    entities: list[Entity] = []
+    for row in rows:
+        node = row.get("e", {})
+        try:
+            entities.append(
+                Entity(
+                    id=node.get("id", ""),
+                    type=node.get("type", "Unknown"),
+                    name=node.get("name", "Unknown"),
+                    description=node.get("description"),
+                    properties={},
+                    confidence=float(node.get("confidence", 0.5)),
+                    tenant_id=node.get("tenant_id", tenant_id),
+                    source_id=node.get("source_id"),
+                    created=node.get("created") or now,
+                    modified=node.get("modified") or now,
+                )
+            )
+        except Exception:
+            logger.error(
+                "Failed to parse entity from Neo4j search result; skipping",
+                extra={"tenant_id": tenant_id, "node": node},
+            )
+            continue
+
+    return entities
 
 
 app = create_app()

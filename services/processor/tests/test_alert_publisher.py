@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.models.stix import ExtractionResult
+from src.models.entities import ExtractionResult
 from src.processor.alert_publisher import (
     ALERT_PUBLISH_ERRORS,
     ALERTS_PUBLISHED,
@@ -144,6 +144,7 @@ class TestPipelineStep7:
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-low",
+            entities=[],
             extraction_confidence=0.3,
         )
         mock_publisher = AsyncMock(spec=AlertPublisher)
@@ -167,6 +168,7 @@ class TestPipelineStep7:
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-high",
+            entities=[],
             extraction_confidence=0.9,
         )
         mock_publisher = AsyncMock(spec=AlertPublisher)
@@ -196,6 +198,7 @@ class TestPipelineStep7:
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-nopub",
+            entities=[],
             extraction_confidence=0.9,
         )
         pipeline = ProcessingPipeline(

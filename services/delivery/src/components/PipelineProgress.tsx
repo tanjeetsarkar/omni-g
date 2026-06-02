@@ -10,7 +10,15 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Circle, Loader, AlertCircle } from "lucide-react";
 import { getSocket, joinTenant } from "@/lib/socket";
-import type { AlertPayload } from "@/hooks/useAlertHighlight";
+
+interface AlertPayload {
+  alert_id?: string;
+  tenant_id?: string;
+  entity_ids?: string[];
+  summary?: string;
+  confidence?: number;
+  [key: string]: unknown;
+}
 
 interface Stage {
   id: number;

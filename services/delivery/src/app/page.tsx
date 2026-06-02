@@ -33,7 +33,7 @@ export default function Home() {
             Open-Source Intelligence Knowledge Graph
             <br />
             <span className="text-slate-600 text-xs">
-              Synthesis-centric · STIX 2.1 · Real-time
+              Synthesis-centric · Event-driven · Real-time
             </span>
           </p>
         </div>

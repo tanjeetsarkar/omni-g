@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from src.dedup.deduplicator import ContentDeduplicator
 from src.llm.extractor import LLMExtractor
-from src.models.stix import ExtractionResult
+from src.models.entities import Entity, ExtractionResult
 from src.processor.pipeline import (
     DEDUP_DROPS,
     EXTRACTION_CONFIDENCE,
@@ -65,6 +65,8 @@ def mock_extractor() -> AsyncMock:
     mock = AsyncMock()
     mock.extract.return_value = ExtractionResult(
         source_event_id="evt-001",
+        entities=[],
+        relationships=[],
         extraction_confidence=0.75,
     )
     return mock
@@ -230,6 +232,7 @@ class TestProcessingPipeline:
         """EXTRACTION_CONFIDENCE histogram count increments after a successful extraction."""
         mock_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-conf",
+            entities=[],
             extraction_confidence=0.8,
         )
         event = _make_valid_event(id="evt-conf", payload={"text": "confidence histogram test"})
@@ -240,8 +243,14 @@ class TestProcessingPipeline:
     async def test_confidence_histogram_not_observed_on_duplicate(
         self,
         pipeline: ProcessingPipeline,
+        mock_extractor: AsyncMock,
     ) -> None:
         """Duplicates are dropped before extraction; no confidence observation recorded."""
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-dup-conf",
+            entities=[],
+            extraction_confidence=0.75,
+        )
         event = _make_valid_event(
             id="evt-dup-conf",
             payload={"text": "dup conf test"},
@@ -341,28 +350,27 @@ class TestProcessingPipeline:
         """When a resolver is wired in, resolve_and_persist is called once per extracted entity."""
         from datetime import UTC, datetime
 
-        from src.models.stix import Malware, ThreatActor
-
         now = datetime.now(UTC)
 
-        # Build a result with two entities so we can count calls
-        threat_actor = ThreatActor(
-            id="threat-actor--00000000-0000-0000-0000-000000000001",
-            created=now,
-            modified=now,
+        # Build a result with two generic entities so we can count calls
+        entity1 = Entity(
+            id="entity--00000000-0000-0000-0000-000000000001",
+            type="ThreatActor",
             name="APT28",
-        )
-        malware = Malware(
-            id="malware--00000000-0000-0000-0000-000000000002",
             created=now,
             modified=now,
+        )
+        entity2 = Entity(
+            id="entity--00000000-0000-0000-0000-000000000002",
+            type="Malware",
             name="Emotet",
+            created=now,
+            modified=now,
         )
         mock_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-resolver",
             extraction_confidence=0.9,
-            threat_actors=[threat_actor],
-            malware=[malware],
+            entities=[entity1, entity2],
         )
 
         mock_resolver = AsyncMock(spec=EntityResolver)

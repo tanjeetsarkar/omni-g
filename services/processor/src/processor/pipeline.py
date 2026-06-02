@@ -12,7 +12,7 @@ from ..dedup.deduplicator import ContentDeduplicator
 from ..graph.persistence import GraphPersistenceService
 from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
-from ..models.stix import ExtractionResult
+from ..models.entities import ExtractionResult
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
 from .stage_publisher import StageEventPublisher
@@ -251,7 +251,7 @@ class ProcessingPipeline:
                 "stage": "llm_extraction",
                 "event_id": envelope.id,
                 "tenant_id": envelope.tenant_id,
-                "entities": len(extraction.threat_actors) + len(extraction.malware),
+                "entities": len(extraction.entities),
                 "confidence": extraction.extraction_confidence,
             },
         )
@@ -271,7 +271,7 @@ class ProcessingPipeline:
                     envelope.id, envelope.tenant_id, "entity_resolution", "active"
                 )
             t0 = time.monotonic()
-            for entity in extraction.all_entities():
+            for entity in extraction.entities:
                 logger.debug(
                     "pipeline_entity_resolution_input",
                     extra={
@@ -348,7 +348,7 @@ class ProcessingPipeline:
                     envelope.id, envelope.tenant_id, "graphrag_index", "active"
                 )
             t0 = time.monotonic()
-            for entity_id in [e.id for e in extraction.all_entities()]:
+            for entity_id in [e.id for e in extraction.entities]:
                 logger.debug(
                     "pipeline_graphrag_incremental_input",
                     extra={
@@ -387,11 +387,11 @@ class ProcessingPipeline:
             if hasattr(extraction, "summary_text"):
                 summary_text = str(getattr(extraction, "summary_text", ""))[:500]
             else:
-                n = len(extraction.all_entities())
+                n = len(extraction.entities)
                 summary_text = f"{n} {'entity' if n == 1 else 'entities'} extracted"
             alert = AnalystAlert(
                 tenant_id=envelope.tenant_id,
-                entity_ids=[e.id for e in extraction.all_entities()],
+                entity_ids=[e.id for e in extraction.entities],
                 summary=summary_text,
                 confidence=extraction.extraction_confidence,
                 source_event_id=envelope.id,

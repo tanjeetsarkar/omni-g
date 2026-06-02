@@ -1,116 +1,49 @@
 "use client";
 
 /**
- * /dashboard — Omni-G Intelligence Workstation (M6 UX).
+ * /dashboard — Omni-G Knowledge Graph Search-First Dashboard (M5.2 / M2.3).
  *
  * Layout:
  *   ┌────────────────────────────────────────────────────────┐
- *   │ Header: logo · search bar · view toggle · alert badge  │
+ *   │ Header: logo · search bar                              │
  *   ├────────────────────────────────────────────────────────┤
- *   │ FilterToolbar (node type pills, confidence, label)     │
- *   ├────────────────────────────────────┬───────────────────┤
- *   │  Main view:                        │ FocusPanel        │
- *   │   "network" → Sigma.js WebGL map   │ (Entity + Audio   │
- *   │   "canvas"  → ConceptFlowView      │  Briefings tabs)  │
- *   └────────────────────────────────────┴───────────────────┘
- *   │ ActivityDrawer (bottom, collapsible)                   │
+ *   │  KnowledgeGraph (React Flow canvas — empty until       │
+ *   │  first search)                                         │
  *   └────────────────────────────────────────────────────────┘
  *   ╭── PipelineProgressToast (bottom-right, floating) ──────╮
- *
- * New in M6:
- *   1. Header search bar — background ingestion without leaving workspace.
- *   2. PipelineProgressToast — live stage ticks + verbose error fallbacks.
- *   3. In-place graph refresh via "Refresh Workspace" CTA in toast.
- *   4. Dual view toggle — WebGL Network Map ↔ Concept Canvas.
- *   5. FocusPanel now has Entity + Briefings tabs.
+ *   ╭── ActivityDrawer (bottom, collapsible) ─────────────────╮
  */
 
 import dynamic from "next/dynamic";
-import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Network, Workflow as CanvasIcon, Search, Loader } from "lucide-react";
+import { Search, Loader } from "lucide-react";
 
 import ActivityDrawer from "@/components/graph/ActivityDrawer";
-import AlertBadge from "@/components/graph/AlertBadge";
-import FilterToolbar from "@/components/graph/FilterToolbar";
-import FocusPanel from "@/components/graph/FocusPanel";
 import PipelineProgressToast, {
   type ToastState,
 } from "@/components/graph/PipelineProgressToast";
-import { useAlertHighlight } from "@/hooks/useAlertHighlight";
-import { useGraphFilter } from "@/hooks/useGraphFilter";
-import { useSemanticZoom } from "@/hooks/useSemanticZoom";
-import { buildClusterGraph } from "@/lib/buildClusterGraph";
 import { getSocket, joinTenant } from "@/lib/socket";
-import type { GraphNode, GraphEdge } from "@/types/graph";
+import { useRealtimeNodes } from "@/hooks/useRealtimeNodes";
+import type { SearchResponse } from "@/types/entities";
 
-// GraphView uses Sigma.js (WebGL) — must be client-only, no SSR
-const GraphView = dynamic(() => import("@/components/graph/GraphView"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex items-center justify-center w-full h-full">
-      <p className="text-slate-400 text-sm animate-pulse">
-        Initialising graph…
-      </p>
-    </div>
-  ),
-});
-
-// ConceptFlowView is also client-only (uses DOM APIs for path recalculation)
-const ConceptFlowView = dynamic(
-  () => import("@/components/graph/ConceptFlowView"),
+// KnowledgeGraph uses React Flow — must be client-only, no SSR
+const KnowledgeGraph = dynamic(
+  () =>
+    import("@/components/graph/KnowledgeGraph").then((m) => ({
+      default: m.KnowledgeGraph,
+    })),
   {
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center w-full h-full">
-        <p className="text-slate-400 text-sm animate-pulse">Loading canvas…</p>
+        <p className="text-slate-400 text-sm animate-pulse">
+          Initialising graph…
+        </p>
       </div>
     ),
   },
 );
-
-type ViewMode = "network" | "canvas";
-
-// ── useGraphDataWithRefetch ───────────────────────────────────────────────────
-// Extends the standard polling hook with a manual refetch handle so the toast
-// can trigger an in-place workspace update without a full-page reload.
-
-function useGraphDataWithRefetch() {
-  const [nodes, setNodes] = useState<GraphNode[]>([]);
-  const [edges, setEdges] = useState<GraphEdge[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(async () => {
-    try {
-      const res = await fetch("/api/graph");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: { nodes: GraphNode[]; edges: GraphEdge[] } = await res.json();
-      setNodes(data.nodes ?? []);
-      setEdges(data.edges ?? []);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load graph");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
-
-  return { nodes, edges, loading, error, refetch: fetchData };
-}
 
 // ── DashboardContent ──────────────────────────────────────────────────────────
 
@@ -119,113 +52,78 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get("q") ?? "";
 
-  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
+  const tenantId = "default"; // TODO: derive from auth context
 
-  const { nodes, edges, loading, error, refetch } = useGraphDataWithRefetch();
-  const { highlightedNodeIds, alertCount } = useAlertHighlight(socket);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState(initialQuery);
+  const [submitting, setSubmitting] = useState(false);
+  const [searchResult, setSearchResult] = useState<SearchResponse>({
+    entities: [],
+    relationships: [],
+  });
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-  // ── View mode ──────────────────────────────────────────────────────────────
-  const [viewMode, setViewMode] = useState<ViewMode>("network");
-
-  // ── Semantic zoom (network mode only) ─────────────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sigmaRef = useRef<any>(null);
-  const [, setSigmaReady] = useState(false);
-  const { isClustered } = useSemanticZoom(sigmaRef);
-
-  // ── Filter state ───────────────────────────────────────────────────────────
-  const {
-    filteredNodes,
-    filteredEdges,
-    filterState,
-    availableTypes,
-    toggleType,
-    setMinConfidence,
-    setSearchQuery,
-    resetFilters,
-  } = useGraphFilter(nodes, edges);
-
-  const { clusterNodes, clusterEdges } = useMemo(
-    () => buildClusterGraph(filteredNodes, filteredEdges),
-    [filteredNodes, filteredEdges],
-  );
-
-  const displayNodes = isClustered ? clusterNodes : filteredNodes;
-  const displayEdges = isClustered ? clusterEdges : filteredEdges;
-
-  useEffect(() => {
-    if (initialQuery) setSearchQuery(initialQuery);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery]);
-
-  useEffect(() => {
-    joinTenant(tenantId);
-  }, [tenantId]);
-
-  // ── Background ingestion ───────────────────────────────────────────────────
-  const [headerQuery, setHeaderQuery] = useState("");
   const [toastState, setToastState] = useState<ToastState>("idle");
   const [toastQuery, setToastQuery] = useState("");
   const [ingestError, setIngestError] = useState<string | null>(null);
   const lastQueryRef = useRef("");
 
-  const runIngestion = useCallback(async (q: string) => {
-    if (!q.trim()) return;
-    lastQueryRef.current = q.trim();
-    setToastQuery(q.trim());
-    setToastState("running");
-    setIngestError(null);
+  const { newEntities } = useRealtimeNodes({ tenantId });
 
-    try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q.trim() }),
-      });
+  // Join tenant room on mount
+  useEffect(() => {
+    joinTenant(tenantId);
+  }, [socket, tenantId]);
 
-      if (!res.ok) {
-        let detail: string;
-        try {
-          const body = await res.json();
-          detail = `HTTP ${res.status}: ${body?.detail ?? body?.message ?? JSON.stringify(body)}`;
-        } catch {
-          detail = `HTTP ${res.status}: ${res.statusText}`;
-        }
-        setToastState("error");
-        setIngestError(detail);
-        return;
-      }
-      // Stays "running" — toast transitions to "done" when the alert arrives below
-    } catch (err) {
-      const detail =
-        err instanceof Error ? err.message : "Unknown network error";
-      setToastState("error");
-      setIngestError(`Connection error: ${detail}`);
+  // Auto-search when arriving via ?q=
+  useEffect(() => {
+    if (initialQuery) {
+      runSearch(initialQuery);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // First analyst alert after an ingestion run → mark pipeline done
-  useEffect(() => {
-    if (toastState !== "running") return;
-    function handleAlert() {
-      setToastState("done");
-    }
-    socket.on("alert", handleAlert);
-    return () => {
-      socket.off("alert", handleAlert);
-    };
-  }, [socket, toastState]);
+  const runSearch = useCallback(
+    async (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      setSubmitting(true);
+      setSearchError(null);
+      setToastQuery(trimmed);
+      setToastState("running");
+      lastQueryRef.current = trimmed;
 
-  function handleHeaderSearch(e: React.FormEvent) {
+      try {
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: trimmed,
+            tenant_id: tenantId,
+            limit: 50,
+          }),
+        });
+        if (!res.ok) {
+          const err: { error?: string } = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        const data: SearchResponse = await res.json();
+        setSearchResult(data);
+        setToastState("done");
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Unknown error";
+        setSearchError(detail);
+        setToastState("error");
+        setIngestError(detail);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [tenantId],
+  );
+
+  function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
-    runIngestion(headerQuery);
-    setHeaderQuery("");
-  }
-
-  function handleRefreshGraph() {
-    refetch();
-    setToastState("idle");
+    runSearch(searchQuery);
   }
 
   return (
@@ -235,7 +133,6 @@ function DashboardContent() {
     >
       {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
       <header className="flex items-center gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-700 shrink-0">
-        {/* Brand */}
         <div className="flex items-center gap-2 shrink-0">
           <span className="font-bold text-base tracking-tight">Omni-G</span>
           <span className="text-[10px] text-slate-500 uppercase tracking-widest hidden sm:block">
@@ -245,159 +142,81 @@ function DashboardContent() {
 
         <div className="w-px h-5 bg-slate-700 shrink-0" />
 
-        {/* Deep Search & Ingest */}
         <form
-          onSubmit={handleHeaderSearch}
+          onSubmit={handleSearchSubmit}
           className="flex items-center gap-1.5 flex-1 min-w-0"
-          aria-label="Deep search and ingest"
+          aria-label="Search knowledge graph"
         >
-          <div className="relative flex-1 min-w-0 max-w-sm">
+          <div className="relative flex-1 min-w-0 max-w-lg">
             <Search
               size={13}
               className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
             />
             <input
               type="text"
-              value={headerQuery}
-              onChange={(e) => setHeaderQuery(e.target.value)}
-              placeholder="Deep search & ingest a topic…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search entities, people, topics…"
               className="w-full bg-slate-800 border border-slate-600 text-slate-200 text-xs
                          placeholder-slate-500 rounded-lg pl-7 pr-3 py-1.5
                          focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              disabled={submitting}
+              autoFocus
             />
           </div>
           <button
             type="submit"
-            disabled={!headerQuery.trim() || toastState === "running"}
+            disabled={!searchQuery.trim() || submitting}
             className="shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700
                        disabled:text-slate-500 text-white text-xs font-semibold
                        px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
           >
-            {toastState === "running" && (
-              <Loader size={11} className="animate-spin" />
-            )}
-            Ingest
+            {submitting && <Loader size={11} className="animate-spin" />}
+            Search
           </button>
         </form>
 
-        <div className="flex items-center gap-2 shrink-0 ml-auto">
-          {/* View toggle */}
-          <div
-            className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 gap-0.5"
-            role="group"
-            aria-label="Switch view mode"
-          >
-            <button
-              onClick={() => setViewMode("network")}
-              aria-pressed={viewMode === "network"}
-              title="Network Map"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                viewMode === "network"
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Network size={12} />
-              <span className="hidden sm:inline">Network</span>
-            </button>
-            <button
-              onClick={() => setViewMode("canvas")}
-              aria-pressed={viewMode === "canvas"}
-              title="Concept Canvas"
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                viewMode === "canvas"
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <CanvasIcon size={12} />
-              <span className="hidden sm:inline">Canvas</span>
-            </button>
-          </div>
-
-          <AlertBadge count={alertCount} />
-        </div>
+        {/* Result count */}
+        {searchResult.entities.length > 0 && (
+          <span className="text-xs text-slate-400 shrink-0 hidden sm:block">
+            {searchResult.entities.length} entities
+          </span>
+        )}
       </header>
 
-      {/* ── Filter Toolbar ───────────────────────────────────────────────────── */}
-      <FilterToolbar
-        availableTypes={availableTypes}
-        filterState={filterState}
-        onToggleType={toggleType}
-        onConfidenceChange={setMinConfidence}
-        onSearchChange={setSearchQuery}
-        onReset={resetFilters}
-        shownNodes={filteredNodes.length}
-        totalNodes={nodes.length}
-      />
+      {/* ── Graph Canvas ─────────────────────────────────────────────────────── */}
+      <main className="flex-1 relative min-h-0">
+        {searchError && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-900/80 border border-red-700 text-red-200 text-xs px-4 py-2 rounded-lg">
+            {searchError}
+          </div>
+        )}
 
-      {/* ── Main Area ────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0">
-        <main className="flex-1 relative">
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10">
-              <p className="text-slate-400 text-sm animate-pulse">
-                Loading graph…
-              </p>
-            </div>
-          )}
-          {error && !loading && (
-            <div className="absolute inset-0 flex items-center justify-center z-10">
-              <p className="text-red-400 text-sm">Error: {error}</p>
-            </div>
-          )}
-
-          {!loading && viewMode === "network" && (
-            <GraphView
-              nodes={displayNodes}
-              edges={displayEdges}
-              highlightedNodeIds={highlightedNodeIds}
-              selectedNodeId={selectedNodeId}
-              onNodeClick={setSelectedNodeId}
-              onSigmaReady={(s) => {
-                sigmaRef.current = s;
-                setSigmaReady(true);
-              }}
-              className="w-full h-full"
-            />
-          )}
-
-          {!loading && viewMode === "canvas" && (
-            <ConceptFlowView
-              nodes={filteredNodes}
-              edges={filteredEdges}
-              selectedNodeId={selectedNodeId}
-              onNodeClick={setSelectedNodeId}
-              className="w-full h-full"
-            />
-          )}
-        </main>
-
-        {/* Focus panel — Entity dossier + Audio Briefings */}
-        <FocusPanel
-          nodeId={selectedNodeId}
-          nodes={nodes}
-          tenantId={tenantId}
-          onClose={() => setSelectedNodeId(null)}
+        <KnowledgeGraph
+          entities={searchResult.entities}
+          relationships={searchResult.relationships}
+          newEntities={newEntities}
         />
-      </div>
+      </main>
 
       {/* ── Pipeline Activity Drawer ─────────────────────────────────────────── */}
       <ActivityDrawer socket={socket} />
 
-      {/* ── Floating Ingestion Monitor Toast ─────────────────────────────────── */}
+      {/* ── Floating Pipeline Monitor Toast ──────────────────────────────────── */}
       <PipelineProgressToast
         query={toastQuery}
         toastState={toastState}
         errorDetail={ingestError}
         socket={socket}
-        onRefreshGraph={handleRefreshGraph}
+        onRefreshGraph={() => {
+          if (lastQueryRef.current) runSearch(lastQueryRef.current);
+        }}
         onDismiss={() => {
           setToastState("idle");
           setIngestError(null);
         }}
         onRetry={() => {
-          if (lastQueryRef.current) runIngestion(lastQueryRef.current);
+          if (lastQueryRef.current) runSearch(lastQueryRef.current);
         }}
       />
     </div>

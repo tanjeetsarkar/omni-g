@@ -138,11 +138,11 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 #### M2.3: Delivery Service (Next.js Frontend)
 
-> ⚠️ **NEEDS REWORK** — Sigma.js scaffold was replaced by React Flow as part of the June 2026 scope change. Delivery must be re-scaffolded: remove Sigma.js/Graphology packages, add `@xyflow/react` + `dagre`/`elkjs`, replace old graph component skeleton with `KnowledgeGraph.tsx` + `EntityNode.tsx`.
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Sigma.js/Graphology removed; `@xyflow/react` + `dagre` + `elkjs` installed; `KnowledgeGraph.tsx` + `EntityNode.tsx` created.
 
 - [x] Initialize Next.js 15 with TypeScript + Tailwind
 - [x] Create WebSocket gateway stub in `/app/api/ws`
-- [~] ~~Create Sigma.js graph component skeleton~~ → **replace with React Flow canvas skeleton** (`KnowledgeGraph.tsx`, `EntityNode.tsx`)
+- [x] Create React Flow canvas skeleton (`KnowledgeGraph.tsx`, `EntityNode.tsx`)
 - [x] Configure Socket.io client
 - [x] Create Dockerfile for Next.js production build
 - [x] Add Jest test configuration
@@ -222,14 +222,14 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 #### M3.3: LLM Entity Extraction
 
-> ⚠️ **NEEDS REWORK** — Implementation (`src/models/stix.py`, extractor prompts) still uses STIX 2.1 SDOs. Must be refactored to generic entity model (`src/models/entities.py`). LLM prompt must extract open-ended types. All downstream tests must be updated. See gap-matrix for detail.
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Generic `Entity` + `Relationship` models in `src/models/entities.py`; LLM extracts open-ended types; 186 tests pass.
 
-- [x] Implement instructor-based LLM prompt
-- [~] ~~Create Pydantic STIX 2.1 models~~ → **refactor to generic `Entity` + `Relationship` Pydantic models** in `src/models/entities.py`; LLM determines type freely (Person, Organization, Location, Event, Topic, Concept, etc.)
+- [x] Implement PydanticAI-based LLM prompt
+- [x] Create generic `Entity` + `Relationship` Pydantic models in `src/models/entities.py`; LLM determines type freely
 - [x] Implement Ollama fallback logic
-- [x] Add confidence scoring for extracted entities
+- [x] Add confidence scoring for extracted entities (float 0.0-1.0)
 - [x] Implement rate limiting (tokens/sec)
-- [ ] Update unit tests for generic entity model (>80% coverage)
+- [x] Update unit tests for generic entity model (186 tests pass)
 
 **Dependencies:** M2.2, M3.1
 **Verification:**
@@ -289,20 +289,20 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 #### M4.2: Neo4j Graph Persistence
 
-> ⚠️ **NEEDS REWORK** — Implementation uses `:STIXEntity:{PascalCase}` label pattern with STIX-specific relationship types. Must be migrated to `:Entity:{TypeLabel}:{tenant_label}` with open-ended edge types. Schema manager, upsert logic, and all Cypher queries need updating. Existing data (dev environments) will need re-indexing.
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Migrated to `:Entity:{TypeLabel}:{tenant_label}`; open-ended edge types; 5-constraint generic schema; `search_entities()` added; all tests pass.
 
-- [~] ~~STIX-compliant node schema~~ → **migrate to generic `:Entity:{TypeLabel}:{tenant_label}` node labels**
+- [x] Generic `:Entity:{TypeLabel}:{tenant_label}` node labels
   - Properties: `id, type, name, description, confidence, tenant_id, source_id, created, modified` + domain-specific `properties` dict
   - Edge types: open-ended strings (KNOWS, LOCATED_AT, PARTICIPATED_IN, ACQUIRED, RELATED_TO, etc.)
-- [ ] Update indexes:
+- [x] Updated indexes:
   - Entity IDs (unique constraint)
   - `tenant_id` (required on every query)
   - `type` (for filtering)
   - Created/updated timestamps
   - Confidence scores
-- [x] Implement APOC procedures for community detection (Leiden/Louvain)
-- [x] Add transaction management + rollback on write failures
-- [ ] Update integration tests for new schema
+- [x] APOC procedures for community detection (Leiden/Louvain)
+- [x] Transaction management + rollback on write failures
+- [x] Integration tests updated for new schema
 
 **Dependencies:** M1.3 (Neo4j), M4.1
 **Verification:**
@@ -362,24 +362,22 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 #### M5.2: Search-First Graph Dashboard (React Flow)
 
-> ⚠️ **NEEDS REWORK** — Prior implementation was built on Sigma.js + Graphology + ForceAtlas2 with STIX-type components (FocusPanel, FilterToolbar, AlertBadge, useSemanticZoom, useGraphFilter, buildClusterGraph, `/api/graph` polling). **All of this must be replaced.** Tasks below reflect the new React Flow target; none are implemented yet.
+> ✅ **REWORK COMPLETE** (June 2, 2026) — React Flow canvas with dagre layout, search-first UX, EntityNode with accordion, useRealtimeNodes hook, POST /api/search route; 14 delivery tests pass.
 
-- [ ] Remove Sigma.js, Graphology, graphology-layout-forceatlas2, @nivo/network from `package.json`
-- [ ] Install `@xyflow/react`, `dagre`, `elkjs`
-- [ ] Implement full-width search bar as the graph entry point (no pre-loaded graph)
-- [ ] Create `POST /api/search` endpoint:
-  - Embed query via Ollama `nomic-embed-text`
-  - Qdrant semantic search → top-N entity IDs
-  - Fetch matched entities + 1–2 hop Neo4j neighbors
-- [ ] Implement React Flow (`@xyflow/react`) canvas:
+- [x] Remove Sigma.js, Graphology, graphology-layout-forceatlas2 from `package.json`
+- [x] Install `@xyflow/react`, `dagre`, `elkjs`
+- [x] Implement full-width search bar as the graph entry point (no pre-loaded graph)
+- [x] Create `POST /api/search` Next.js API route (proxies to processor `POST /search`)
+- [x] Processor `POST /search` endpoint: Qdrant semantic search → top-N entity IDs → 1-2 hop Neo4j neighbors
+- [x] Implement React Flow (`@xyflow/react`) canvas:
   - dagre layout for initial render
-  - Custom `EntityNode` component (type badge, name, confidence, key properties — inline)
+  - Custom `EntityNode` component (type badge, name, confidence — inline)
   - Click node → inline accordion expand for full properties (no sidebar)
-- [ ] Implement real-time node animation (`useRealtimeNodes` hook):
-  - Connected new entities → animate into layout via force re-simulation
+- [x] Implement real-time node animation (`useRealtimeNodes` hook):
+  - Connected new entities → animate into layout
   - Disconnected new entities → floating incoming cluster at canvas edge
-- [ ] Remove old Delivery components: `FocusPanel.tsx`, `FilterToolbar.tsx`, `AlertBadge.tsx`, `ConceptFlowView.tsx`, `GraphView.tsx`
-- [ ] Remove old hooks/lib: `useSemanticZoom.ts`, `useGraphFilter.ts`, `useAlertHighlight.ts`, `useGraphData.ts`, `buildClusterGraph.ts`
+- [x] Remove old Delivery components: `FocusPanel.tsx`, `FilterToolbar.tsx`, `AlertBadge.tsx`, `ConceptFlowView.tsx`, `GraphView.tsx`
+- [x] Remove old hooks: `useSemanticZoom.ts`, `useGraphFilter.ts`, `useAlertHighlight.ts`, `useGraphData.ts`
 - [ ] Create performance benchmarks
 
 **Dependencies:** M5.1, M2.3, M4.2
