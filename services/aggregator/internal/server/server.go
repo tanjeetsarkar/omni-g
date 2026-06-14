@@ -65,6 +65,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /metrics", metrics.Handler())
 	if s.searchHandler != nil {
 		s.mux.Handle("POST /search", s.searchHandler)
+		s.mux.HandleFunc("POST /enrich", s.searchHandler.HandleEnrich)
 	}
 }
 

@@ -6,20 +6,13 @@ from neo4j import AsyncDriver, AsyncSession
 
 logger = logging.getLogger(__name__)
 
-# STIX SDO node labels that receive unique constraints and indexes.
-_STIX_LABELS: list[str] = [
-    "ThreatActor",
-    "Malware",
-    "Identity",
-    "AttackPattern",
-    "Campaign",
-    "Indicator",
-    "Location",
-]
-
 
 class GraphSchemaManager:
     """Initialise the Neo4j schema required by the Omni-G Processor.
+
+    All entities share a single :Entity label with an open-ended ``type``
+    property (e.g. "Person", "Organization", "Event").  An additional label
+    matching the PascalCase type string is added by the persistence layer.
 
     Call :meth:`initialize` once at service startup (idempotent — all
     Cypher statements use ``IF NOT EXISTS``).
@@ -33,71 +26,83 @@ class GraphSchemaManager:
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Run all constraint and index creation queries."""
+        """Run all constraint and index creation queries for the :Entity label."""
         async with self._driver.session() as session:
-            for label in _STIX_LABELS:
-                await self._create_unique_constraint(session, label)
-                await self._create_tenant_id_index(session, label)
-                await self._create_confidence_index(session, label)
-                await self._create_timestamp_index(session, label)
+            await self._create_unique_constraint(session)
+            await self._create_type_index(session)
+            await self._create_tenant_id_index(session)
+            await self._create_confidence_index(session)
+            await self._create_timestamp_index(session)
+            await self._create_name_index(session)
+            await self._create_aliases_index(session)
 
-        logger.info(
-            "graph_schema_initialized",
-            extra={"labels": _STIX_LABELS},
-        )
+        logger.info("graph_schema_initialized", extra={"label": "Entity"})
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def _create_unique_constraint(session: AsyncSession, label: str) -> None:
-        """CREATE CONSTRAINT … REQUIRE n.id IS UNIQUE for *label*."""
-        constraint_name = f"stix_{label.lower()}_id"
+    async def _create_unique_constraint(session: AsyncSession) -> None:
+        """CREATE CONSTRAINT … REQUIRE n.id IS UNIQUE for :Entity."""
         cypher = (
-            f"CREATE CONSTRAINT {constraint_name} IF NOT EXISTS "
-            f"FOR (n:{label}) REQUIRE n.id IS UNIQUE"
+            "CREATE CONSTRAINT entity_id IF NOT EXISTS " "FOR (n:Entity) REQUIRE n.id IS UNIQUE"
         )
         await session.run(cypher)
-        logger.debug(
-            "constraint_created",
-            extra={"constraint": constraint_name, "label": label},
-        )
+        logger.debug("constraint_created", extra={"constraint": "entity_id", "label": "Entity"})
 
     @staticmethod
-    async def _create_tenant_id_index(session: AsyncSession, label: str) -> None:
-        """Create a composite index on (id, tenant_id) for *label*."""
-        index_name = f"stix_{label.lower()}_tenant"
-        cypher = (
-            f"CREATE INDEX {index_name} IF NOT EXISTS " f"FOR (n:{label}) ON (n.id, n.tenant_id)"
-        )
+    async def _create_type_index(session: AsyncSession) -> None:
+        """Create an index on (type) for :Entity."""
+        cypher = "CREATE INDEX entity_type IF NOT EXISTS " "FOR (n:Entity) ON (n.type)"
         await session.run(cypher)
-        logger.debug(
-            "index_created",
-            extra={"index": index_name, "label": label},
-        )
+        logger.debug("index_created", extra={"index": "entity_type", "label": "Entity"})
 
     @staticmethod
-    async def _create_confidence_index(session: AsyncSession, label: str) -> None:
-        """Create an index on confidence for *label*."""
-        index_name = f"stix_{label.lower()}_confidence"
-        cypher = f"CREATE INDEX {index_name} IF NOT EXISTS " f"FOR (n:{label}) ON (n.confidence)"
+    async def _create_tenant_id_index(session: AsyncSession) -> None:
+        """Create an index on (tenant_id) for :Entity."""
+        cypher = "CREATE INDEX entity_tenant_id IF NOT EXISTS " "FOR (n:Entity) ON (n.tenant_id)"
         await session.run(cypher)
-        logger.debug(
-            "index_created",
-            extra={"index": index_name, "label": label},
-        )
+        logger.debug("index_created", extra={"index": "entity_tenant_id", "label": "Entity"})
 
     @staticmethod
-    async def _create_timestamp_index(session: AsyncSession, label: str) -> None:
-        """Create a composite index on (created, modified) for *label*."""
-        index_name = f"stix_{label.lower()}_timestamps"
+    async def _create_confidence_index(session: AsyncSession) -> None:
+        """Create an index on (confidence) for :Entity."""
+        cypher = "CREATE INDEX entity_confidence IF NOT EXISTS " "FOR (n:Entity) ON (n.confidence)"
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "entity_confidence", "label": "Entity"})
+
+    @staticmethod
+    async def _create_timestamp_index(session: AsyncSession) -> None:
+        """Create a composite index on (created, modified) for :Entity."""
         cypher = (
-            f"CREATE INDEX {index_name} IF NOT EXISTS "
-            f"FOR (n:{label}) ON (n.created, n.modified)"
+            "CREATE INDEX entity_timestamps IF NOT EXISTS "
+            "FOR (n:Entity) ON (n.created, n.modified)"
         )
         await session.run(cypher)
-        logger.debug(
-            "index_created",
-            extra={"index": index_name, "label": label},
+        logger.debug("index_created", extra={"index": "entity_timestamps", "label": "Entity"})
+
+    @staticmethod
+    async def _create_name_index(session: AsyncSession) -> None:
+        """Create a composite index on (tenant_id, type, name) for :Entity.
+
+        Speeds up the structural resolver's name/alias lookup which always
+        filters by tenant_id + type before comparing the name field.
+        """
+        cypher = (
+            "CREATE INDEX entity_tenant_type_name IF NOT EXISTS "
+            "FOR (n:Entity) ON (n.tenant_id, n.type, n.name)"
         )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "entity_tenant_type_name", "label": "Entity"})
+
+    @staticmethod
+    async def _create_aliases_index(session: AsyncSession) -> None:
+        """Create an index on the aliases list property for :Entity.
+
+        Required for efficient list-membership queries such as
+        ``$name IN e.aliases`` used by the structural resolver.
+        """
+        cypher = "CREATE INDEX entity_aliases IF NOT EXISTS " "FOR (n:Entity) ON (n.aliases)"
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "entity_aliases", "label": "Entity"})

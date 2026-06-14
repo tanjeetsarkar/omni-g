@@ -9,11 +9,12 @@ const config: Config = {
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
-    // Stub WebGL / canvas APIs not available in jsdom
-    "^sigma$": "<rootDir>/src/__mocks__/sigma.ts",
-    "^graphology$": "<rootDir>/src/__mocks__/graphology.ts",
-    "^graphology-layout-forceatlas2$":
-      "<rootDir>/src/__mocks__/graphology-layout-forceatlas2.ts",
+    // Stub CSS imports from React Flow
+    "^@xyflow/react/dist/style\\.css$": "<rootDir>/src/__mocks__/styleMock.ts",
+    // Stub @xyflow/react (not installed until pnpm install runs)
+    "^@xyflow/react$": "<rootDir>/src/__mocks__/@xyflow/react.tsx",
+    // Stub dagre (not installed until pnpm install runs)
+    "^dagre$": "<rootDir>/src/__mocks__/dagre.ts",
   },
   testMatch: [
     "<rootDir>/src/**/*.test.{ts,tsx}",

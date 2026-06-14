@@ -1,13 +1,34 @@
 # Delivery Service
 
-The **Delivery** service is the real-time frontend of Omni-G. It renders the interactive knowledge graph using Sigma.js, receives live analyst alerts via WebSocket, and serves the main dashboard.
+The **Delivery** service is the real-time knowledge graph frontend for Omni-G. Users enter a search query; the system performs a semantic search against the vector database, fetches matched entities and their neighbors from Neo4j, and renders them as an interactive React Flow graph. New entities added by the Processor animate into the graph in real time.
 
 ## Responsibilities
 
-- **WebSocket Gateway** — subscribes to `analyst-alerts` Kafka topic and broadcasts to connected clients (Phase M5.1)
-- **Graph Dashboard** — WebGL-accelerated Sigma.js rendering supporting 100k+ nodes (Phase M5.2)
-- **Real-Time Alerts** — highlights new nodes/edges as events arrive
-- **Audio Briefings** — plays daily GraphRAG-generated briefings (Phase M5.3)
+- **Search-First Graph UI** — user query → Qdrant semantic search → React Flow graph of matched entities + neighbors
+- **WebSocket Gateway** — standalone Node.js process that consumes `analyst-alerts` from Kafka and broadcasts new entity events to connected browsers
+- **Inline Node Information** — every node displays entity type, name, confidence, and key properties; no sidebars or detail panels
+- **Real-Time Graph Growth** — new connected entities animate into the existing layout; disconnected new entities appear as a floating incoming cluster
+- **Audio Briefings** — GraphRAG-generated daily briefings via `/api/briefings` (deprioritized, available but not primary UX)
+
+## UX Flow
+
+```
+User types query
+      ↓
+POST /api/search  { q: "...", tenant_id: "..." }
+      ↓
+Embed query → Qdrant semantic search → top-N entity IDs
+      ↓
+Fetch matched entities + 1–2 hop neighbors from Neo4j
+      ↓
+React Flow renders graph
+  - Each node: entity type badge, name, confidence, key properties (inline)
+  - Click node: expands inline to show all properties (no sidebar)
+      ↓
+WebSocket connection open
+  - New entities connected to current graph → animate into layout (force re-simulation)
+  - New disconnected entities → appear as floating incoming cluster at canvas edge
+```
 
 ## Directory Structure
 
@@ -15,17 +36,28 @@ The **Delivery** service is the real-time frontend of Omni-G. It renders the int
 delivery/
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx             # Root layout
-│   │   ├── page.tsx               # Dashboard home
+│   │   ├── layout.tsx                  # Root layout
+│   │   ├── page.tsx                    # Search bar (entry point)
 │   │   └── api/
-│   │       ├── health/route.ts    # Liveness probe
-│   │       └── ws/route.ts        # WebSocket gateway stub (M5.1)
+│   │       ├── health/route.ts         # Liveness probe
+│   │       ├── search/route.ts         # Semantic search → Neo4j neighbors
+│   │       └── briefings/              # Audio briefing list + download (deprioritized)
 │   ├── components/
 │   │   └── graph/
-│   │       └── GraphView.tsx      # Sigma.js renderer
+│   │       ├── KnowledgeGraph.tsx      # React Flow canvas (root graph component)
+│   │       ├── EntityNode.tsx          # Custom node: inline entity info + expandable properties
+│   │       └── IncomingCluster.tsx     # Floating cluster for disconnected real-time nodes
+│   ├── hooks/
+│   │   ├── useGraphSearch.ts           # Drives /api/search and populates React Flow nodes/edges
+│   │   └── useRealtimeNodes.ts         # Consumes WebSocket alerts, animates new nodes into layout
 │   ├── lib/
-│   │   └── socket.ts             # Socket.io client singleton
-│   └── __mocks__/               # Jest stubs for WebGL APIs
+│   │   ├── socket.ts                   # Socket.io client singleton
+│   │   └── neo4j.ts                    # Neo4j driver singleton (server-side)
+│   └── types/
+│       └── graph.ts                    # Entity, Relationship, GraphNode, GraphEdge interfaces
+├── gateway/
+│   ├── server.ts                       # Standalone WebSocket/Kafka consumer (port 3001)
+│   └── tsconfig.json
 ├── jest.config.ts
 ├── jest.setup.ts
 ├── next.config.ts
@@ -33,31 +65,86 @@ delivery/
 └── README.md
 ```
 
+## Key Design Decisions
+
+### No Sidebars or Filter Panels
+
+All entity information is displayed inside the node. Clicking a node expands its inline view to show additional properties. This keeps the canvas the primary interface.
+
+### Search-Driven Entry — No Full Graph Load
+
+The graph only renders entities relevant to the current search query plus their 1–2 hop neighbors. Loading the full graph is explicitly rejected (performance degrades with graph size; UX becomes unfocused).
+
+### Real-Time Layout Strategy
+
+- **Connected nodes:** When a new entity is linked to nodes already in the current view, it is added to the React Flow state and the force simulation is re-run on the affected subgraph neighborhood. This keeps the existing layout stable.
+- **Disconnected nodes:** Entities not connected to the current view appear in a floating cluster at the canvas edge. Users can explore them independently or drag them into the main graph.
+
+### Graph Visualization Library
+
+React Flow (`@xyflow/react`) with `dagre` for initial hierarchical layout and force re-simulation for live updates. Custom node components handle inline entity rendering.
+
 ## Configuration
 
-| Variable              | Default                  | Description                     |
-| --------------------- | ------------------------ | ------------------------------- |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8001`  | Processor API base URL          |
-| `NEXT_PUBLIC_WS_URL`  | `ws://localhost:3001`    | WebSocket gateway URL           |
-| `NEO4J_URL`           | `neo4j://localhost:7687` | Neo4j URL (server-side queries) |
-| `NEO4J_USER`          | `neo4j`                  | Neo4j username                  |
-| `NEO4J_PASSWORD`      | `omni-g-password`        | Neo4j password                  |
+| Variable                    | Default                  | Description                              |
+| --------------------------- | ------------------------ | ---------------------------------------- |
+| `NEXT_PUBLIC_WS_URL`        | `ws://localhost:3001`    | WebSocket gateway URL                    |
+| `NEXT_PUBLIC_PROCESSOR_URL` | `http://localhost:8001`  | Processor API base URL                   |
+| `NEO4J_URL`                 | `neo4j://localhost:7687` | Neo4j bolt URL (server-side queries)     |
+| `NEO4J_USER`                | `neo4j`                  | Neo4j username                           |
+| `NEO4J_PASSWORD`            | `omni-g-password`        | Neo4j password                           |
+| `QDRANT_URL`                | `http://localhost:6333`  | Qdrant vector DB URL (for `/api/search`) |
+| `OLLAMA_URL`                | `http://localhost:11434` | Ollama URL for query embedding           |
 
 ## Running Locally
 
 ```bash
 pnpm install
-pnpm dev          # starts on :3000
+pnpm dev          # starts Next.js on :3000
 pnpm test         # run Jest
 pnpm build        # production build
 ```
 
+To run the WebSocket gateway:
+
+```bash
+cd gateway
+npx ts-node server.ts   # starts on :3001
+```
+
 ## API Endpoints
 
-| Method | Path          | Description                     |
-| ------ | ------------- | ------------------------------- |
-| `GET`  | `/api/health` | Liveness probe                  |
-| `GET`  | `/api/ws`     | WebSocket gateway status (M5.1) |
+| Method | Path                  | Description                                            |
+| ------ | --------------------- | ------------------------------------------------------ |
+| `GET`  | `/api/health`         | Liveness probe                                         |
+| `POST` | `/api/search`         | Semantic search → entity IDs → Neo4j neighbors → graph |
+| `GET`  | `/api/briefings`      | List daily audio briefings (deprioritized)             |
+| `GET`  | `/api/briefings/[id]` | Presigned audio file download (deprioritized)          |
+
+### `POST /api/search` Request/Response
+
+```json
+// Request
+{ "q": "apple acquisition 2026", "tenant_id": "tenant-a" }
+
+// Response
+{
+  "nodes": [
+    {
+      "id": "uuid",
+      "type": "Organization",
+      "name": "Apple Inc.",
+      "confidence": 0.92,
+      "properties": { "sector": "Technology" },
+      "community_id": "c-42",
+      "community_summary": "Tech sector M&A activity..."
+    }
+  ],
+  "edges": [
+    { "id": "uuid", "source": "uuid-a", "target": "uuid-b", "type": "ACQUIRED", "confidence": 0.88 }
+  ]
+}
+```
 
 ## Docker
 
@@ -65,38 +152,5 @@ pnpm build        # production build
 docker build -t omni-g/delivery .
 docker run -p 3000:3000 omni-g/delivery
 ```
-
-## Getting Started
-
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

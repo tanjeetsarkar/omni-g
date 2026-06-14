@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from ..models.stix import STIXObject
+from ..models.entities import Entity
 
 
 class ResolutionDecision(StrEnum):
@@ -24,9 +24,9 @@ class CandidateMatch(BaseModel):
 
 
 class ResolutionResult(BaseModel):
-    """Full result of resolving a single STIX entity."""
+    """Full result of resolving a single generic entity."""
 
     decision: ResolutionDecision
     matched_entity_id: str | None  # None when decision is NEW_ENTITY
     confidence_score: float
-    entity: STIXObject
+    entity: Entity

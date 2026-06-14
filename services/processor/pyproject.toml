@@ -21,6 +21,7 @@ dependencies = [
     "httpx==0.28.1",
     "pydantic-ai-slim[openai]==1.104.0",
     "prometheus-client>=0.25.0",
+    "rapidfuzz>=3.0.0",
     "aioboto3>=15.5.0",
     "apscheduler>=3.11.2",
 ]

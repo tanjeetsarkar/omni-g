@@ -1,7 +1,7 @@
 # Omni-G Roadmap (Milestone-Based)
 
-**Last Updated:** May 23, 2026
-**Status:** M1 In Progress · M2–M5 Complete · M6 Not Started
+**Last Updated:** June 1, 2026
+**Status:** M1 In Progress · M2 Complete (M2.3 needs rework) · M3 Complete (M3.3 needs rework) · M4 Complete (M4.2 needs rework) · M5 Partial (M5.2 needs rework) · M6 Not Started
 
 This roadmap outlines the sequential milestones for building Omni-G. Each milestone has clear deliverables, success criteria, and dependencies. No time estimates—sequencing is based on logical dependencies.
 
@@ -137,9 +137,12 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M2.3: Delivery Service (Next.js Frontend)
+
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Sigma.js/Graphology removed; `@xyflow/react` + `dagre` + `elkjs` installed; `KnowledgeGraph.tsx` + `EntityNode.tsx` created.
+
 - [x] Initialize Next.js 15 with TypeScript + Tailwind
 - [x] Create WebSocket gateway stub in `/app/api/ws`
-- [x] Create Sigma.js graph component skeleton
+- [x] Create React Flow canvas skeleton (`KnowledgeGraph.tsx`, `EntityNode.tsx`)
 - [x] Configure Socket.io client
 - [x] Create Dockerfile for Next.js production build
 - [x] Add Jest test configuration
@@ -218,16 +221,20 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M3.3: LLM Entity Extraction
-- [x] Implement instructor-based LLM prompt
-- [x] Create Pydantic STIX 2.1 models (Person, Org, Malware, etc.)
+
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Generic `Entity` + `Relationship` models in `src/models/entities.py`; LLM extracts open-ended types; 186 tests pass.
+
+- [x] Implement PydanticAI-based LLM prompt
+- [x] Create generic `Entity` + `Relationship` Pydantic models in `src/models/entities.py`; LLM determines type freely
 - [x] Implement Ollama fallback logic
-- [x] Add confidence scoring for extracted entities
+- [x] Add confidence scoring for extracted entities (float 0.0-1.0)
 - [x] Implement rate limiting (tokens/sec)
-- [x] Create comprehensive unit tests (>80% coverage)
+- [x] Update unit tests for generic entity model (186 tests pass)
 
 **Dependencies:** M2.2, M3.1
 **Verification:**
-- Entity extraction produces valid STIX objects
+- Entity extraction produces valid generic entities
+- Entity type is determined by LLM from context
 - Confidence scores correlate with accuracy
 - Fallback to Ollama works on OpenAI failure
 - Rate limiting prevents token exhaustion
@@ -281,21 +288,25 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 ---
 
 #### M4.2: Neo4j Graph Persistence
-- [x] Create Neo4j schema:
-  - Nodes: Person, Organization, Malware, Location, Campaign, AttackPattern
-  - Properties: STIX-compliant fields + custom_properties
-  - Edges: attributed-to, targets, uses, located-at, related-to
-- [x] Create indexes on:
+
+> ✅ **REWORK COMPLETE** (June 2, 2026) — Migrated to `:Entity:{TypeLabel}:{tenant_label}`; open-ended edge types; 5-constraint generic schema; `search_entities()` added; all tests pass.
+
+- [x] Generic `:Entity:{TypeLabel}:{tenant_label}` node labels
+  - Properties: `id, type, name, description, confidence, tenant_id, source_id, created, modified` + domain-specific `properties` dict
+  - Edge types: open-ended strings (KNOWS, LOCATED_AT, PARTICIPATED_IN, ACQUIRED, RELATED_TO, etc.)
+- [x] Updated indexes:
   - Entity IDs (unique constraint)
+  - `tenant_id` (required on every query)
+  - `type` (for filtering)
   - Created/updated timestamps
   - Confidence scores
-- [x] Implement APOC procedures for community detection (Leiden/Louvain)
-- [x] Add transaction management + rollback on write failures
-- [x] Create comprehensive integration tests
+- [x] APOC procedures for community detection (Leiden/Louvain)
+- [x] Transaction management + rollback on write failures
+- [x] Integration tests updated for new schema
 
 **Dependencies:** M1.3 (Neo4j), M4.1
 **Verification:**
-- Schema validates STIX compliance
+- Schema uses generic `:Entity:{TypeLabel}:{tenant_label}` label pattern (not STIX labels)
 - Indexes created successfully
 - Community detection completes <10s for 10k nodes
 - Transactions roll back on errors
@@ -349,24 +360,33 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ---
 
-#### M5.2: Interactive Graph Dashboard
-- [x] Implement Sigma.js WebGL rendering (support 100k+ nodes)
-- [x] Create force-directed layout algorithm
-- [x] Implement semantic zooming (aggregate → individual)
-- [x] Create Focus+Context filtering
-- [x] Add real-time node/edge highlighting on alerts
-- [x] Performance optimization:
-  - Render 50k nodes in <500ms
-  - Update on-demand (lazy loading)
-  - GPU acceleration where available
-- [x] Create performance benchmarks
+#### M5.2: Search-First Graph Dashboard (React Flow)
+
+> ✅ **REWORK COMPLETE** (June 2, 2026) — React Flow canvas with dagre layout, search-first UX, EntityNode with accordion, useRealtimeNodes hook, POST /api/search route; 14 delivery tests pass.
+
+- [x] Remove Sigma.js, Graphology, graphology-layout-forceatlas2 from `package.json`
+- [x] Install `@xyflow/react`, `dagre`, `elkjs`
+- [x] Implement full-width search bar as the graph entry point (no pre-loaded graph)
+- [x] Create `POST /api/search` Next.js API route (proxies to processor `POST /search`)
+- [x] Processor `POST /search` endpoint: Qdrant semantic search → top-N entity IDs → 1-2 hop Neo4j neighbors
+- [x] Implement React Flow (`@xyflow/react`) canvas:
+  - dagre layout for initial render
+  - Custom `EntityNode` component (type badge, name, confidence — inline)
+  - Click node → inline accordion expand for full properties (no sidebar)
+- [x] Implement real-time node animation (`useRealtimeNodes` hook):
+  - Connected new entities → animate into layout
+  - Disconnected new entities → floating incoming cluster at canvas edge
+- [x] Remove old Delivery components: `FocusPanel.tsx`, `FilterToolbar.tsx`, `AlertBadge.tsx`, `ConceptFlowView.tsx`, `GraphView.tsx`
+- [x] Remove old hooks: `useSemanticZoom.ts`, `useGraphFilter.ts`, `useAlertHighlight.ts`, `useGraphData.ts`
+- [ ] Create performance benchmarks
 
 **Dependencies:** M5.1, M2.3, M4.2
 **Verification:**
-- Dashboard loads 10k nodes smoothly
-- Zoom/pan operations are responsive
-- Real-time alerts highlight correctly
-- Performance benchmarks met
+- Search returns relevant entities + neighbors as React Flow graph in <2s
+- Custom node components render correctly at all confidence levels
+- Real-time alerts animate connected nodes into layout
+- Disconnected new entities appear as floating cluster
+- No full graph pre-load on page open
 
 ---
 
@@ -429,27 +449,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ---
 
-#### M6.3: STIX 2.1 Compliance & Audit Trail
-- [ ] Map all graph nodes to STIX Domain Objects (SDOs)
-- [ ] Add `created_by_ref` to every node (plugin + analyst ID)
-- [ ] Implement TAXII server for inter-agency sharing
-- [ ] Create immutable audit log for all mutations
-- [ ] Export capabilities:
-  - STIX bundles
-  - TAXII feeds
-  - CSV/JSON reports
-- [ ] Document compliance procedures
-
-**Dependencies:** M4.2, M6.1
-**Verification:**
-- All nodes have STIX mappings
-- Audit log is immutable + timestamped
-- TAXII server shares data correctly
-- Exports validate against STIX schema
-
----
-
-#### M6.4: Observability & Alerting
+#### M6.3: Observability & Alerting
 - [ ] Create Prometheus dashboards:
   - Kafka lag per consumer group
   - Neo4j write latency percentiles
@@ -473,7 +473,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ---
 
-#### M6.5: Documentation & Onboarding
+#### M6.4: Documentation & Onboarding
 - [ ] Create API documentation:
   - OpenAPI 3.1 specs (auto-generated)
   - Example requests/responses
@@ -488,12 +488,11 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
   - Backup/recovery procedures
   - Scaling guidelines
 - [ ] Create user guide:
-  - Dashboard navigation
+  - Graph search usage
   - Briefing subscriptions
-  - Search syntax
   - FAQ
 
-**Dependencies:** M6.1, M6.2, M6.3, M6.4
+**Dependencies:** M6.1, M6.2, M6.3
 **Verification:**
 - Documentation is complete + accurate
 - Examples are copy-paste ready
@@ -502,7 +501,7 @@ This roadmap outlines the sequential milestones for building Omni-G. Each milest
 
 ---
 
-#### M6.6: Integration Testing & Performance Tuning
+#### M6.5: Integration Testing & Performance Tuning
 - [ ] Create end-to-end tests:
   - Raw event → ingestion → graph → alert → UI
   - Multi-step workflows
@@ -564,13 +563,11 @@ M6.1 ← M4.2
    ↓
 M6.2 ← M3.1
    ↓
-M6.3 ← M4.2, M6.1
+M6.3 ← M6.1, M6.2
    ↓
 M6.4 ← M6.3
    ↓
-M6.5 ← M6.4
-   ↓
-M6.6 ← All previous
+M6.5 ← All previous
 ```
 
 ---
@@ -593,7 +590,7 @@ M6.6 ← All previous
 | M2 | All services build + health checks pass |
 | M3 | 1000+ events/sec through pipeline, <500ms latency |
 | M4 | 10k nodes in graph, community detection <10s |
-| M5 | <2s latency from alert to UI, audio briefings work |
+| M5 | <2s from search to graph render, real-time alerts animate correctly |
 | M6 | 10k EPS sustained, no multi-tenant leakage, <5s E2E latency |
 
 ---

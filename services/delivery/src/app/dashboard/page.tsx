@@ -1,163 +1,301 @@
 "use client";
 
 /**
- * /dashboard — interactive graph dashboard (M5.2)
+ * /dashboard — Omni-G Knowledge Graph Search-First Dashboard (M5.2 / M2.3).
  *
  * Layout:
- *   ┌──────────────────────────────────┐
- *   │ Top bar: Omni-G  [AlertBadge]    │
- *   ├──────────────────────┬───────────┤
- *   │  GraphView (flex-1)  │FocusPanel │
- *   └──────────────────────┴───────────┘
+ *   ┌────────────────────────────────────────────────────────┐
+ *   │ Header: logo · search bar                              │
+ *   ├────────────────────────────────────────────────────────┤
+ *   │  KnowledgeGraph (React Flow canvas — empty until       │
+ *   │  first search)                                         │
+ *   └────────────────────────────────────────────────────────┘
+ *   ╭── PipelineProgressToast (bottom-right, floating) ──────╮
+ *   ╭── ActivityDrawer (bottom, collapsible) ─────────────────╮
  */
 
 import dynamic from "next/dynamic";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Search, Loader } from "lucide-react";
 
 import ActivityDrawer from "@/components/graph/ActivityDrawer";
-import AlertBadge from "@/components/graph/AlertBadge";
-import FilterToolbar from "@/components/graph/FilterToolbar";
-import FocusPanel from "@/components/graph/FocusPanel";
-import { useAlertHighlight } from "@/hooks/useAlertHighlight";
-import { useGraphData } from "@/hooks/useGraphData";
-import { useGraphFilter } from "@/hooks/useGraphFilter";
-import { useSemanticZoom } from "@/hooks/useSemanticZoom";
-import { buildClusterGraph } from "@/lib/buildClusterGraph";
+import PipelineProgressToast, {
+  type ToastState,
+} from "@/components/graph/PipelineProgressToast";
 import { getSocket, joinTenant } from "@/lib/socket";
+import { useRealtimeNodes } from "@/hooks/useRealtimeNodes";
+import type { SearchResponse } from "@/types/entities";
 
-// GraphView uses Sigma.js (WebGL) — must be client-only, no SSR
-const GraphView = dynamic(() => import("@/components/graph/GraphView"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex items-center justify-center w-full h-full">
-      <p className="text-slate-400 text-sm animate-pulse">
-        Initialising graph…
-      </p>
-    </div>
-  ),
-});
+// KnowledgeGraph uses React Flow — must be client-only, no SSR
+const KnowledgeGraph = dynamic(
+  () =>
+    import("@/components/graph/KnowledgeGraph").then((m) => ({
+      default: m.KnowledgeGraph,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center w-full h-full">
+        <p className="text-slate-400 text-sm animate-pulse">
+          Initialising graph…
+        </p>
+      </div>
+    ),
+  },
+);
+
+// ── DashboardContent ──────────────────────────────────────────────────────────
 
 function DashboardContent() {
   const socket = getSocket();
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get("q") ?? "";
 
-  const { nodes, edges, loading, error } = useGraphData();
-  const { highlightedNodeIds, alertCount } = useAlertHighlight(socket);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
 
-  // Semantic zoom
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sigmaRef = useRef<any>(null);
-  const [, setSigmaReady] = useState(false);
-  const { isClustered } = useSemanticZoom(sigmaRef);
+  const [searchQuery, setSearchQuery] = useState(initialQuery);
+  const [submitting, setSubmitting] = useState(false);
+  const [searchResult, setSearchResult] = useState<SearchResponse>({
+    entities: [],
+    relationships: [],
+  });
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-  // Filter state
-  const {
-    filteredNodes,
-    filteredEdges,
-    filterState,
-    availableTypes,
-    toggleType,
-    setMinConfidence,
-    setSearchQuery,
-    resetFilters,
-  } = useGraphFilter(nodes, edges);
+  const [toastState, setToastState] = useState<ToastState>("idle");
+  const [toastQuery, setToastQuery] = useState("");
+  const [ingestError, setIngestError] = useState<string | null>(null);
+  const lastQueryRef = useRef("");
 
-  // Cluster graph (computed when camera is zoomed out)
-  const { clusterNodes, clusterEdges } = useMemo(
-    () => buildClusterGraph(filteredNodes, filteredEdges),
-    [filteredNodes, filteredEdges],
-  );
+  const { newEntities } = useRealtimeNodes({ tenantId });
 
-  const displayNodes = isClustered ? clusterNodes : filteredNodes;
-  const displayEdges = isClustered ? clusterEdges : filteredEdges;
+  // Join tenant room on mount
+  useEffect(() => {
+    joinTenant(tenantId);
+  }, [socket, tenantId]);
 
-  // Pre-fill filter search from ?q= URL param on mount.
+  // Auto-search when arriving via ?q=
   useEffect(() => {
     if (initialQuery) {
-      setSearchQuery(initialQuery);
+      runSearch(initialQuery);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery]);
-
-  // Join the default tenant room on mount
-  useEffect(() => {
-    const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
-    joinTenant(tenantId);
   }, []);
+
+  /**
+   * refreshGraph — queries already-ingested entities from the Processor via
+   * Qdrant semantic search + Neo4j neighbour expansion and updates the graph
+   * canvas.  Called immediately when a search is submitted (to show existing
+   * data right away) and again on pipeline_complete (to show freshly ingested
+   * entities).
+   */
+  const refreshGraph = useCallback(
+    async (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      try {
+        const res = await fetch("/api/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: trimmed,
+            tenant_id: tenantId,
+            limit: 50,
+          }),
+        });
+        if (!res.ok) {
+          const err: { error?: string } = await res.json().catch(() => ({}));
+          setSearchError(err.error ?? `Graph query failed: HTTP ${res.status}`);
+          return;
+        }
+        const data: SearchResponse = await res.json();
+        setSearchResult(data);
+        setSearchError(null);
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : "Graph query failed";
+        setSearchError(detail);
+      }
+    },
+    [tenantId],
+  );
+
+  /**
+   * runSearch — immediately queries existing entities (search-first UX) then
+   * triggers on-demand ingestion via the Aggregator so new data is gathered
+   * in the background.  The Aggregator fans out to MCP plugins, queues Kafka
+   * events, and returns 202.  The toast stays "running" until the processor
+   * emits alert_publishing→done via the WebSocket.
+   */
+  const runSearch = useCallback(
+    async (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      setSubmitting(true);
+      setSearchError(null);
+      setToastQuery(trimmed);
+      setToastState("running");
+      setIngestError(null);
+      lastQueryRef.current = trimmed;
+
+      // ── Step 1: Immediately show already-ingested entities (search-first) ──
+      // Don't await — let the graph populate while ingestion runs in parallel.
+      void refreshGraph(trimmed);
+
+      // ── Step 2: Trigger on-demand ingestion for new / updated data ─────────
+      try {
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: trimmed, sources: [] }),
+        });
+        if (!res.ok) {
+          const err: { error?: string } = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        // 202 Accepted — pipeline is running; toast transitions via socket event
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Unknown error";
+        setSearchError(detail);
+        setToastState("error");
+        setIngestError(detail);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [refreshGraph],
+  );
+
+  // Transition toast to "done" and auto-refresh graph when the last pipeline
+  // stage (alert_publishing) completes.
+  useEffect(() => {
+    if (toastState !== "running") return;
+    function handlePipelineComplete(ev: unknown) {
+      const event = ev as Record<string, unknown>;
+      if (event.stage === "alert_publishing" && event.status === "done") {
+        setToastState("done");
+        if (lastQueryRef.current) {
+          refreshGraph(lastQueryRef.current);
+        }
+      }
+    }
+    socket.on("pipeline_stage", handlePipelineComplete);
+    return () => {
+      socket.off("pipeline_stage", handlePipelineComplete);
+    };
+  }, [socket, toastState, refreshGraph]);
+
+  // 90-second fallback: if the socket never delivers pipeline_complete
+  // (gateway down, missed event), transition the toast and refresh anyway.
+  useEffect(() => {
+    if (toastState !== "running") return;
+    const timeoutId = setTimeout(() => {
+      setToastState("done");
+      if (lastQueryRef.current) {
+        refreshGraph(lastQueryRef.current);
+      }
+    }, 90_000);
+    return () => clearTimeout(timeoutId);
+  }, [toastState, refreshGraph]);
+
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    runSearch(searchQuery);
+  }
 
   return (
     <div
       className="flex flex-col h-screen bg-slate-950 text-slate-100"
       data-testid="dashboard-content"
     >
-      {/* ── Top Bar ───────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-700 shrink-0">
-        <div className="flex items-center gap-3">
-          <span className="font-bold text-lg tracking-tight">Omni-G</span>
-          <span className="text-xs text-slate-500 uppercase tracking-widest">
+      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
+      <header className="flex items-center gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-700 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="font-bold text-base tracking-tight">Omni-G</span>
+          <span className="text-[10px] text-slate-500 uppercase tracking-widest hidden sm:block">
             Knowledge Graph
           </span>
         </div>
-        <AlertBadge count={alertCount} />
+
+        <div className="w-px h-5 bg-slate-700 shrink-0" />
+
+        <form
+          onSubmit={handleSearchSubmit}
+          className="flex items-center gap-1.5 flex-1 min-w-0"
+          aria-label="Search knowledge graph"
+        >
+          <div className="relative flex-1 min-w-0 max-w-lg">
+            <Search
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
+            />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search entities, people, topics…"
+              className="w-full bg-slate-800 border border-slate-600 text-slate-200 text-xs
+                         placeholder-slate-500 rounded-lg pl-7 pr-3 py-1.5
+                         focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              disabled={submitting}
+              autoFocus
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!searchQuery.trim() || submitting}
+            className="shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700
+                       disabled:text-slate-500 text-white text-xs font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+          >
+            {submitting && <Loader size={11} className="animate-spin" />}
+            Search
+          </button>
+        </form>
+
+        {/* Result count */}
+        {searchResult.entities.length > 0 && (
+          <span className="text-xs text-slate-400 shrink-0 hidden sm:block">
+            {searchResult.entities.length} entities
+          </span>
+        )}
       </header>
 
-      {/* Filter Toolbar */}
-      <FilterToolbar
-        availableTypes={availableTypes}
-        filterState={filterState}
-        onToggleType={toggleType}
-        onConfidenceChange={setMinConfidence}
-        onSearchChange={setSearchQuery}
-        onReset={resetFilters}
-        shownNodes={filteredNodes.length}
-        totalNodes={nodes.length}
-      />
+      {/* ── Graph Canvas ─────────────────────────────────────────────────────── */}
+      <main className="flex-1 relative min-h-0">
+        {searchError && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-900/80 border border-red-700 text-red-200 text-xs px-4 py-2 rounded-lg">
+            {searchError}
+          </div>
+        )}
 
-      {/* ── Main Area ─────────────────────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0">
-        {/* Graph canvas */}
-        <main className="flex-1 relative">
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10">
-              <p className="text-slate-400 text-sm animate-pulse">
-                Loading graph…
-              </p>
-            </div>
-          )}
-          {error && !loading && (
-            <div className="absolute inset-0 flex items-center justify-center z-10">
-              <p className="text-red-400 text-sm">Error: {error}</p>
-            </div>
-          )}
-          {!loading && (
-            <GraphView
-              nodes={displayNodes}
-              edges={displayEdges}
-              highlightedNodeIds={highlightedNodeIds}
-              selectedNodeId={selectedNodeId}
-              onNodeClick={setSelectedNodeId}
-              onSigmaReady={(s) => {
-                sigmaRef.current = s;
-                setSigmaReady(true);
-              }}
-              className="w-full h-full"
-            />
-          )}
-        </main>
-
-        {/* Focus panel (always rendered; content changes by selectedNodeId) */}
-        <FocusPanel
-          nodeId={selectedNodeId}
-          nodes={nodes}
-          onClose={() => setSelectedNodeId(null)}
+        <KnowledgeGraph
+          entities={searchResult.entities}
+          relationships={searchResult.relationships}
+          newEntities={newEntities}
         />
-      </div>
+      </main>
 
-      {/* ── Pipeline Activity Drawer ───────────────────────────────────── */}
+      {/* ── Pipeline Activity Drawer ─────────────────────────────────────────── */}
       <ActivityDrawer socket={socket} />
+
+      {/* ── Floating Pipeline Monitor Toast ──────────────────────────────────── */}
+      <PipelineProgressToast
+        query={toastQuery}
+        toastState={toastState}
+        errorDetail={ingestError}
+        socket={socket}
+        onRefreshGraph={() => {
+          if (lastQueryRef.current) refreshGraph(lastQueryRef.current);
+        }}
+        onDismiss={() => {
+          setToastState("idle");
+          setIngestError(null);
+        }}
+        onRetry={() => {
+          if (lastQueryRef.current) runSearch(lastQueryRef.current);
+        }}
+      />
     </div>
   );
 }

@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     briefing_preflight_enabled: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_ENABLED")
     briefing_preflight_strict: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_STRICT")
 
+    # Aggregator (for processor → aggregator enrichment callbacks)
+    aggregator_url: str = Field(default="http://localhost:8000", alias="AGGREGATOR_URL")
+
 
 def get_settings() -> Settings:
     return Settings()

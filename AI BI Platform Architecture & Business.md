@@ -1,9 +1,9 @@
-# **Project Omni-G: A Next-Generation AI-Powered Business Intelligence & Knowledge Graph Architecture for the Intelligence Community**
+# **Project Omni-G: A Next-Generation AI-Powered Knowledge Graph Platform for General Intelligence Gathering**
 
 ## **Executive Summary**
 
-The contemporary global security environment is defined not by a scarcity of information, but by a crisis of synthesis. As articulated in the Department of State’s Open Source Intelligence (OSINT) Strategy, the exponential proliferation of publicly available information (PAI) has fundamentally altered the intelligence landscape, creating a "cognitive bandwidth gap" where the velocity of data far outstrips the human capacity for analysis. Intelligence analysts today are besieged by a torrent of disparate signals—social media telemetry, corporate registry filings, AIS maritime data, and dark web forum chatter—creating a chaotic noise floor where critical insights are frequently obscured. Traditional intelligence platforms, while robust in their specific domains, often suffer from monolithic architectures, proprietary data lock-in, and a "retrieval-centric" philosophy that places the burden of discovery entirely on the analyst.
-This white paper introduces **Omni-G**, a distributed, event-driven Knowledge Graph platform explicitly designed to bridge this gap for the Intelligence Community (IC). Building upon the architectural principles of "Radio-G"—an AI-powered news aggregation system that successfully leveraged Apache Kafka, Google Cloud, and Generative AI to democratize access to global narratives —Omni-G reframes the challenge of intelligence gathering. It moves beyond the static paradigm of "search" to a dynamic, real-time paradigm of "synthesis." Just as Radio-G transforms static text into a "lean-back" audio experience, effectively broadcasting relevant news to users , Omni-G transforms unstructured OSINT data points into a living, queryable Knowledge Graph that proactively "broadcasts" actionable insights to analysts before they even formulate the query.
+The modern world is defined not by a scarcity of information, but by a crisis of synthesis. Across every domain—business, research, journalism, security, finance, policy—the exponential proliferation of publicly available data has created a "cognitive bandwidth gap" where the velocity of information far outstrips the human capacity for analysis. Researchers and analysts today are besieged by a torrent of disparate signals—news articles, social media, corporate filings, research publications, and public databases—creating a chaotic noise floor where critical insights are frequently obscured. Traditional knowledge management tools suffer from monolithic architectures, proprietary data lock-in, and a "retrieval-centric" philosophy that places the burden of discovery entirely on the user.
+This white paper introduces **Omni-G**, a distributed, event-driven Knowledge Graph platform designed to bridge this gap across any domain. Building upon the architectural principles of "Radio-G"—an AI-powered news aggregation system that successfully leveraged Apache Kafka, Google Cloud, and Generative AI to democratize access to global narratives —Omni-G reframes the challenge of intelligence gathering. It moves beyond the static paradigm of "search" to a dynamic, real-time paradigm of "synthesis." Just as Radio-G transforms static text into a "lean-back" audio experience, effectively broadcasting relevant news to users , Omni-G transforms unstructured OSINT data points into a living, queryable Knowledge Graph that proactively "broadcasts" actionable insights to analysts before they even formulate the query.
 This document serves as a comprehensive blueprint for the Omni-G platform. It articulates a strategic philosophy rooted in "Cognitive Resonance," details a market-viable business model based on a developer-centric plugin economy powered by the Model Context Protocol (MCP), and provides an exhaustive technical specification of the platform’s three core pillars: the Aggregator, the Processor, and the Delivery engine. By synthesizing the event-driven agility of Radio-G with the cognitive depth of Graph Retrieval-Augmented Generation (GraphRAG) and the rigorous security of multi-tenant sandboxing, Omni-G represents a paradigm shift in how the IC interacts with the world's information.
 
 ## **1\. Application Philosophy: From Data Retrieval to Cognitive Resonance**
@@ -15,16 +15,16 @@ A retrieval-centric architecture is inherently limited by the analyst’s availa
 
 ### **1.2 The Omni-G Philosophy: Synthesis-Centric Intelligence**
 
-Omni-G adopts a "Synthesis-Centric" philosophy. Drawing direct inspiration from Radio-G’s concept of an "autonomous, intelligent news anchor" , Omni-G functions as an autonomous intelligence officer that never sleeps. It does not passively await queries. Instead, it continuously ingests high-velocity streams of data, resolves entities against an existing Knowledge Graph, and identifies anomalous relationships, emerging narratives, or structural changes in real-time.
-The core objective of Omni-G is **Cognitive Resonance**—a state in which the system’s internal model of the world (the Knowledge Graph) aligns with external reality in near real-time, allowing it to proactively "push" alerts that resonate with the analyst’s standing intelligence requirements (SIRs). This shift from "Pull" to "Push" fundamentally alters the analyst's workflow:
+Omni-G adopts a "Synthesis-Centric" philosophy. Drawing direct inspiration from Radio-G's concept of an "autonomous, intelligent news anchor," Omni-G functions as an autonomous knowledge curator that never sleeps. It does not passively await queries. Instead, it continuously ingests high-velocity streams of data, resolves entities against an existing Knowledge Graph, and identifies relationships, emerging narratives, or structural changes in real-time.
+The core objective of Omni-G is **Cognitive Resonance**—a state in which the system's internal model of the world (the Knowledge Graph) aligns with external reality in near real-time, allowing it to proactively "push" alerts and surface new connections before the user formulates the query. This shift from "Pull" to "Push" fundamentally alters how users interact with information:
 
-* **Ingestion is Translation:** Just as Radio-G translates text to audio to bridge the accessibility gap , Omni-G translates *unstructured data* (text, images, logs) into *structured knowledge* (entities, relationships, events).
-* **State is a Stream:** The "current state" of the world is merely a snapshot of an infinite event stream. By utilizing Confluent Kafka as the central nervous system, Omni-G ensures that intelligence is never stale; the graph is updated milliseconds after new data arrives.
-* **Deduping as Intelligence:** One of the key learnings from Radio-G was that "the most important code is often the code that decides when *not* to call the AI". Omni-G applies this via rigorous cryptographic hashing and entity resolution. By preventing circular reporting—where a single false report echoes across multiple sources and appears as corroboration—the system acts as a filter for truth, not just a bucket for data.
+* **Ingestion is Translation:** Omni-G translates *unstructured data* (text, articles, documents) into *structured knowledge* (entities, relationships, events) that can be reasoned about at scale.
+* **State is a Stream:** The "current state" of the world is merely a snapshot of an infinite event stream. By utilizing Apache Kafka as the central nervous system, Omni-G ensures that knowledge is never stale; the graph is updated as new data arrives.
+* **Deduping as Intelligence:** One of the key learnings from Radio-G was that "the most important code is often the code that decides when *not* to call the AI." Omni-G applies this via rigorous cryptographic hashing and entity resolution. By preventing circular reporting—where a single report echoes across multiple sources and appears as corroboration—the system acts as a filter for signal, not just a bucket for noise.
 
-### **1.3 The "Lean-Back" Experience in High-Stakes Environments**
+### **1.3 The "Lean-Back" Experience**
 
-The Radio-G project prioritized a "lean-back" experience, allowing users to consume news via audio while commuting or multitasking. Omni-G adapts this for the high-tempo environment of the IC. Intelligence consumers—whether they are field agents in a vehicle or policymakers between meetings—cannot always engage with a complex dashboard. Omni-G provides an "Audio-First" intelligence capability. Utilizing the ElevenLabs integration demonstrated in Radio-G , the platform synthesizes "Daily Situation Reports" or "Flash Briefings" tailored to the user's specific graph subscriptions. An analyst can listen to a secure, AI-generated briefing: *"Overnight, the graph detected three new shell companies linked to the Lazarus Group cluster. Confidence is high. Source: Dark web forum monitor via MCP Plugin X."* This capability democratizes access to the Knowledge Graph, decoupling intelligence consumption from the screen.
+The Radio-G project prioritized a "lean-back" experience, allowing users to consume information via audio while multitasking. Omni-G adapts this for any knowledge-intensive workflow. Users who cannot always engage with a complex dashboard can receive AI-generated audio briefings synthesized from the latest graph changes. The platform synthesizes "Daily Situation Reports" tailored to the user's graph subscriptions—delivered by Kokoro TTS. For example: *"Overnight, the graph added 12 new entities connected to the Organization cluster you are tracking. Three new relationships were discovered with high confidence."* This decouples knowledge consumption from the screen and democratizes access to the Knowledge Graph.
 
 ## **2\. Market Research: The Plugin Economy & Business Models**
 
@@ -61,13 +61,13 @@ A critical differentiator for Omni-G is the adoption of the **Model Context Prot
 
 ### **2.3 Strategic Positioning vs. Competitors**
 
-* **Vs. Palantir Gotham:** Palantir operates on a high-cost, heavy-service consulting model, often requiring months of forward-deployed engineering to integrate. Omni-G offers a self-service, lower-entry-cost SaaS model with a "bring your own data" (BYOD) philosophy via MCP, allowing agencies to start small and scale.
-* **Vs. Maltego:** Maltego relies heavily on client-side transforms and a visual-first approach, where the processing happens on the analyst's machine or disparate servers. Omni-G focuses on *server-side* continuous processing (Event-Driven) and *semantic* understanding (GraphRAG), ensuring that the knowledge graph is alive and reasoning even when the analyst is offline.
-* **Vs. Snowflake:** Snowflake is a general-purpose data warehouse. While it stores data effectively, it lacks the native *semantic* understanding of entities, relationships, and OSINT ontologies (STIX/TAXII) that Omni-G provides out of the box. Omni-G is an application layer *on top* of data, not just a storage layer.
+* **Vs. Palantir:** Palantir operates on a high-cost, heavy-service consulting model, often requiring months of forward-deployed engineering to integrate. Omni-G offers a self-service, plugin-extensible model with a "bring your own data" philosophy via MCP, allowing teams to start small and scale.
+* **Vs. Maltego:** Maltego relies on client-side transforms and a visual-first approach, where processing happens on the user's machine. Omni-G focuses on *server-side* continuous processing (Event-Driven) and *semantic* understanding (GraphRAG), ensuring that the knowledge graph is alive and reasoning even when the user is offline.
+* **Vs. Snowflake:** Snowflake is a general-purpose data warehouse. While it stores data effectively, it lacks the native *semantic* understanding of entities and relationships that Omni-G provides. Omni-G is an application layer *on top* of data, not just a storage layer.
 
 ## **3\. Technical Architecture: The Omni-G Engine**
 
-The architecture of Omni-G leverages the **Aggregator-Processor-Delivery** pattern established in Radio-G , upgraded for enterprise-grade intelligence workloads. It utilizes a microservices architecture deployed on **Google Cloud Run** (or Kubernetes for on-premise IC deployments), orchestrated by **Confluent Kafka** for high-throughput event streaming.
+The architecture of Omni-G leverages the **Aggregator-Processor-Delivery** pattern established in Radio-G, upgraded for high-throughput knowledge graph workloads. It uses a microservices architecture deployable on Docker Compose locally or Kubernetes in production, orchestrated by **Apache Kafka** for high-throughput event streaming.
 
 ### **3.1 Component 1: The Aggregator (The "Senses")**
 
@@ -85,7 +85,7 @@ Instead of hard-coding API integrations for Twitter, Telegram, or Shodan, the Ag
 Data ingested from MCP servers is immediately serialized into JSON and pushed to the raw-intelligence-feed Kafka topic.
 
 * **Edge Schema Enforcement:** We utilize **Pydantic** models to enforce strict schema validation at the edge. This ensures that "garbage in, garbage out" is mitigated early. If a plugin returns malformed data or data that violates the schema constraints, it is rejected before it can pollute the downstream processing pipeline.
-* **Provenance Metadata:** Every event is tagged with extensive metadata: Source ID, Plugin Version, Timestamp, Latency, and a Confidence Score. This is crucial for the IC, where the *source* of information is as important as the information itself (adhering to Intelligence Community Directive 203 standards regarding sourcing and confidence).
+* **Provenance Metadata:** Every event is tagged with extensive metadata: Source ID, Plugin Version, Timestamp, Latency, and a Confidence Score. The source of information is as important as the information itself—provenance metadata enables users to trace any claim in the graph back to the originating plugin and event.
 
 ### **3.2 Component 2: The Processor (The "Brain")**
 
@@ -98,12 +98,14 @@ Following the Radio-G pattern, we use **Redis** for high-performance deduplicati
 * **Content Hashing:** Incoming articles or reports are hashed using SHA-256. The hash is checked against Redis. If it exists, the system checks for updates. If the content is identical, processing is skipped to save AI inference costs—a lesson directly learned from Radio-G’s "Rate Limit Wall" findings.
 * **Windowed Deduplication:** For high-velocity streams (e.g., social media botnets repeating the same message), Redis sets a sliding window to aggregate duplicates into a single "Cluster Event" rather than processing them individually. This reduces noise and computational overhead.
 
-#### **3.2.2 Step 2: Entity & Relationship Extraction (LLM \+ Pydantic)**
+#### **3.2.2 Step 2: Entity & Relationship Extraction (LLM + Pydantic)**
 
-Unique content is passed to the **Extraction Service**. This service utilizes Large Language Models (LLMs) like Google Gemini 2.5 or open-source equivalents (Llama 3\) via the **Instructor** or **Pydantic** libraries to enforce structured output.
+Unique content is passed to the **Extraction Service**. This service utilizes Large Language Models via **pydantic-ai** to enforce structured output extraction.
 
-* **Ontology Mapping:** The LLM is prompted with a specific ontology, specifically mapped to **STIX 2.1** (Structured Threat Information Expression) objects. It must identify objects (Threat Actor, Malware, Identity, Infrastructure) and relationships (attributed-to, targets, uses, located-at).
-* **Dynamic Schema Generation:** Using Pydantic's dynamic model generation capabilities, the system can adapt to new entity types defined by plugins without requiring code changes or redeployment. This allows the graph schema to evolve organically as new threat types emerge.
+* **Open-Ended Entity Model:** The LLM extracts entities of any type it determines from context—Person, Organization, Location, Event, Topic, Concept, and so on. Entity types are not constrained to a fixed ontology; the schema is generic (`type`, `name`, `description`, `properties`) allowing the graph to represent any domain.
+* **Relationship Extraction:** Relationships between entities are also extracted with open-ended types (e.g., KNOWS, LOCATED_AT, PARTICIPATED_IN, PUBLISHED, FOUNDED) determined by the LLM from context.
+* **Confidence Scoring:** Every extracted entity and relationship carries a confidence score (0.0–1.0) computed from the LLM's certainty and source quality. This score drives downstream merge decisions and alert thresholds.
+* **Extensibility:** The `properties` dictionary on each entity allows domain-specific attributes without schema changes. Plugins can add structured data beyond what the base model captures.
 
 #### **3.2.3 Step 3: Entity Resolution (The "Identity" Problem)**
 
@@ -126,17 +128,19 @@ The Delivery layer consumes the processed Knowledge Graph and presents it to the
 
 #### **3.3.1 The "Live Graph" Dashboard**
 
-Unlike static charts, the Omni-G dashboard is a **WebGL-powered interactive environment** (using libraries like Reagraph or Sigma.js) capable of rendering 100,000+ nodes directly in the browser.
+The Omni-G dashboard is a **search-first, interactive graph environment** built with **React Flow** (@xyflow/react).
 
-* **Semantic Zooming:** At high zoom levels, users see aggregate "Community Nodes." As they zoom in, these break apart into individual entities and relationships, preserving context while managing visual complexity.
-* **Focus+Context:** Users can "pin" a target entity (Focus) while the rest of the graph dynamically rearranges to show the most relevant connections (Context), filtering out noise.
+* **Search-Driven Entry:** The user types a query. The system performs a semantic search against the vector database (Qdrant) to find the closest matching entities, then fetches their connected neighbors from Neo4j. The result is rendered as an interactive graph—no pre-loaded full graph.
+* **Inline Node Information:** Every node displays its entity type, name, confidence score, and key properties directly inside the node. There are no sidebars or detail panels. Clicking a node expands its inline view to show additional properties seamlessly.
+* **Real-Time Graph Growth:** When the Processor adds new entities connected to the current view, those nodes animate into the existing layout via force re-simulation. Disconnected new entities (not connected to current nodes) appear as a floating cluster at the edge of the canvas. The graph grows organically without a full reload.
+* **Layout:** Initial layout uses a dagre (hierarchical) or force-directed algorithm. Incremental updates re-simulate only the affected neighborhood to avoid disorienting the user.
 
 #### **3.3.2 The "Radio" Briefing (Audio Synthesis)**
 
-Retaining the soul of Radio-G, Omni-G generates automated audio intelligence briefings.
+Retaining the soul of Radio-G, Omni-G generates automated audio briefings.
 
-* **Mechanism:** The GraphRAG engine generates a "Daily Situation Report" script based on the user's subscribed topics and graph communities.
-* **Synthesis:** ElevenLabs converts this script into a professional-grade audio briefing. This allows field operatives to listen to a curated summary of graph changes ("New connection detected between Target A and Sanctioned Entity B") while in transit, ensuring continuous situational awareness.
+* **Mechanism:** The GraphRAG engine generates a "Daily Situation Report" script based on the user's graph subscriptions and community summaries.
+* **Synthesis:** Kokoro TTS (local, privacy-preserving) converts this script into an audio briefing, stored in MinIO and delivered via a signed URL. This allows users to consume a curated summary of graph changes while away from their screen.
 
 #### **3.3.3 Agentic Action**
 
@@ -146,76 +150,78 @@ Beyond passive consumption, Omni-G supports **Action Plugins**.
 
 ## **4\. Deep Dive: Component Interactions & Data Flow**
 
-To illustrate the architecture in action, we trace the lifecycle of a single intelligence event: **A new blog post on a dark web forum mentioning a known malware variant.**
+To illustrate the architecture in action, we trace the lifecycle of a single knowledge event: **A new news article published about a technology company announcing a major acquisition.**
 
 ### **4.1 Ingestion Phase (The Aggregator)**
 
-1. **Trigger:** The **Tor Monitor Plugin** (running as an isolated MCP Server) detects a new post on a monitored onion site.
-2. **Standardization:** The plugin formats the post into a standard JSON payload: {source: "Tor", content: "...", timestamp: "..."}.
-3. **Transmission:** The Aggregator (MCP Client) receives this payload and validates it against the RawPost Pydantic schema to ensure data integrity.
-4. **Buffering:** The valid payload is produced to the raw-osint-feed Kafka topic, ensuring the ingestion layer is decoupled from processing latency.
+1. **Trigger:** The **News RSS Plugin** (running as an isolated MCP Server) detects a new article matching monitored topics.
+2. **Standardization:** The plugin formats the article into a standard JSON payload: `{source: "reuters", content: "...", timestamp: "..."}`.
+3. **Transmission:** The Aggregator (MCP Client) receives this payload and validates it against the `RawEventEnvelope` Pydantic schema to ensure data integrity.
+4. **Buffering:** The valid payload is produced to the `raw-feed` Kafka topic, ensuring the ingestion layer is decoupled from processing latency.
 
 ### **4.2 Processing Phase (The Processor)**
 
-1. **Deduplication:** The **Ingestion Worker** (Consumer Group A) reads the Kafka message. It computes a SHA-256 hash of the content. It queries Redis: GET osint:hash:xyz. Result is nil. It sets the key with a 24-hour TTL to prevent reprocessing.
-2. **Extraction:** The worker sends the content to the **LLM Service**. The LLM extracts:
-   * Entity: Malware-X (Type: Malware)
-   * Entity: User\_DarkOps (Type: Threat Actor)
-   * Relationship: User\_DarkOps *mentions* Malware-X
-3. **Resolution:** The worker queries the Knowledge Graph (Neo4j) for User\_DarkOps.
+1. **Deduplication:** The **Ingestion Worker** reads the Kafka message. It computes a SHA-256 hash of the content. It queries Redis: `GET dedup:hash:xyz`. If the hash exists, the event is skipped. Otherwise, the key is set with a 24-hour TTL.
+2. **Extraction:** The worker sends the content to the **LLM Extraction Service**. The LLM extracts:
+   * Entity: Acme Corp (Type: Organization)
+   * Entity: Sarah Chen (Type: Person, role: CEO)
+   * Entity: GlobalTech Inc (Type: Organization)
+   * Relationship: Acme Corp *acquires* GlobalTech Inc
+   * Relationship: Sarah Chen *leads* Acme Corp
+3. **Resolution:** The worker queries the Knowledge Graph (Neo4j) for "Acme Corp."
    * *Scenario A:* Node exists. The new relationship is added.
-   * *Scenario B:* Node implies a match with User\_DkOps (fuzzy match \> 90%). A POSSIBLE\_MATCH edge is created.
-4. **Persistence:** The graph is updated. This triggers a **Change Data Capture (CDC)** event on the graph database.
+   * *Scenario B:* Node implies a match with "Acme Corporation" (semantic similarity > 90%). A `SAME_AS` edge is created.
+4. **Persistence:** The graph is updated atomically. A downstream alert is published to `analyst-alerts` if confidence exceeds threshold.
 
 ### **4.3 Reasoning Phase (GraphRAG)**
 
-1. **Community Update:** The CDC event triggers the **GraphRAG Service**. It identifies that User\_DarkOps belongs to "Community 42" (a known ransomware ring).
-2. **Re-Summarization:** The service updates the summary of Community 42 to include the new potential link to Malware-X.
-3. **Insight Generation:** The updated summary triggers an alert logic: "Community 42 is discussing a new malware variant."
+1. **Community Update:** After graph persistence, the **GraphRAG Service** runs incremental community detection on the 2-hop neighborhood of newly added entities.
+2. **Re-Summarization:** The service updates the natural-language summary of affected communities to include new entities and relationships.
+3. **Insight Generation:** The updated summary is used to generate an alert: "New acquisition activity detected in the Technology sector community."
 
 ### **4.4 Delivery Phase (The Interface)**
 
-1. **Notification:** The alert is pushed to the analyst-alerts Kafka topic.
-2. **Frontend Update:** The **Websocket Gateway** (subscribing to Kafka) pushes the alert to the Analyst's dashboard in real-time.
-3. **Visual Cue:** On the dashboard, the node for User\_DarkOps pulses red. The Analyst clicks it, and the graph expands to show the path to Malware-X and the connection to the "Ransomware Ring" community.
-4. **Audio Brief:** If the analyst is offline, the alert is queued for their morning "Radio-G" briefing.
+1. **Notification:** The alert is published to the `analyst-alerts` Kafka topic.
+2. **Frontend Update:** The **WebSocket Gateway** (subscribing to Kafka) pushes the alert to connected browser clients in real-time.
+3. **Visual Growth:** On the React Flow dashboard, if the user has a relevant query active, new nodes (Acme Corp, GlobalTech Inc, Sarah Chen) animate into the existing graph layout. If the user has no active query, the new entities appear in a floating incoming cluster.
+4. **Audio Brief:** If the user is offline, the alert is queued for their next GraphRAG-generated audio briefing.
 
-## **5\. Security & Governance: The Multi-Tenant Fortress**
+## **5\. Security & Governance: Multi-Tenant Architecture**
 
-For the Intelligence Community, security is paramount. Omni-G implements a **Zero-Trust, Multi-Tenant** architecture designed to handle sensitive data while leveraging the power of open-source intelligence.
+Omni-G implements a **Zero-Trust, Multi-Tenant** architecture designed to keep knowledge graphs fully isolated across tenants while remaining extensible for future federated use cases.
 
 ### **5.1 Multi-Tenancy Patterns**
 
 We employ a **Hybrid Multi-Tenancy** model to balance security and cost.
 
-* **Data Isolation:** Each tenant (e.g., "Counter-Terrorism Div", "Cyber-Crime Div") has a logically isolated subgraph. In Neo4j/FalkorDB, this is implemented via **Label-Based Access Control (LBAC)** or separate databases per tenant. This ensures that sensitive investigations remain compartmentalized.
-* **Federated Search:** "Super-User" analysts (with higher clearance) can execute **Federated Queries** that span multiple tenant graphs to find cross-agency connections (e.g., a terrorist financier also involved in cyber-fraud), adhering to the "Need to Share" doctrine while respecting "Need to Know".
+* **Data Isolation:** Each tenant has a logically isolated subgraph. In Neo4j, this is implemented via **Label-Based Access Control (LBAC)** or per-tenant labels. Every Kafka event, Redis dedup key, and Neo4j query carries a `tenant_id` ensuring complete data separation.
+* **Federated Search:** Authorized super-users can execute **Federated Queries** that span multiple tenant graphs to surface cross-tenant connections, respecting data ownership boundaries.
 
 ### **5.2 Secure Plugin Execution (Sandboxing)**
 
-Allowing third-party plugins in an IC environment poses a major security risk (RCE, data exfiltration). Omni-G mitigates this using **gVisor** and **Firecracker**.
+Third-party plugins introduce security risk (RCE, data exfiltration). Omni-G mitigates this using **gVisor** and **Firecracker**.
 
 * **Isolation:** Every MCP Server (plugin) runs in a dedicated **Firecracker MicroVM**. This provides hardware-level isolation, ensuring that a compromised plugin cannot access the host kernel or other plugins.
 * **Network Policy:** Plugins are restricted by strict **Network Policies**. A plugin designed to scrape "Site A" is firewall-restricted to *only* access "Site A". It cannot "phone home" to a Command & Control (C2) server.
 * **Output Validation:** All data leaving the sandbox must pass through a strict **Schema Validator**. Malformed or oversized payloads are dropped, preventing buffer overflow attacks on the Aggregator.
 
-### **5.3 Governance & Audit (STIX/TAXII)**
+### **5.3 Data Provenance & Schema Governance**
 
-Omni-G natively speaks **STIX 2.1** (Structured Threat Information Expression).
+Omni-G enforces schema discipline and data provenance without requiring a fixed ontology.
 
-* **Standardization:** All internal graph nodes are mapped to STIX Domain Objects (SDOs) like Attack Pattern, Campaign, and Intrusion Set. This ensures that data is structured in a format that is universally understood across the IC.
-* **Sharing:** Intelligence can be exported via **TAXII** servers to allied agencies, ensuring interoperability.
-* **Provenance:** Every node has a created\_by\_ref property pointing to the specific plugin and analyst responsible, creating an immutable audit trail for every piece of intelligence.
+* **Open-Ended Schema:** Entity types are determined by the LLM at extraction time. The base schema (id, type, name, description, properties, confidence, source_id, tenant_id) is enforced by Pydantic at the processing edge. Custom attributes are captured in the `properties` dictionary.
+* **Provenance:** Every entity and relationship carries `source_id` (the originating MCP plugin) and `confidence` (extraction certainty). This allows users to trace any fact in the graph back to its source event and plugin version.
+* **Audit Trail:** All graph mutations are timestamped with `created` and `modified` fields. The `source_id` + `plugin_version` on every node provides a complete lineage chain.
 
 ## **6\. The "Agentic" Horizon**
 
 The ultimate vision of Omni-G is to transition from a tool *used by* analysts to a teammate *collaborating with* analysts. By integrating **Agentic AI** workflows , Omni-G will evolve into a system that can:
 
-1. **Hypothesize:** Detect a gap in the graph (e.g., "Who funds this organization?") and automatically task collection plugins to fill it without human intervention.
-2. **Simulate:** Run counter-factual scenarios on the Knowledge Graph ("What happens to this supply chain network if we disrupt Node X?").
-3. **Defend:** Automatically identify and flag "poisoned data" injected by adversaries attempting to manipulate the model, using graph-based anomaly detection.
+1. **Hypothesize:** Detect a gap in the graph (e.g., "Who else is connected to this organization?") and automatically task collection plugins to fill it without human intervention.
+2. **Simulate:** Run counter-factual scenarios on the Knowledge Graph ("What happens to this network if Node X is removed?").
+3. **Self-Correct:** Automatically detect and flag low-confidence or contradictory data injected by unreliable sources, using graph-based anomaly detection.
 
-Omni-G represents the convergence of the **Event Stream** (Radio-G’s legacy), the **Knowledge Graph** (the reasoning engine), and the **Agentic Interface** (MCP). It is not just a platform; it is a cognitive exoskeleton for the modern intelligence professional, designed to operate at the speed of the modern threat landscape.
+Omni-G represents the convergence of the **Event Stream** (Radio-G's legacy), the **Knowledge Graph** (the reasoning engine), and the **Agentic Interface** (MCP). It is a platform for any organization that needs to understand complex, fast-moving domains at a scale no human team can match alone.
 
 # **Detailed Architecture Specifications & Implementation Guide**
 
@@ -258,7 +264,7 @@ Omni-G represents the convergence of the **Event Stream** (Radio-G’s legacy), 
 
 ### **B.1 Functional Requirements**
 
-* **Entity Extraction:** Automatically identify Persons, Organizations, Locations, Malware, CVEs, and Crypto-Wallets.
+* **Entity Extraction:** Automatically identify entities of any type the LLM determines from context—Persons, Organizations, Locations, Events, Topics, Concepts, and domain-specific types as needed.
 * **Resolution:** Merge duplicates across data sources (e.g., "NYT" vs "New York Times").
 * **Graph Construction:** Create nodes and edges in the graph database.
 

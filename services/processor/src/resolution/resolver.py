@@ -14,8 +14,9 @@ from neo4j import AsyncDriver
 from prometheus_client import Counter, Histogram
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
+from rapidfuzz import fuzz
 
-from ..models.stix import STIXObject
+from ..models.entities import Entity
 from .models import CandidateMatch, ResolutionDecision, ResolutionResult
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
 EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
+
+# Entity resolution confidence thresholds (operator-tunable via env vars)
+AUTO_MERGE_THRESHOLD: float = float(os.getenv("AUTO_MERGE_THRESHOLD", "0.95"))
+AMBIGUOUS_THRESHOLD: float = float(os.getenv("AMBIGUOUS_THRESHOLD", "0.50"))
+
+# Fuzzy name matching threshold (0–100 scale, maps to score /100 in resolution)
+FUZZY_NAME_MATCH_THRESHOLD: int = int(os.getenv("FUZZY_NAME_MATCH_THRESHOLD", "85"))
+# Maximum candidates returned by the Neo4j pre-filter for fuzzy matching
+FUZZY_NEO4J_PREFILTER_LIMIT: int = int(os.getenv("FUZZY_NEO4J_PREFILTER_LIMIT", "200"))
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics
@@ -83,27 +93,27 @@ def _stix_id_to_qdrant_id(stix_id: str) -> str:
     return parts[1] if len(parts) == 2 else stix_id  # noqa: PLR2004
 
 
-def _get_entity_name(entity: STIXObject) -> str:
-    """Return the ``name`` attribute of *entity*, or an empty string if absent."""
-    name = getattr(entity, "name", None)
-    return str(name) if name is not None else ""
+def _get_entity_name(entity: Entity) -> str:
+    """Return the ``name`` of *entity*, or an empty string if absent."""
+    return entity.name if entity.name else ""
 
 
-def _get_entity_aliases(entity: STIXObject) -> list[str]:
-    """Return the ``aliases`` attribute of *entity*, or an empty list if absent."""
-    aliases = getattr(entity, "aliases", None)
+def _get_entity_aliases(entity: Entity) -> list[str]:
+    """Return aliases from *entity.properties*, or an empty list if absent."""
+    aliases = entity.properties.get("aliases", None)
     return list(aliases) if aliases else []
 
 
-def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
-    """Flatten a STIXObject into Neo4j-compatible node properties.
+def _props_from_entity(entity: Entity, tenant_id: str) -> dict[str, Any]:
+    """Flatten an Entity into Neo4j-compatible node properties.
 
-    Complex nested types (lists, dicts) are serialised as JSON strings.
+    Complex nested types (lists, dicts) are serialised as JSON strings,
+    except ``aliases`` which is stored as a native Neo4j list so that
+    Cypher list-membership queries (``$name IN e.aliases``) work correctly.
     ``datetime`` values are stored as ISO-8601 strings.
     """
     props: dict[str, Any] = {
         "tenant_id": tenant_id,
-        "stix_type": entity.type.value,
     }
     for k, v in entity.model_dump().items():
         if isinstance(v, bool):
@@ -116,6 +126,12 @@ def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
             props[k] = v.isoformat()
         else:
             props[k] = json.dumps(v, default=str)
+
+    # Store aliases as a native Neo4j list (not JSON-encoded) so that the
+    # structural resolver can use `$name IN e.aliases` directly in Cypher.
+    raw_aliases = entity.properties.get("aliases", [])
+    props["aliases"] = [str(a) for a in raw_aliases] if raw_aliases else []
+
     return props
 
 
@@ -155,7 +171,7 @@ class EntityResolver:
     # Public API
     # ------------------------------------------------------------------
 
-    async def resolve(self, tenant_id: str, entity: STIXObject) -> ResolutionResult:
+    async def resolve(self, tenant_id: str, entity: Entity) -> ResolutionResult:
         """Resolve *entity* against the knowledge graph and return a decision.
 
         Emits Prometheus metrics for latency and decision outcome.
@@ -196,7 +212,7 @@ class EntityResolver:
     async def persist_entity(
         self,
         tenant_id: str,
-        entity: STIXObject,
+        entity: Entity,
         resolution: ResolutionResult,
     ) -> str:
         """Persist *entity* to Neo4j according to the resolution decision.
@@ -208,7 +224,7 @@ class EntityResolver:
         """
         decision = resolution.decision
         props = _props_from_entity(entity, tenant_id)
-        type_label = _safe_label(entity.type.value)
+        type_label = _safe_label(entity.type)
         tenant_label = _safe_label(tenant_id)
 
         if decision == ResolutionDecision.NEW_ENTITY:
@@ -238,7 +254,7 @@ class EntityResolver:
             )
         return new_id
 
-    async def resolve_and_persist(self, tenant_id: str, entity: STIXObject) -> ResolutionResult:
+    async def resolve_and_persist(self, tenant_id: str, entity: Entity) -> ResolutionResult:
         """Convenience: resolve *entity* then persist the result in one call."""
         result = await self.resolve(tenant_id, entity)
         await self.persist_entity(tenant_id, entity, result)
@@ -248,7 +264,7 @@ class EntityResolver:
     # Vector blocking (Qdrant)
     # ------------------------------------------------------------------
 
-    async def find_candidates(self, tenant_id: str, entity: STIXObject) -> list[CandidateMatch]:
+    async def find_candidates(self, tenant_id: str, entity: Entity) -> list[CandidateMatch]:
         """Upsert entity embedding into Qdrant then return top-5 similar entities.
 
         The upsert step ensures that every entity flowing through the pipeline
@@ -258,7 +274,7 @@ class EntityResolver:
         collection = f"entities_{tenant_id}"
         await self._ensure_collection(collection)
 
-        text = f"{entity.type.value} {_get_entity_name(entity)}"
+        text = f"{entity.type} {_get_entity_name(entity)}"
         vector = await self._embed(text)
         qdrant_id = _stix_id_to_qdrant_id(entity.id)
 
@@ -270,7 +286,7 @@ class EntityResolver:
                     vector=vector,
                     payload={
                         "entity_id": entity.id,
-                        "stix_type": entity.type.value,
+                        "entity_type": entity.type,
                         "tenant_id": tenant_id,
                         "name": _get_entity_name(entity),
                     },
@@ -311,9 +327,7 @@ class EntityResolver:
     # Graph structural matching (Neo4j)
     # ------------------------------------------------------------------
 
-    async def find_structural_matches(
-        self, tenant_id: str, entity: STIXObject
-    ) -> list[CandidateMatch]:
+    async def find_structural_matches(self, tenant_id: str, entity: Entity) -> list[CandidateMatch]:
         """Query Neo4j for structurally similar entities.
 
         Two sub-queries are executed:
@@ -322,7 +336,7 @@ class EntityResolver:
            targets — score proportional to shared-target count.
         """
         name = _get_entity_name(entity)
-        stix_type = entity.type.value
+        entity_type = entity.type
         entity_id = entity.id
 
         candidates: list[CandidateMatch] = []
@@ -333,16 +347,16 @@ class EntityResolver:
                 """
                 MATCH (e)
                 WHERE e.tenant_id = $tenant_id
-                  AND e.stix_type = $stix_type
+                  AND e.type = $entity_type
                   AND e.id <> $entity_id
                   AND (
                     e.name = $name
-                    OR $name IN coalesce(e.aliases_json, [])
+                    OR $name IN coalesce(e.aliases, [])
                   )
                 RETURN e.id AS entity_id, 1.0 AS score
                 """,
                 tenant_id=tenant_id,
-                stix_type=stix_type,
+                entity_type=entity_type,
                 entity_id=entity_id,
                 name=name,
             )
@@ -380,11 +394,99 @@ class EntityResolver:
                     )
                 )
 
+        # — Query 3: fuzzy name matching ———————————————————————————————
+        fuzzy_candidates = await self._find_fuzzy_name_matches(tenant_id, entity)
+        candidates.extend(fuzzy_candidates)
+
         logger.debug(
             "structural_candidates_found",
             extra={
                 "tenant_id": tenant_id,
                 "entity_id": entity_id,
+                "count": len(candidates),
+            },
+        )
+        return candidates
+
+    # ------------------------------------------------------------------
+    # Fuzzy name matching (Neo4j pre-filter + Python rapidfuzz scoring)
+    # ------------------------------------------------------------------
+
+    async def _find_fuzzy_name_matches(
+        self,
+        tenant_id: str,
+        entity: Entity,
+    ) -> list[CandidateMatch]:
+        """Return fuzzy name-match candidates using Neo4j pre-filter + rapidfuzz.
+
+        The Neo4j query does a coarse pre-filter (CONTAINS on the last name
+        token) to avoid a full graph scan, then Python-side rapidfuzz scoring
+        selects candidates above :data:`FUZZY_NAME_MATCH_THRESHOLD`.
+
+        Matching is restricted to entities of the **same type** to reduce
+        false-positive merges between e.g. a Person and an Organization that
+        happen to share a common surname.
+        """
+        name = _get_entity_name(entity)
+        if not name or name.lower() == "unknown":
+            return []
+
+        # Use the last whitespace-delimited token as the Neo4j pre-filter anchor
+        # (e.g. "Narendra Modi" → "Modi", "PM Modi" → "Modi").
+        last_token = name.strip().split()[-1]
+
+        candidates: list[CandidateMatch] = []
+        try:
+            async with self._neo4j.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE e.tenant_id = $tenant_id
+                      AND e.type = $entity_type
+                      AND e.id <> $entity_id
+                      AND toLower(e.name) CONTAINS toLower($last_token)
+                    RETURN e.id AS entity_id,
+                           e.name AS name,
+                           coalesce(e.aliases, []) AS aliases
+                    LIMIT $limit
+                    """,
+                    tenant_id=tenant_id,
+                    entity_type=entity.type,
+                    entity_id=entity.id,
+                    last_token=last_token,
+                    limit=FUZZY_NEO4J_PREFILTER_LIMIT,
+                )
+                rows: list[dict[str, Any]] = await result.data()
+
+            for row in rows:
+                candidate_name: str = str(row.get("name") or "")
+                candidate_aliases: list[str] = [str(a) for a in (row.get("aliases") or [])]
+
+                # Score against entity name AND all its aliases; take the max.
+                scores: list[float] = [fuzz.WRatio(name, candidate_name)]
+                for alias in candidate_aliases:
+                    scores.append(fuzz.WRatio(name, alias))
+
+                best_score = max(scores)
+                if best_score >= FUZZY_NAME_MATCH_THRESHOLD:
+                    candidates.append(
+                        CandidateMatch(
+                            entity_id=str(row["entity_id"]),
+                            score=best_score / 100.0,
+                            match_type="fuzzy",
+                        )
+                    )
+        except Exception as exc:
+            logger.warning(
+                "fuzzy_name_match_failed",
+                extra={"tenant_id": tenant_id, "entity_id": entity.id, "error": str(exc)},
+            )
+
+        logger.debug(
+            "fuzzy_candidates_found",
+            extra={
+                "tenant_id": tenant_id,
+                "entity_id": entity.id,
                 "count": len(candidates),
             },
         )
@@ -397,7 +499,7 @@ class EntityResolver:
     @staticmethod
     def _apply_decision(
         candidates: list[CandidateMatch],
-        entity: STIXObject,
+        entity: Entity,
     ) -> ResolutionResult:
         """Combine *candidates*, deduplicate by entity_id (keep max score),
         and apply confidence-tier thresholds to produce a :class:`ResolutionResult`.
@@ -419,7 +521,7 @@ class EntityResolver:
         top_entity_id = max(best, key=lambda k: best[k])
         top_score = best[top_entity_id]
 
-        if top_score >= 0.95:  # noqa: PLR2004
+        if top_score >= AUTO_MERGE_THRESHOLD:
             return ResolutionResult(
                 decision=ResolutionDecision.AUTO_MERGE,
                 matched_entity_id=top_entity_id,
@@ -427,7 +529,7 @@ class EntityResolver:
                 entity=entity,
             )
 
-        if top_score >= 0.50:  # noqa: PLR2004
+        if top_score >= AMBIGUOUS_THRESHOLD:
             return ResolutionResult(
                 decision=ResolutionDecision.AMBIGUOUS,
                 matched_entity_id=top_entity_id,

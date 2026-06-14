@@ -8,7 +8,7 @@ from typing import Any
 from neo4j import AsyncDriver, AsyncSession
 from prometheus_client import Counter, Histogram
 
-from ..models.stix import ExtractionResult, Relationship, STIXObject
+from ..models.entities import Entity, ExtractionResult, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -62,27 +62,12 @@ def _safe_label(s: str) -> str:
     return safe
 
 
-def _stix_type_to_label(stix_type_value: str) -> str:
-    """Convert a STIX type string to a PascalCase Neo4j node label.
-
-    Examples::
-
-        "threat-actor"   → "ThreatActor"
-        "attack-pattern" → "AttackPattern"
-        "malware"        → "Malware"
-    """
-    return "".join(part.capitalize() for part in stix_type_value.split("-"))
-
-
-def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
-    """Flatten a STIXObject into Neo4j-compatible node properties."""
+def _props_from_entity(entity: Entity, tenant_id: str) -> dict[str, Any]:
+    """Flatten an Entity into Neo4j-compatible node properties."""
     import json
     from datetime import datetime
 
-    props: dict[str, Any] = {
-        "tenant_id": tenant_id,
-        "stix_type": entity.type.value,
-    }
+    props: dict[str, Any] = {}
     for k, v in entity.model_dump().items():
         if isinstance(v, bool):
             props[k] = v
@@ -94,6 +79,10 @@ def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
             props[k] = v.isoformat()
         else:
             props[k] = json.dumps(v, default=str)
+    # Always override with the authoritative tenant_id from the pipeline.
+    # Entity.tenant_id defaults to "" at extraction time and must not be
+    # used as the stored value.
+    props["tenant_id"] = tenant_id
     return props
 
 
@@ -103,7 +92,7 @@ def _props_from_entity(entity: STIXObject, tenant_id: str) -> dict[str, Any]:
 
 
 class GraphPersistenceService:
-    """Write STIX entities and relationships to Neo4j with transaction management.
+    """Write generic entities and relationships to Neo4j with transaction management.
 
     All write methods accept an optional *session* parameter.  When
     :meth:`persist_extraction` is used the caller should omit *session*;
@@ -120,33 +109,49 @@ class GraphPersistenceService:
 
     async def upsert_entity(
         self,
-        entity: STIXObject,
+        entity: Entity,
         tenant_id: str,
         *,
         session: AsyncSession | None = None,
     ) -> str:
         """MERGE entity node by id and SET all properties.
 
-        Returns the canonical STIX id of the persisted node.
+        Returns the canonical entity id of the persisted node.
         """
         t0 = time.perf_counter()
-        label = _stix_type_to_label(entity.type.value)
+        label = _safe_label(entity.type)
+        tenant_label = _safe_label(tenant_id)
         props = _props_from_entity(entity, tenant_id)
 
         cypher = (
-            f"MERGE (n:STIXEntity:{label} {{id: $id}}) "
+            f"MERGE (n:Entity:{label}:{tenant_label} {{id: $id}}) "
             "ON CREATE SET n += $props "
-            "ON MATCH SET n += $props "
+            "ON MATCH SET n.modified = $modified, "
+            "             n.name = $name, "
+            "             n.confidence = $confidence, "
+            "             n.description = $description, "
+            "             n.properties = $properties_json "
             "RETURN n.id AS entity_id"
         )
 
+        import json
+
         try:
+            params: dict[str, Any] = {
+                "id": entity.id,
+                "props": props,
+                "modified": props.get("modified", ""),
+                "name": entity.name,
+                "confidence": entity.confidence,
+                "description": entity.description,
+                "properties_json": json.dumps(entity.properties, default=str),
+            }
             if session is not None:
-                result = await session.run(cypher, id=entity.id, props=props)
+                result = await session.run(cypher, **params)
                 record = await result.single()
             else:
                 async with self._driver.session() as s:
-                    result = await s.run(cypher, id=entity.id, props=props)
+                    result = await s.run(cypher, **params)
                     record = await result.single()
 
             entity_id: str = record["entity_id"] if record else entity.id
@@ -176,9 +181,9 @@ class GraphPersistenceService:
         *,
         session: AsyncSession | None = None,
     ) -> None:
-        """MERGE a STIX relationship edge between source and target nodes."""
+        """MERGE a generic relationship edge between source and target nodes."""
         t0 = time.perf_counter()
-        edge_type = _map_relationship_type(relationship.relationship_type)
+        edge_type = _map_relationship_type(relationship.type)
 
         cypher = (
             "MATCH (src {id: $source_id}), (tgt {id: $target_id}) "
@@ -240,32 +245,58 @@ class GraphPersistenceService:
         The entire transaction is rolled back automatically if any write fails.
         Returns the list of persisted entity IDs.
         """
+        import json
+
         t0 = time.perf_counter()
         persisted_ids: list[str] = []
+        tenant_label = _safe_label(tenant_id)
 
         try:
             async with self._driver.session() as session:
                 async with await session.begin_transaction() as tx:
-                    # Persist all SDOs first
-                    for entity in result.all_entities():
-                        label = _stix_type_to_label(entity.type.value)
+                    # Persist all entity nodes first
+                    for entity in result.entities:
+                        label = _safe_label(entity.type)
                         props = _props_from_entity(entity, tenant_id)
                         cypher = (
-                            f"MERGE (n:STIXEntity:{label} {{id: $id}}) "
+                            f"MERGE (n:Entity:{label}:{tenant_label} {{id: $id}}) "
                             "ON CREATE SET n += $props "
-                            "ON MATCH SET n += $props "
+                            "ON MATCH SET n.modified = $modified, "
+                            "             n.name = $name, "
+                            "             n.confidence = $confidence, "
+                            "             n.description = $description, "
+                            "             n.properties = $properties_json, "
+                            "             n.tenant_id = $tenant_id, "
+                            "             n.source_id = $source_id "
                             "RETURN n.id AS entity_id"
                         )
-                        query_result = await tx.run(cypher, id=entity.id, props=props)
+                        query_result = await tx.run(
+                            cypher,
+                            id=entity.id,
+                            props=props,
+                            modified=props.get("modified", ""),
+                            name=entity.name,
+                            confidence=entity.confidence,
+                            description=entity.description,
+                            properties_json=json.dumps(entity.properties, default=str),
+                            tenant_id=tenant_id,
+                            source_id=entity.source_id,
+                        )
                         record = await query_result.single()
                         eid: str = record["entity_id"] if record else entity.id
                         persisted_ids.append(eid)
 
-                    # Persist all SROs
+                    # Persist all relationship edges.
+                    # Both endpoints must be Entity nodes belonging to the same
+                    # tenant — enforced at the Cypher level to prevent
+                    # cross-tenant edges and phantom non-Entity matches.
                     for rel in result.relationships:
-                        edge_type = _map_relationship_type(rel.relationship_type)
+                        edge_type = _map_relationship_type(rel.type)
                         rel_cypher = (
-                            "MATCH (src {id: $source_id}), (tgt {id: $target_id}) "
+                            "MATCH (src:Entity {id: $source_id}), "
+                            "      (tgt:Entity {id: $target_id}) "
+                            "WHERE src.tenant_id = $tenant_id "
+                            "  AND tgt.tenant_id = $tenant_id "
                             f"MERGE (src)-[r:{edge_type}]->(tgt) "
                             "SET r.id = $rel_id, "
                             "    r.tenant_id = $tenant_id, "
@@ -310,3 +341,171 @@ class GraphPersistenceService:
                 },
             )
             raise
+
+    async def search_entities(
+        self,
+        tenant_id: str,
+        limit: int = 20,
+    ) -> list[Entity]:
+        """Return the most-recently modified entities for a tenant.
+
+        Used as the fallback path in the /search endpoint when Qdrant is
+        unavailable or no query embedding can be produced.
+        """
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE e.tenant_id = $tenant_id OR (e.tenant_id = '' AND $tenant_id <> '')
+                    RETURN e
+                    ORDER BY e.modified DESC
+                    LIMIT $limit
+                    """,
+                    tenant_id=tenant_id,
+                    limit=limit,
+                )
+                rows = await result.data()
+        except Exception:
+            logger.exception("search_entities_failed", extra={"tenant_id": tenant_id})
+            return []
+
+        entities: list[Entity] = []
+        now = _dt.now(UTC)
+        for row in rows:
+            node = row.get("e", {})
+            try:
+                entities.append(
+                    Entity(
+                        id=node.get("id", ""),
+                        type=node.get("type", "Unknown"),
+                        name=node.get("name", "Unknown"),
+                        description=node.get("description"),
+                        properties={},
+                        confidence=float(node.get("confidence", 0.5)),
+                        tenant_id=node.get("tenant_id", tenant_id),
+                        source_id=node.get("source_id"),
+                        created=node.get("created") or now,
+                        modified=node.get("modified") or now,
+                    )
+                )
+            except Exception:
+                logger.debug("search_entities_skip_node", extra={"node": node})
+        return entities
+
+    async def fetch_relationships_for_entities(
+        self,
+        entity_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Return all relationships where both endpoints are in *entity_ids*.
+
+        Returns plain dicts (not Relationship model instances) because the
+        stored ``created``/``modified`` fields may be ISO-string properties
+        that need no further coercion for JSON serialization.
+        """
+        if not entity_ids:
+            return []
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (src:Entity)-[r]->(tgt:Entity)
+                    WHERE src.id IN $entity_ids AND tgt.id IN $entity_ids
+                    RETURN
+                        coalesce(r.id, '') AS id,
+                        type(r)            AS type,
+                        src.id             AS source_ref,
+                        tgt.id             AS target_ref,
+                        coalesce(r.confidence, 0.5) AS confidence,
+                        coalesce(r.tenant_id, '')   AS tenant_id,
+                        coalesce(r.created,  '')    AS created,
+                        coalesce(r.modified, '')    AS modified
+                    """,
+                    entity_ids=entity_ids,
+                )
+                rows = await result.data()
+        except Exception:
+            logger.exception(
+                "fetch_relationships_failed",
+                extra={"entity_count": len(entity_ids)},
+            )
+            return []
+
+        rels: list[dict[str, Any]] = []
+        for row in rows:
+            rel_id = row.get("id") or (
+                f"rel--{row.get('source_ref','')}-{row.get('type','')}-{row.get('target_ref','')}"
+            )
+            rels.append(
+                {
+                    "id": rel_id,
+                    "type": row.get("type", "RELATED_TO"),
+                    "source_ref": row.get("source_ref", ""),
+                    "target_ref": row.get("target_ref", ""),
+                    "confidence": float(row.get("confidence", 0.5)),
+                    "tenant_id": row.get("tenant_id", ""),
+                    "created": row.get("created", ""),
+                    "modified": row.get("modified", ""),
+                }
+            )
+        return rels
+
+    async def fetch_neighbor_entities(
+        self,
+        entity_ids: list[str],
+    ) -> list[Entity]:
+        """Return 1-hop outgoing neighbours of *entity_ids* not already in that set.
+
+        Used by the search endpoint to expand the result set before building
+        the relationship graph, so that edges from matched entities to their
+        direct neighbours are also rendered in the Delivery canvas.
+        """
+        if not entity_ids:
+            return []
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (src:Entity)-[]->(tgt:Entity)
+                    WHERE src.id IN $entity_ids AND NOT tgt.id IN $entity_ids
+                    RETURN DISTINCT tgt AS e
+                    LIMIT 100
+                    """,
+                    entity_ids=entity_ids,
+                )
+                rows = await result.data()
+        except Exception:
+            logger.exception(
+                "fetch_neighbors_failed",
+                extra={"entity_count": len(entity_ids)},
+            )
+            return []
+
+        entities: list[Entity] = []
+        from datetime import UTC
+        from datetime import datetime as _dt_nb
+
+        now = _dt_nb.now(UTC)
+        for row in rows:
+            node = row.get("e", {})
+            try:
+                entities.append(
+                    Entity(
+                        id=node.get("id", ""),
+                        type=node.get("type", "Unknown"),
+                        name=node.get("name", "Unknown"),
+                        description=node.get("description"),
+                        properties={},
+                        confidence=float(node.get("confidence", 0.5)),
+                        tenant_id=node.get("tenant_id", ""),
+                        source_id=node.get("source_id"),
+                        created=node.get("created") or now,
+                        modified=node.get("modified") or now,
+                    )
+                )
+            except Exception:
+                logger.debug("fetch_neighbors_skip_node", extra={"node": node})
+        return entities

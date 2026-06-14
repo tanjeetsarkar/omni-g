@@ -1,7 +1,7 @@
 /**
  * GET /api/graph — live Neo4j Knowledge Graph data
  *
- * Queries STIXEntity nodes and their relationships for the requested tenant.
+ * Queries Entity nodes and their relationships for the requested tenant.
  * Falls back to empty arrays on Neo4j connection errors so the UI degrades
  * gracefully when the database is unavailable.
  *
@@ -9,8 +9,20 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { isInt, type Integer } from "neo4j-driver";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 import { getDriver } from "@/lib/neo4j";
+
+/**
+ * Coerce a Neo4j Integer object ({low, high}) to a plain JS number.
+ * Floats and plain numbers pass through unchanged. Null/undefined → undefined.
+ */
+function toNum(val: unknown): number | undefined {
+  if (val == null) return undefined;
+  if (isInt(val)) return (val as Integer).toNumber();
+  if (typeof val === "number") return val;
+  return undefined;
+}
 
 const STIX_COLORS: Record<string, string> = {
   "threat-actor": "#ef4444",
@@ -37,8 +49,8 @@ export async function GET(req: NextRequest) {
 
     try {
       const result = await session.run(
-        `MATCH (n:STIXEntity {tenant_id: $t})
-         OPTIONAL MATCH (n)-[r]->(m:STIXEntity {tenant_id: $t})
+        `MATCH (n:Entity {tenant_id: $t})
+         OPTIONAL MATCH (n)-[r]->(m:Entity {tenant_id: $t})
          RETURN n, r, m
          LIMIT 500`,
         { t: tenantId },
@@ -60,9 +72,9 @@ export async function GET(req: NextRequest) {
               id,
               label: n.properties.name ?? n.properties.id ?? id,
               stixType,
-              communityId: n.properties.community_id ?? undefined,
+              communityId: toNum(n.properties.community_id),
               communitySummary: n.properties.community_summary ?? undefined,
-              confidence: n.properties.confidence ?? undefined,
+              confidence: toNum(n.properties.confidence),
               x: randomCoord(),
               y: randomCoord(),
               size: 6,
@@ -79,9 +91,9 @@ export async function GET(req: NextRequest) {
               id,
               label: m.properties.name ?? m.properties.id ?? id,
               stixType,
-              communityId: m.properties.community_id ?? undefined,
+              communityId: toNum(m.properties.community_id),
               communitySummary: m.properties.community_summary ?? undefined,
-              confidence: m.properties.confidence ?? undefined,
+              confidence: toNum(m.properties.confidence),
               x: randomCoord(),
               y: randomCoord(),
               size: 6,
@@ -103,6 +115,7 @@ export async function GET(req: NextRequest) {
               source: sourceId,
               target: targetId,
               label: r.type,
+              confidence: toNum(r.properties?.confidence),
             });
           }
         }

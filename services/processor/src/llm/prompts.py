@@ -1,10 +1,13 @@
-"""STIX 2.1 extraction prompt registry.
+"""Generic entity extraction prompt registry.
 
 All prompts are versioned inline.  source_type values:
   "general"       — default, mixed-domain OSINT
   "biographical"  — Wikipedia / Wikidata structured person/org content
   "news"          — news article content (events, campaigns, roles)
   "threat_intel"  — traditional threat-intel feeds (legacy default)
+
+Entity type is open-ended and determined by the LLM from context (Person,
+Organization, Location, Event, Topic, Concept, …).
 
 To A/B test a prompt, add a new version to _PROMPT_VERSIONS and update
 get_prompt() to select by version flag.
@@ -14,76 +17,90 @@ from __future__ import annotations
 
 
 class PromptRegistry:
-    # ── Version: general-v1 ──────────────────────────────────────────────────
+    # ── Version: general-v2 ──────────────────────────────────────────────────
     SYSTEM_PROMPT_GENERAL: str = (
-        "You are a STIX 2.1 Open-Source Intelligence (OSINT) analyst. Your task is to "
+        "You are an Open-Source Intelligence (OSINT) analyst. Your task is to "
         "extract ALL entities and relationships from the text and return them as structured "
         "JSON matching the ExtractionResult schema. You must handle all intelligence domains: "
         "people, organizations, geopolitics, business, technology, and cybersecurity.\n\n"
         "Entity extraction rules:\n"
-        "- Identity (individual): full name, aliases, roles/titles, nationality, sector\n"
-        "- Identity (organization): name, type (company/govt/NGO), sectors, country\n"
-        "- Location: city, country, region — extract every geographic mention\n"
-        "- ThreatActor: adversarial groups or individuals with malicious intent\n"
-        "- Malware: malicious software, ransomware, spyware families\n"
-        "- Campaign: coordinated initiatives — product launches, operations, programs\n"
-        "- AttackPattern: TTPs, methods, techniques described in the text\n"
-        "- Indicator: observable artifacts — IPs, hashes, domains, email addresses\n\n"
+        "- Assign each entity a free-form 'type' that best describes it from context, such as:\n"
+        "  Person, Organization, Location, Event, Campaign, Topic, Concept, Malware, "
+        "  ThreatActor, AttackPattern, Indicator, Product, Technology, Legislation, or any other "
+        "  meaningful label\n"
+        "- Extract full name, description, and any domain-specific properties in the "
+        "  'properties' dict (e.g. aliases, sectors, country, roles, malware_types)\n"
+        "- ALWAYS populate 'properties.aliases' with every alternate name, abbreviation, title, "
+        "  nickname, or known variant by which this entity is referred to in the text or is "
+        "  commonly known. Examples: for 'Narendra Modi' add aliases ['PM Modi', 'Modi', 'NaMo']; "
+        "  for 'United States of America' add aliases ['USA', 'US', 'United States']. "
+        "  If no alternate names exist, set aliases to an empty list.\n"
+        "- Assign confidence 0.0–1.0 per entity based on how clearly it is identified\n\n"
         "Relationship rules:\n"
-        "- Use STIX SRO types: attributed-to, targets, uses, located-at, related-to\n"
-        "- Extract ALL implied relationships, not just explicit ones\n"
-        "- Assign confidence 0-1 per relationship based on assertion strength"
+        "- Use descriptive UPPER_SNAKE_CASE types: KNOWS, LOCATED_AT, TARGETS, USES, "
+        "  ATTRIBUTED_TO, PARTICIPATED_IN, ACQUIRED, EMPLOYED_BY, RELATED_TO, etc.\n"
+        "- Only extract relationships where BOTH entities are EXPLICITLY named in the "
+        "  source text; do not infer or imply relationships\n"
+        "- Assign confidence 0.0–1.0 per relationship based on assertion strength"
     )
 
-    # ── Version: biographical-v1 ─────────────────────────────────────────────
+    # ── Version: biographical-v2 ─────────────────────────────────────────────
     SYSTEM_PROMPT_BIOGRAPHICAL: str = (
-        "You are a STIX 2.1 OSINT analyst specialising in biographical and organisational "
-        "intelligence. Extract structured entities from Wikipedia articles, Wikidata fact "
-        "lists, and similar reference content.\n\n"
+        "You are an OSINT analyst specialising in biographical and organisational intelligence. "
+        "Extract structured entities from Wikipedia articles, Wikidata fact lists, and similar "
+        "reference content.\n\n"
         "Extraction priorities (in order):\n"
-        "1. Identity (individual): full name, all known aliases, current role/title, "
-        "   employer, nationality, sector (e.g. technology, government)\n"
-        "2. Identity (organization): every employer, educational institution, or "
-        "   organisation mentioned; include type and country\n"
+        "1. Person: full name, all known aliases, current role/title, employer, nationality; "
+        "   store role/sector/nationality in the 'properties' dict\n"
+        "2. Organization: every employer, educational institution, or organisation mentioned; "
+        "   include type and country in 'properties'\n"
         "3. Location: birthplace, current base, every city/country/region mentioned\n"
-        "4. Campaign: major initiatives, product launches, or programmes led by the subject\n"
-        "5. Relationship: employer→employee (uses), born-in (located-at), leads (related-to)\n\n"
+        "4. Event/Campaign: major initiatives, product launches, or programmes led by the subject\n"
+        "5. Relationships: EMPLOYED_BY, BORN_IN, FOUNDED, LEADS, ACQUIRED, RELATED_TO, etc.\n\n"
         "Rules:\n"
-        "- Assign high confidence (0.8-1.0) to relationships backed by explicit fact statements\n"
-        "- Include 'sector' in Identity custom_properties\n"
+        "- Assign high confidence (0.8–1.0) to relationships backed by explicit fact statements\n"
         "- Do NOT fabricate information; if unsure, omit the entity"
     )
 
-    # ── Version: news-v1 ────────────────────────────────────────────────────
+    # ── Version: news-v2 ────────────────────────────────────────────────────
     SYSTEM_PROMPT_NEWS: str = (
-        "You are a STIX 2.1 OSINT analyst processing news articles and RSS feeds. "
+        "You are an OSINT analyst processing news articles and RSS feeds. "
         "Focus on extracting current-events intelligence.\n\n"
         "Extraction priorities (in order):\n"
-        "1. Identity: named individuals and organisations mentioned in the article\n"
-        "2. Campaign: business initiatives, government operations, product launches, "
+        "1. Person / Organization: named individuals and organisations mentioned\n"
+        "2. Event / Campaign: business initiatives, government operations, product launches, "
         "   named events (e.g. 'Operation X', 'Project Y', 'Summit Z')\n"
         "3. Location: every geographic location mentioned\n"
-        "4. ThreatActor: any adversarial groups, criminal organisations, or hostile "
-        "   state actors referenced\n"
-        "5. Relationship: who did what to whom — use STIX SRO types\n\n"
-        "Rules:\n"
+        "4. ThreatActor / Malware: adversarial groups, criminal organisations, hostile "
+        "   state actors, or malicious software referenced\n"
+        "5. Relationships: who did what to whom — use UPPER_SNAKE_CASE types\n\n"
+        "Alias extraction rules (critical for deduplication):\n"
+        "- Always populate 'properties.aliases' with every alternate name, title, "
+        "  abbreviation, or variant used in the text or commonly associated with the entity. "
+        "  Example: if the text says 'Prime Minister Modi' and 'PM Modi', the canonical entity "
+        "  should be 'Narendra Modi' with aliases ['PM Modi', 'Prime Minister Modi', 'Modi']. "
+        "  If no alternate names are found, set aliases to an empty list []\n\n"
+        "Other rules:\n"
         "- Assign confidence based on how directly the article asserts the relationship "
-        "  (direct quote → 0.9+, inference → 0.5-0.7)\n"
-        "- Capture role changes: 'X was appointed as Y at Z' → Identity + Relationship\n"
-        "- Capture acquisitions/mergers as Campaign nodes with related-to edges"
+        "  (direct quote → 0.9+, inference → 0.5–0.7)\n"
+        "- Capture role changes: 'X was appointed as Y at Z' → Person + Organization + "
+        "  EMPLOYED_BY relationship\n"
+        "- Capture acquisitions/mergers as Event/Campaign nodes with ACQUIRED/RELATED_TO edges"
     )
 
-    # ── Version: threat_intel-v1 ────────────────────────────────────────────
+    # ── Version: threat_intel-v2 ────────────────────────────────────────────
     SYSTEM_PROMPT_THREAT_INTEL: str = (
-        "You are a STIX 2.1 threat intelligence extractor. "
+        "You are a threat intelligence extractor. "
         "Extract all entities from the text and return structured JSON matching the "
-        "ExtractionResult schema."
+        "ExtractionResult schema. Assign open-ended types such as ThreatActor, Malware, "
+        "AttackPattern, Indicator, Campaign, Organization, Person, Location."
     )
 
     # ── Fallback (no LLM structured output) ─────────────────────────────────
     SYSTEM_PROMPT_FALLBACK: str = (
         "Extract threat actors and malware from this text. "
-        "Return JSON with threat_actors and malware arrays."
+        "Return JSON with an 'entities' array where each item has 'type', 'name', and "
+        "'confidence' fields."
     )
 
     ID_BINDING_INSTRUCTIONS: str = (
@@ -95,32 +112,43 @@ class PromptRegistry:
         "entities exactly.\n"
         "3. Never output null for critical fields. Do NOT use null/None where "
         "empty arrays/strings or default placeholders can be used.\n"
-        "4. Your output must strictly match the few-shot JSON structure example below.\n\n"
+        "4. Your output must strictly match the few-shot JSON structure example below.\n"
+        "5. Every entity MUST include a 'source_span' field: the shortest verbatim "
+        "excerpt from the input text that names or describes this entity. "
+        "If an entity cannot be found verbatim in the source text, OMIT it entirely.\n\n"
+        "=== SOURCE GROUNDING RULES (CRITICAL \u2014 DO NOT VIOLATE) ===\n"
+        "- ONLY extract entities that appear EXPLICITLY and VERBATIM in the source text.\n"
+        "- DO NOT infer, guess, or hallucinate entities from background knowledge.\n"
+        "- ONLY extract relationships where BOTH entities are explicitly named in the same \
+            source text.\n"
+        "- If you are uncertain whether an entity or relationship appears in the text, OMIT it.\n\n"
         "=== FEW-SHOT STRUCTURAL JSON EXAMPLE ===\n"
         "{\n"
-        '  "threat_actors": [\n'
+        '  "entities": [\n'
         "    {\n"
         '      "id": "id-1",\n'
-        '      "name": "APT28",\n'
-        '      "aliases": ["Fancy Bear"],\n'
-        '      "threat_actor_types": ["nation-state"],\n'
-        '      "description": "Russian military intelligence group"\n'
-        "    }\n"
-        "  ],\n"
-        '  "locations": [\n'
+        '      "type": "Organization",\n'
+        '      "name": "Fancy Bear",\n'
+        '      "description": "Russian military intelligence group",\n'
+        '      "source_span": "Fancy Bear, also known as APT28",\n'
+        '      "properties": {"aliases": ["APT28"], "sectors": ["government"]},\n'
+        '      "confidence": 0.95\n'
+        "    },\n"
         "    {\n"
         '      "id": "id-2",\n'
+        '      "type": "Location",\n'
         '      "name": "Moscow",\n'
-        '      "country": "Russia"\n'
+        '      "source_span": "based in Moscow",\n'
+        '      "properties": {"country": "Russia"},\n'
+        '      "confidence": 0.99\n'
         "    }\n"
         "  ],\n"
         '  "relationships": [\n'
         "    {\n"
-        '      "relationship_type": "located-at",\n'
+        '      "type": "LOCATED_AT",\n'
         '      "source_ref": "id-1",\n'
         '      "target_ref": "id-2",\n'
-        '      "description": "APT28 is located-at Moscow, Russia.",\n'
-        '      "confidence": 95\n'
+        '      "confidence": 0.95\n'
         "    }\n"
         "  ]\n"
         "}"
@@ -128,10 +156,10 @@ class PromptRegistry:
 
     # ── Version registry for future A/B testing ──────────────────────────────
     _PROMPT_VERSIONS: dict[str, list[str]] = {
-        "general": ["general-v1"],
-        "biographical": ["biographical-v1"],
-        "news": ["news-v1"],
-        "threat_intel": ["threat_intel-v1"],
+        "general": ["general-v2"],
+        "biographical": ["biographical-v2"],
+        "news": ["news-v2"],
+        "threat_intel": ["threat_intel-v2"],
     }
 
     @classmethod

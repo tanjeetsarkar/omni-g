@@ -12,7 +12,7 @@ from ..dedup.deduplicator import ContentDeduplicator
 from ..graph.persistence import GraphPersistenceService
 from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
-from ..models.stix import ExtractionResult
+from ..models.entities import Entity, ExtractionResult
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
 from .stage_publisher import StageEventPublisher
@@ -45,6 +45,12 @@ PIPELINE_STAGE_DURATION = Histogram(
     "Time spent in each pipeline stage",
     ["stage"],
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+GROUNDING_REJECTIONS = Counter(
+    "processor_grounding_rejections_total",
+    "Extracted artifacts rejected by the source-grounding validation gate",
+    ["tenant_id", "reason"],
 )
 
 
@@ -97,6 +103,28 @@ class SchemaViolationError(ValueError):
     The Kafka consumer catches this and routes the message to the DLQ with
     ``error_type=SchemaViolationError`` in the DLQ payload.
     """
+
+
+def _is_entity_grounded(entity: Entity, source_text: str) -> bool:
+    """Return True if *entity* is explicitly mentioned in *source_text*.
+
+    Checks LLM-supplied source_spans first (preferred: verbatim excerpt that
+    the LLM cited), then falls back to a case-insensitive substring match on
+    the entity name.  Entities named 'Unknown' or with empty names are
+    rejected.  If source_text is empty the entity is passed through (no text
+    to check against).
+    """
+    if not source_text:
+        return True  # Cannot validate without source text; pass through
+    # Preferred: check LLM-supplied evidence spans
+    for span in entity.source_spans:
+        if span.text and span.text.lower() in source_text.lower():
+            return True
+    # Fallback: case-insensitive name match
+    name = (entity.name or "").strip()
+    if name.lower() in ("", "unknown"):
+        return False
+    return name.lower() in source_text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +192,13 @@ class ProcessingPipeline:
             "pipeline_stage_start",
             extra={"stage": "schema_validation", "event_id": event.get("id", "")},
         )
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                event.get("id", ""),
+                event.get("tenant_id", "default"),
+                "schema_validation",
+                "active",
+            )
         t0 = time.monotonic()
         try:
             envelope = RawEventEnvelope.model_validate(event)
@@ -175,6 +210,10 @@ class ProcessingPipeline:
             )
             raise SchemaViolationError(str(exc)) from exc
         PIPELINE_STAGE_DURATION.labels(stage="schema_validation").observe(time.monotonic() - t0)
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "schema_validation", "done"
+            )
         logger.info(
             "pipeline_stage_done",
             extra={
@@ -193,6 +232,10 @@ class ProcessingPipeline:
                 "tenant_id": envelope.tenant_id,
             },
         )
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "deduplication", "active"
+            )
         t0 = time.monotonic()
         dedup_result = await self._deduplicator.check_and_set(envelope.tenant_id, event)
         PIPELINE_STAGE_DURATION.labels(stage="deduplication").observe(time.monotonic() - t0)
@@ -203,6 +246,8 @@ class ProcessingPipeline:
                 extra={"event_id": envelope.id, "tenant_id": envelope.tenant_id},
             )
             return None
+        if self._stage_publisher:
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "deduplication", "done")
         logger.info(
             "pipeline_stage_done",
             extra={
@@ -251,8 +296,77 @@ class ProcessingPipeline:
                 "stage": "llm_extraction",
                 "event_id": envelope.id,
                 "tenant_id": envelope.tenant_id,
-                "entities": len(extraction.threat_actors) + len(extraction.malware),
+                "entities": len(extraction.entities),
                 "confidence": extraction.extraction_confidence,
+            },
+        )
+
+        # ── Step 3.5: Grounding validation ────────────────────────────────
+        # Reject entities not explicitly present in the raw source text so
+        # LLM hallucinations never enter the Knowledge Graph.  Relationships
+        # whose endpoints are rejected are also dropped.
+        logger.info(
+            "pipeline_stage_start",
+            extra={
+                "stage": "grounding_validation",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+            },
+        )
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "grounding_validation", "active"
+            )
+        t0 = time.monotonic()
+        grounded_entities: list[Entity] = []
+        rejected_entity_ids: set[str] = set()
+        for entity in extraction.entities:
+            if _is_entity_grounded(entity, text):
+                grounded_entities.append(entity)
+            else:
+                rejected_entity_ids.add(entity.id)
+                logger.warning(
+                    "pipeline_grounding_rejected",
+                    extra={
+                        "event_id": envelope.id,
+                        "tenant_id": envelope.tenant_id,
+                        "entity_name": entity.name,
+                        "entity_type": entity.type,
+                        "entity_id": entity.id,
+                    },
+                )
+        grounded_relationships = [
+            r
+            for r in extraction.relationships
+            if r.source_ref not in rejected_entity_ids and r.target_ref not in rejected_entity_ids
+        ]
+        rejected_entity_count = len(extraction.entities) - len(grounded_entities)
+        rejected_rel_count = len(extraction.relationships) - len(grounded_relationships)
+        if rejected_entity_count > 0:
+            GROUNDING_REJECTIONS.labels(tenant_id=envelope.tenant_id, reason="not_in_source").inc(
+                rejected_entity_count
+            )
+        if rejected_rel_count > 0:
+            GROUNDING_REJECTIONS.labels(
+                tenant_id=envelope.tenant_id, reason="endpoint_not_grounded"
+            ).inc(rejected_rel_count)
+        extraction = extraction.model_copy(
+            update={"entities": grounded_entities, "relationships": grounded_relationships}
+        )
+        PIPELINE_STAGE_DURATION.labels(stage="grounding_validation").observe(time.monotonic() - t0)
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "grounding_validation", "done"
+            )
+        logger.info(
+            "pipeline_stage_done",
+            extra={
+                "stage": "grounding_validation",
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+                "grounded_entities": len(grounded_entities),
+                "rejected_entities": rejected_entity_count,
+                "rejected_relationships": rejected_rel_count,
             },
         )
 
@@ -271,7 +385,7 @@ class ProcessingPipeline:
                     envelope.id, envelope.tenant_id, "entity_resolution", "active"
                 )
             t0 = time.monotonic()
-            for entity in extraction.all_entities():
+            for entity in extraction.entities:
                 logger.debug(
                     "pipeline_entity_resolution_input",
                     extra={
@@ -348,7 +462,7 @@ class ProcessingPipeline:
                     envelope.id, envelope.tenant_id, "graphrag_index", "active"
                 )
             t0 = time.monotonic()
-            for entity_id in [e.id for e in extraction.all_entities()]:
+            for entity_id in [e.id for e in extraction.entities]:
                 logger.debug(
                     "pipeline_graphrag_incremental_input",
                     extra={
@@ -382,16 +496,20 @@ class ProcessingPipeline:
                     "tenant_id": envelope.tenant_id,
                 },
             )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "alert_publishing", "active"
+                )
             t0 = time.monotonic()
             summary_text: str
             if hasattr(extraction, "summary_text"):
                 summary_text = str(getattr(extraction, "summary_text", ""))[:500]
             else:
-                n = len(extraction.all_entities())
+                n = len(extraction.entities)
                 summary_text = f"{n} {'entity' if n == 1 else 'entities'} extracted"
             alert = AnalystAlert(
                 tenant_id=envelope.tenant_id,
-                entity_ids=[e.id for e in extraction.all_entities()],
+                entity_ids=[e.id for e in extraction.entities],
                 summary=summary_text,
                 confidence=extraction.extraction_confidence,
                 source_event_id=envelope.id,
@@ -406,6 +524,10 @@ class ProcessingPipeline:
             )
             await self._alert_publisher.publish(alert)
             PIPELINE_STAGE_DURATION.labels(stage="alert_publishing").observe(time.monotonic() - t0)
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "alert_publishing", "done"
+                )
             logger.info(
                 "pipeline_stage_done",
                 extra={
@@ -415,6 +537,10 @@ class ProcessingPipeline:
                 },
             )
 
+        if self._stage_publisher:
+            self._stage_publisher.publish(
+                envelope.id, envelope.tenant_id, "pipeline_complete", "done"
+            )
         logger.info(
             "pipeline_run_done",
             extra={

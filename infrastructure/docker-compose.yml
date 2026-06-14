@@ -364,27 +364,52 @@ services:
     build:
       context: ../services/delivery
       dockerfile: Dockerfile
+      target: runtime
     container_name: omni-g-delivery
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
-      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:3001}
       NEXT_PUBLIC_TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
       PROCESSOR_URL: ${PROCESSOR_URL:-http://processor:8001}
-      GATEWAY_PORT: ${GATEWAY_PORT:-3001}
-      METRICS_PORT: ${METRICS_PORT:-9464}
-      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
-      KAFKA_ALERTS_TOPIC: ${KAFKA_ALERTS_TOPIC:-analyst-alerts}
+      AGGREGATOR_URL: ${AGGREGATOR_URL:-http://aggregator:8080}
       NEO4J_URL: ${NEO4J_URL:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-omni-g-password}
-      AGGREGATOR_URL: ${AGGREGATOR_URL:-http://aggregator:8080}
     ports:
       - "3000:3000"
-      - "3001:3001"
     depends_on:
       - processor
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - services
+      - all
+    networks:
+      - omni-g
+
+  gateway:
+    build:
+      context: ../services/delivery
+      dockerfile: Dockerfile
+      target: gateway-runtime
+    container_name: omni-g-gateway
+    environment:
+      GATEWAY_PORT: ${GATEWAY_PORT:-3001}
+      METRICS_PORT: ${METRICS_PORT:-9464}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      KAFKA_ALERTS_TOPIC: ${KAFKA_ALERTS_TOPIC:-analyst-alerts}
+      KAFKA_PROCESSOR_EVENTS_TOPIC: ${KAFKA_PROCESSOR_EVENTS_TOPIC:-processor-events}
+    ports:
+      - "3001:3001"
+      - "9464:9464"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9464/metrics"]
       interval: 10s
       timeout: 5s
       retries: 5
