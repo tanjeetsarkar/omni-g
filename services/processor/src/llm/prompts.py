@@ -30,11 +30,17 @@ class PromptRegistry:
         "  meaningful label\n"
         "- Extract full name, description, and any domain-specific properties in the "
         "  'properties' dict (e.g. aliases, sectors, country, roles, malware_types)\n"
+        "- ALWAYS populate 'properties.aliases' with every alternate name, abbreviation, title, "
+        "  nickname, or known variant by which this entity is referred to in the text or is "
+        "  commonly known. Examples: for 'Narendra Modi' add aliases ['PM Modi', 'Modi', 'NaMo']; "
+        "  for 'United States of America' add aliases ['USA', 'US', 'United States']. "
+        "  If no alternate names exist, set aliases to an empty list.\n"
         "- Assign confidence 0.0–1.0 per entity based on how clearly it is identified\n\n"
         "Relationship rules:\n"
         "- Use descriptive UPPER_SNAKE_CASE types: KNOWS, LOCATED_AT, TARGETS, USES, "
         "  ATTRIBUTED_TO, PARTICIPATED_IN, ACQUIRED, EMPLOYED_BY, RELATED_TO, etc.\n"
-        "- Extract ALL implied relationships, not just explicit ones\n"
+        "- Only extract relationships where BOTH entities are EXPLICITLY named in the "
+        "  source text; do not infer or imply relationships\n"
         "- Assign confidence 0.0–1.0 per relationship based on assertion strength"
     )
 
@@ -68,7 +74,13 @@ class PromptRegistry:
         "4. ThreatActor / Malware: adversarial groups, criminal organisations, hostile "
         "   state actors, or malicious software referenced\n"
         "5. Relationships: who did what to whom — use UPPER_SNAKE_CASE types\n\n"
-        "Rules:\n"
+        "Alias extraction rules (critical for deduplication):\n"
+        "- Always populate 'properties.aliases' with every alternate name, title, "
+        "  abbreviation, or variant used in the text or commonly associated with the entity. "
+        "  Example: if the text says 'Prime Minister Modi' and 'PM Modi', the canonical entity "
+        "  should be 'Narendra Modi' with aliases ['PM Modi', 'Prime Minister Modi', 'Modi']. "
+        "  If no alternate names are found, set aliases to an empty list []\n\n"
+        "Other rules:\n"
         "- Assign confidence based on how directly the article asserts the relationship "
         "  (direct quote → 0.9+, inference → 0.5–0.7)\n"
         "- Capture role changes: 'X was appointed as Y at Z' → Person + Organization + "
@@ -100,7 +112,16 @@ class PromptRegistry:
         "entities exactly.\n"
         "3. Never output null for critical fields. Do NOT use null/None where "
         "empty arrays/strings or default placeholders can be used.\n"
-        "4. Your output must strictly match the few-shot JSON structure example below.\n\n"
+        "4. Your output must strictly match the few-shot JSON structure example below.\n"
+        "5. Every entity MUST include a 'source_span' field: the shortest verbatim "
+        "excerpt from the input text that names or describes this entity. "
+        "If an entity cannot be found verbatim in the source text, OMIT it entirely.\n\n"
+        "=== SOURCE GROUNDING RULES (CRITICAL \u2014 DO NOT VIOLATE) ===\n"
+        "- ONLY extract entities that appear EXPLICITLY and VERBATIM in the source text.\n"
+        "- DO NOT infer, guess, or hallucinate entities from background knowledge.\n"
+        "- ONLY extract relationships where BOTH entities are explicitly named in the same \
+            source text.\n"
+        "- If you are uncertain whether an entity or relationship appears in the text, OMIT it.\n\n"
         "=== FEW-SHOT STRUCTURAL JSON EXAMPLE ===\n"
         "{\n"
         '  "entities": [\n'
@@ -109,6 +130,7 @@ class PromptRegistry:
         '      "type": "Organization",\n'
         '      "name": "Fancy Bear",\n'
         '      "description": "Russian military intelligence group",\n'
+        '      "source_span": "Fancy Bear, also known as APT28",\n'
         '      "properties": {"aliases": ["APT28"], "sectors": ["government"]},\n'
         '      "confidence": 0.95\n'
         "    },\n"
@@ -116,6 +138,7 @@ class PromptRegistry:
         '      "id": "id-2",\n'
         '      "type": "Location",\n'
         '      "name": "Moscow",\n'
+        '      "source_span": "based in Moscow",\n'
         '      "properties": {"country": "Russia"},\n'
         '      "confidence": 0.99\n'
         "    }\n"

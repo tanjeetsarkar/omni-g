@@ -330,6 +330,29 @@ class ValidateResponse(BaseModel):
     errors: list[ValidationError] = []
 
 
+class SearchRequest(BaseModel):
+    query: str
+    tenant_id: str
+    limit: int = 20
+
+
+class SearchResponse(BaseModel):
+    entities: list[dict[str, Any]]
+    relationships: list[dict[str, Any]] = []
+    total: int
+
+
+class FetchEntitiesRequest(BaseModel):
+    """Direct entity fetch by ID — used for real-time alert hydration.
+
+    Bypasses semantic search and fetches entities straight from Neo4j by their
+    canonical IDs, then expands with 1-hop neighbours.
+    """
+
+    entity_ids: list[str]
+    tenant_id: str = "default"
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
@@ -503,16 +526,91 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return JSONResponse({"signed_url": signed_url})
 
+    # ── Direct entity fetch by ID ─────────────────────────────────────────
+
+    @app.post("/entities", tags=["search"], response_model=SearchResponse)
+    async def fetch_entities_by_ids(body: FetchEntitiesRequest) -> JSONResponse:
+        """Fetch entities directly from Neo4j by canonical ID.
+
+        Used by the Delivery layer to hydrate real-time alerts (WebSocket
+        ``analyst-alerts``) without triggering a new ingestion cycle.
+        Returns matched entities plus 1-hop neighbours and their relationships.
+        """
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from neo4j import AsyncGraphDatabase
+
+        from ..graph.persistence import GraphPersistenceService
+        from ..models.entities import Entity
+
+        if not body.entity_ids:
+            return JSONResponse({"entities": [], "relationships": [], "total": 0})
+
+        cfg: Settings = app.state.settings
+        neo4j_driver = AsyncGraphDatabase.driver(
+            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
+        )
+        graph_persistence = GraphPersistenceService(neo4j_driver)
+
+        entities: list[Entity] = []
+        relationships: list[dict[str, Any]] = []
+        try:
+            now = _dt.now(UTC)
+            async with neo4j_driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.id IN $ids RETURN e",
+                    ids=body.entity_ids,
+                )
+                rows = await result.data()
+
+            for row in rows:
+                node = row.get("e", {})
+                try:
+                    entities.append(
+                        Entity(
+                            id=node.get("id", ""),
+                            type=node.get("type", "Unknown"),
+                            name=node.get("name", "Unknown"),
+                            description=node.get("description"),
+                            confidence=float(node.get("confidence", 0.5)),
+                            tenant_id=node.get("tenant_id", body.tenant_id),
+                            source_id=node.get("source_id"),
+                            created=node.get("created") or now,
+                            modified=node.get("modified") or now,
+                        )
+                    )
+                except Exception:
+                    logger.exception("Failed to parse entity from Neo4j row")
+                    continue
+
+            if entities:
+                entity_ids = [e.id for e in entities]
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids)
+                if neighbors:
+                    existing_ids = {e.id for e in entities}
+                    for n in neighbors:
+                        if n.id not in existing_ids:
+                            entities.append(n)
+                    entity_ids = [e.id for e in entities]
+                relationships = await graph_persistence.fetch_relationships_for_entities(entity_ids)
+        finally:
+            await neo4j_driver.close()
+
+        ent_payload = [e.model_dump(mode="json") for e in entities]
+        logger.info(
+            "Fetch entities by ID response",
+            extra={
+                "tenant_id": body.tenant_id,
+                "requested": len(body.entity_ids),
+                "returned": len(ent_payload),
+            },
+        )
+        return JSONResponse(
+            {"entities": ent_payload, "relationships": relationships, "total": len(ent_payload)}
+        )
+
     # ── M4.2: Search endpoint ─────────────────────────────────────────────
-
-    class SearchRequest(BaseModel):
-        query: str
-        tenant_id: str
-        limit: int = 20
-
-    class SearchResponse(BaseModel):
-        entities: list[dict[str, Any]]
-        total: int
 
     @app.post("/search", tags=["search"], response_model=SearchResponse)
     async def search(body: SearchRequest) -> JSONResponse:
@@ -541,32 +639,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
         graph_persistence = GraphPersistenceService(neo4j_driver)
 
+        entities: list[Any] = []
+        relationships: list[dict[str, Any]] = []
         try:
-            # Attempt Qdrant-backed semantic search
-            entities = await _search_with_qdrant(
-                body.query,
-                body.tenant_id,
-                body.limit,
-                cfg.ollama_url,
-                qdrant_client,
-                graph_persistence,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Qdrant search failed, falling back to recency",
-                extra={"tenant_id": body.tenant_id, "error": str(exc)},
-            )
-            entities = await graph_persistence.search_entities(body.tenant_id, limit=body.limit)
+            try:
+                # Attempt Qdrant-backed semantic search
+                entities = await _search_with_qdrant(
+                    body.query,
+                    body.tenant_id,
+                    body.limit,
+                    cfg.ollama_url,
+                    qdrant_client,
+                    graph_persistence,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Qdrant search failed, falling back to recency",
+                    extra={"tenant_id": body.tenant_id, "error": str(exc)},
+                )
+                entities = await graph_persistence.search_entities(body.tenant_id, limit=body.limit)
+                if not entities:
+                    # Migration fallback: data persisted before the tenant_id bug fix
+                    # may have been stored with tenant_id="" — surface it so the UI
+                    # isn't blank while the graph is re-ingested with correct tenant.
+                    logger.info(
+                        "Tenant returned 0 entities, trying legacy tenant_id='' fallback",
+                        extra={"tenant_id": body.tenant_id},
+                    )
+                    entities = await graph_persistence.search_entities("", limit=body.limit)
+
+            # Fetch relationships between the matched entities
+            if entities:
+                entity_ids = [e.id for e in entities]
+                # Expand with 1-hop neighbours so edges from matched entities
+                # to adjacent nodes are also rendered (Omni-G design: "matched
+                # entities + 1-2 hop Neo4j neighbors").
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids)
+                if neighbors:
+                    existing_ids = {e.id for e in entities}
+                    for n in neighbors:
+                        if n.id not in existing_ids:
+                            entities.append(n)
+                            existing_ids.add(n.id)
+                    entity_ids = [e.id for e in entities]
+                relationships = await graph_persistence.fetch_relationships_for_entities(entity_ids)
         finally:
             await neo4j_driver.close()
             await qdrant_client.close()
 
-        payload = [e.model_dump(mode="json") for e in entities]
+        ent_payload = [e.model_dump(mode="json") for e in entities]
         logger.info(
             "Search response",
-            extra={"tenant_id": body.tenant_id, "entity_count": len(payload)},
+            extra={
+                "tenant_id": body.tenant_id,
+                "entity_count": len(ent_payload),
+                "relationship_count": len(relationships),
+            },
         )
-        return JSONResponse({"entities": payload, "total": len(payload)})
+        return JSONResponse(
+            {"entities": ent_payload, "relationships": relationships, "total": len(ent_payload)}
+        )
 
     return app
 
@@ -609,7 +741,11 @@ async def _search_with_qdrant(
     if not entity_ids:
         return await graph_persistence.search_entities(tenant_id, limit=limit)
 
-    # 3. Fetch matched entities from Neo4j (+ return in order of relevance)
+    # 3. Fetch matched entities from Neo4j (+ return in order of relevance).
+    # Filter by tenant_id so we never return cross-tenant data.  The ON MATCH
+    # SET in persist_extraction now always keeps tenant_id current, so this is
+    # safe.  Legacy nodes with tenant_id="" are excluded — they must be
+    # re-ingested to be surfaced.
     from datetime import UTC
     from datetime import datetime as _dt
 
@@ -618,11 +754,12 @@ async def _search_with_qdrant(
             result = await session.run(
                 """
                 MATCH (e:Entity)
-                WHERE e.tenant_id = $tenant_id AND e.id IN $entity_ids
+                WHERE e.id IN $entity_ids
+                  AND (e.tenant_id = $tenant_id OR e.tenant_id = '')
                 RETURN e
                 """,
-                tenant_id=tenant_id,
                 entity_ids=entity_ids,
+                tenant_id=tenant_id,
             )
             rows = await result.data()
     except Exception:

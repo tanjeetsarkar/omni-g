@@ -15,7 +15,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ..models.entities import Entity, ExtractionResult, Relationship
+from ..models.entities import Entity, EvidenceSpan, ExtractionResult, Relationship
 from .prompts import PromptRegistry
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,7 @@ class _LLMEntity(BaseModel):
     description: str | None = None
     confidence: float | None = None  # 0.0–1.0
     properties: dict[str, Any] = Field(default_factory=dict)
+    source_span: str | None = None  # Verbatim excerpt from source text naming this entity
 
 
 class _LLMRelationship(BaseModel):
@@ -118,6 +119,7 @@ def _normalize_llm_entities(raw: _LLMEntities) -> dict[str, list[Any]]:
             confidence=e.confidence if e.confidence is not None else 0.5,
             tenant_id="",  # filled in by the pipeline from the envelope
             source_id=None,  # filled in by the pipeline from the envelope
+            source_spans=([EvidenceSpan(text=e.source_span)] if e.source_span else []),
             created=now,
             modified=now,
         )

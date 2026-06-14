@@ -16,7 +16,7 @@
  *     of the workspace.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -30,17 +30,19 @@ import {
 } from "lucide-react";
 
 import type { Socket } from "socket.io-client";
+import { usePipelineEvents, type StageStatus } from "@/hooks/usePipelineEvents";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type ToastState = "idle" | "running" | "done" | "error";
 
-type StageStatus = "idle" | "active" | "done";
+// StageStatus is imported from usePipelineEvents via the hook
 
 const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "schema_validation", label: "Validating schema" },
   { key: "deduplication", label: "Deduplicating content" },
   { key: "llm_extraction", label: "Extracting entities (LLM)" },
+  { key: "grounding_validation", label: "Grounding check (source evidence)" },
   { key: "entity_resolution", label: "Resolving entities" },
   { key: "graph_persistence", label: "Writing to Knowledge Graph" },
   { key: "graphrag_index", label: "Building community index" },
@@ -93,59 +95,11 @@ export default function PipelineProgressToast({
   onRetry,
 }: PipelineProgressToastProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [stageStatuses, setStageStatuses] = useState<
-    Record<string, StageStatus>
-  >(() =>
-    Object.fromEntries(
-      PIPELINE_STAGES.map((s) => [s.key, "idle" as StageStatus]),
-    ),
-  );
 
-  // Ref to break stale closure inside socket handler
-  const stageStatusesRef = useRef(stageStatuses);
-  stageStatusesRef.current = stageStatuses;
-
-  // Reset stage statuses whenever a new ingestion run starts
-  useEffect(() => {
-    if (toastState === "running") {
-      setStageStatuses(
-        Object.fromEntries(
-          PIPELINE_STAGES.map((s) => [s.key, "idle" as StageStatus]),
-        ),
-      );
-      setCollapsed(false);
-    }
-  }, [toastState]);
-
-  // Subscribe to live pipeline_stage events from the WebSocket gateway
-  useEffect(() => {
-    if (toastState !== "running" && toastState !== "done") return;
-
-    function handleStage(raw: unknown) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
-      const ev = raw as Record<string, unknown>;
-      if (typeof ev.stage !== "string") return;
-      if (ev.status !== "active" && ev.status !== "done") return;
-
-      const stage = ev.stage as string;
-      const status = ev.status as StageStatus;
-
-      setStageStatuses((prev) => {
-        // If schema_validation goes active → fresh run, reset all
-        if (stage === "schema_validation" && status === "active") {
-          return Object.fromEntries(
-            PIPELINE_STAGES.map((s) => [s.key, "idle" as StageStatus]),
-          );
-        }
-        return { ...prev, [stage]: status };
-      });
-    }
-
-    socket.on("pipeline_stage", handleStage);
-    return () => {
-      socket.off("pipeline_stage", handleStage);
-    };
-  }, [socket, toastState]);
+  // Always-on listener via usePipelineEvents — avoids the timing bug where
+  // conditional socket.on registration misses early stage events that arrive
+  // before the "running" effect re-registers.
+  const { stageStatuses } = usePipelineEvents(socket);
 
   // ── Nothing to show ────────────────────────────────────────────────────────
   if (toastState === "idle") return null;

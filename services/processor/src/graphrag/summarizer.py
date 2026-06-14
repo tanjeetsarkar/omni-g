@@ -124,7 +124,7 @@ class CommunitySummarizer:
         timestamp = summary.generated_at.isoformat()
         async with self._driver.session() as session:
             await session.run(
-                "MATCH (n:STIXEntity) "
+                "MATCH (n:Entity) "
                 "WHERE n.tenant_id = $tenant_id "
                 "  AND n.id IN $entity_ids "
                 "SET n.community_id = $community_id, "
@@ -143,7 +143,7 @@ class CommunitySummarizer:
         # Re-do with the real entity list (the blank call above is a no-op).
         async with self._driver.session() as session:
             await session.run(
-                "MATCH (n:STIXEntity) "
+                "MATCH (n:Entity) "
                 "WHERE n.tenant_id = $tenant_id "
                 "  AND n.id IN $entity_ids "
                 "SET n.community_id = $community_id, "
@@ -176,7 +176,7 @@ class CommunitySummarizer:
         timestamp = summary.generated_at.isoformat()
         async with self._driver.session() as session:
             await session.run(
-                "MATCH (n:STIXEntity) "
+                "MATCH (n:Entity) "
                 "WHERE n.tenant_id = $tenant_id "
                 "  AND n.id IN $entity_ids "
                 "SET n.community_id = $community_id, "
@@ -206,9 +206,9 @@ class CommunitySummarizer:
         async with self._driver.session() as session:
             # Entities
             entity_result = await session.run(
-                "MATCH (n:STIXEntity) "
+                "MATCH (n:Entity) "
                 "WHERE n.id IN $entity_ids AND n.tenant_id = $tenant_id "
-                "RETURN n.id AS eid, n.name AS name, n.stix_type AS stype",
+                "RETURN n.id AS eid, n.name AS name, n.type AS stype",
                 entity_ids=community.entity_ids,
                 tenant_id=community.tenant_id,
             )
@@ -216,7 +216,7 @@ class CommunitySummarizer:
 
             # Relationships between community members
             rel_result = await session.run(
-                "MATCH (a:STIXEntity)-[r]->(b:STIXEntity) "
+                "MATCH (a:Entity)-[r]->(b:Entity) "
                 "WHERE a.id IN $entity_ids AND b.id IN $entity_ids "
                 "  AND a.tenant_id = $tenant_id "
                 "RETURN a.name AS src_name, type(r) AS rel_type, b.name AS tgt_name",

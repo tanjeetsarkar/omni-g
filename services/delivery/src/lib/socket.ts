@@ -29,13 +29,12 @@ function bindSubscriptionHandler(s: Socket): void {
 export function getSocket(): Socket {
   if (socket) return socket;
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:3001";
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:3001";
 
   socket = io(wsUrl, {
     autoConnect: false, // connect explicitly via socket.connect()
     reconnectionAttempts: 5,
     reconnectionDelay: 1000,
-    transports: ["websocket"],
   });
 
   bindSubscriptionHandler(socket);

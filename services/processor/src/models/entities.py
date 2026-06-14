@@ -13,6 +13,19 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class EvidenceSpan(BaseModel):
+    """Text excerpt from the source event that explicitly mentions an entity.
+
+    The pipeline grounding gate uses this to verify that extracted entities
+    are directly supported by raw feed content, preventing LLM hallucination
+    from entering the Knowledge Graph.
+    """
+
+    text: str  # Verbatim excerpt from the source text that mentions the entity
+    start: int = 0  # Best-effort character offset in source text (start)
+    end: int = 0  # Best-effort character offset in source text (end)
+
+
 class Entity(BaseModel):
     """A generic knowledge-graph entity with an open-ended type.
 
@@ -28,6 +41,7 @@ class Entity(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     tenant_id: str = ""  # set by pipeline; empty at extraction time
     source_id: str | None = None  # plugin HTTP source URL
+    source_spans: list[EvidenceSpan] = Field(default_factory=list)  # Evidence from raw feed
     created: datetime
     modified: datetime
 

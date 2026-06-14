@@ -52,7 +52,7 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get("q") ?? "";
 
-  const tenantId = "default"; // TODO: derive from auth context
+  const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
 
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [submitting, setSubmitting] = useState(false);
@@ -82,18 +82,19 @@ function DashboardContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const runSearch = useCallback(
+  /**
+   * refreshGraph — queries already-ingested entities from the Processor via
+   * Qdrant semantic search + Neo4j neighbour expansion and updates the graph
+   * canvas.  Called immediately when a search is submitted (to show existing
+   * data right away) and again on pipeline_complete (to show freshly ingested
+   * entities).
+   */
+  const refreshGraph = useCallback(
     async (q: string) => {
       const trimmed = q.trim();
       if (!trimmed) return;
-      setSubmitting(true);
-      setSearchError(null);
-      setToastQuery(trimmed);
-      setToastState("running");
-      lastQueryRef.current = trimmed;
-
       try {
-        const res = await fetch("/api/search", {
+        const res = await fetch("/api/query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -104,11 +105,55 @@ function DashboardContent() {
         });
         if (!res.ok) {
           const err: { error?: string } = await res.json().catch(() => ({}));
-          throw new Error(err.error ?? `HTTP ${res.status}`);
+          setSearchError(err.error ?? `Graph query failed: HTTP ${res.status}`);
+          return;
         }
         const data: SearchResponse = await res.json();
         setSearchResult(data);
-        setToastState("done");
+        setSearchError(null);
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : "Graph query failed";
+        setSearchError(detail);
+      }
+    },
+    [tenantId],
+  );
+
+  /**
+   * runSearch — immediately queries existing entities (search-first UX) then
+   * triggers on-demand ingestion via the Aggregator so new data is gathered
+   * in the background.  The Aggregator fans out to MCP plugins, queues Kafka
+   * events, and returns 202.  The toast stays "running" until the processor
+   * emits alert_publishing→done via the WebSocket.
+   */
+  const runSearch = useCallback(
+    async (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      setSubmitting(true);
+      setSearchError(null);
+      setToastQuery(trimmed);
+      setToastState("running");
+      setIngestError(null);
+      lastQueryRef.current = trimmed;
+
+      // ── Step 1: Immediately show already-ingested entities (search-first) ──
+      // Don't await — let the graph populate while ingestion runs in parallel.
+      void refreshGraph(trimmed);
+
+      // ── Step 2: Trigger on-demand ingestion for new / updated data ─────────
+      try {
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: trimmed, sources: [] }),
+        });
+        if (!res.ok) {
+          const err: { error?: string } = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        // 202 Accepted — pipeline is running; toast transitions via socket event
       } catch (err) {
         const detail = err instanceof Error ? err.message : "Unknown error";
         setSearchError(detail);
@@ -118,8 +163,40 @@ function DashboardContent() {
         setSubmitting(false);
       }
     },
-    [tenantId],
+    [refreshGraph],
   );
+
+  // Transition toast to "done" and auto-refresh graph when the last pipeline
+  // stage (alert_publishing) completes.
+  useEffect(() => {
+    if (toastState !== "running") return;
+    function handlePipelineComplete(ev: unknown) {
+      const event = ev as Record<string, unknown>;
+      if (event.stage === "alert_publishing" && event.status === "done") {
+        setToastState("done");
+        if (lastQueryRef.current) {
+          refreshGraph(lastQueryRef.current);
+        }
+      }
+    }
+    socket.on("pipeline_stage", handlePipelineComplete);
+    return () => {
+      socket.off("pipeline_stage", handlePipelineComplete);
+    };
+  }, [socket, toastState, refreshGraph]);
+
+  // 90-second fallback: if the socket never delivers pipeline_complete
+  // (gateway down, missed event), transition the toast and refresh anyway.
+  useEffect(() => {
+    if (toastState !== "running") return;
+    const timeoutId = setTimeout(() => {
+      setToastState("done");
+      if (lastQueryRef.current) {
+        refreshGraph(lastQueryRef.current);
+      }
+    }, 90_000);
+    return () => clearTimeout(timeoutId);
+  }, [toastState, refreshGraph]);
 
   function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -209,7 +286,7 @@ function DashboardContent() {
         errorDetail={ingestError}
         socket={socket}
         onRefreshGraph={() => {
-          if (lastQueryRef.current) runSearch(lastQueryRef.current);
+          if (lastQueryRef.current) refreshGraph(lastQueryRef.current);
         }}
         onDismiss={() => {
           setToastState("idle");

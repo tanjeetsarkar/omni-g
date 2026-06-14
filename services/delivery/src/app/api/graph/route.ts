@@ -1,7 +1,7 @@
 /**
  * GET /api/graph — live Neo4j Knowledge Graph data
  *
- * Queries STIXEntity nodes and their relationships for the requested tenant.
+ * Queries Entity nodes and their relationships for the requested tenant.
  * Falls back to empty arrays on Neo4j connection errors so the UI degrades
  * gracefully when the database is unavailable.
  *
@@ -49,8 +49,8 @@ export async function GET(req: NextRequest) {
 
     try {
       const result = await session.run(
-        `MATCH (n:STIXEntity {tenant_id: $t})
-         OPTIONAL MATCH (n)-[r]->(m:STIXEntity {tenant_id: $t})
+        `MATCH (n:Entity {tenant_id: $t})
+         OPTIONAL MATCH (n)-[r]->(m:Entity {tenant_id: $t})
          RETURN n, r, m
          LIMIT 500`,
         { t: tenantId },

@@ -48,6 +48,11 @@ const PIPELINE_STAGES: StageInfo[] = [
     detail: "STIX entity identification",
   },
   {
+    key: "grounding_validation",
+    label: "Grounding Check",
+    detail: "Source-evidence verification",
+  },
+  {
     key: "entity_resolution",
     label: "Entity Resolution",
     detail: "Qdrant + Neo4j matching",
@@ -108,7 +113,7 @@ function StageProgressSection({
       <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">
         Pipeline Stages
       </p>
-      <ol className="grid grid-cols-7 gap-1">
+      <ol className="grid grid-cols-8 gap-1">
         {PIPELINE_STAGES.map(({ key, label }) => {
           const status = stageStatuses[key] ?? "idle";
           return (

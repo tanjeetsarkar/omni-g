@@ -33,6 +33,8 @@ class GraphSchemaManager:
             await self._create_tenant_id_index(session)
             await self._create_confidence_index(session)
             await self._create_timestamp_index(session)
+            await self._create_name_index(session)
+            await self._create_aliases_index(session)
 
         logger.info("graph_schema_initialized", extra={"label": "Entity"})
 
@@ -79,3 +81,28 @@ class GraphSchemaManager:
         )
         await session.run(cypher)
         logger.debug("index_created", extra={"index": "entity_timestamps", "label": "Entity"})
+
+    @staticmethod
+    async def _create_name_index(session: AsyncSession) -> None:
+        """Create a composite index on (tenant_id, type, name) for :Entity.
+
+        Speeds up the structural resolver's name/alias lookup which always
+        filters by tenant_id + type before comparing the name field.
+        """
+        cypher = (
+            "CREATE INDEX entity_tenant_type_name IF NOT EXISTS "
+            "FOR (n:Entity) ON (n.tenant_id, n.type, n.name)"
+        )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "entity_tenant_type_name", "label": "Entity"})
+
+    @staticmethod
+    async def _create_aliases_index(session: AsyncSession) -> None:
+        """Create an index on the aliases list property for :Entity.
+
+        Required for efficient list-membership queries such as
+        ``$name IN e.aliases`` used by the structural resolver.
+        """
+        cypher = "CREATE INDEX entity_aliases IF NOT EXISTS " "FOR (n:Entity) ON (n.aliases)"
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "entity_aliases", "label": "Entity"})

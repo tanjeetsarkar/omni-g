@@ -167,7 +167,7 @@ class GraphRAGIndexer:
         """
         async with self._summarizer._driver.session() as session:
             result = await session.run(
-                "MATCH (n:STIXEntity {tenant_id: $tenant_id}) "
+                "MATCH (n:Entity {tenant_id: $tenant_id}) "
                 "WHERE n.community_summary IS NOT NULL "
                 "RETURN n.community_id AS community_id, "
                 "       n.community_summary AS community_summary, "

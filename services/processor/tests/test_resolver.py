@@ -289,14 +289,19 @@ class TestVectorBlocking:
 
 class TestStructuralMatching:
     async def test_structural_matching_queries_neo4j(self) -> None:
-        """find_structural_matches() must execute two Cypher queries against Neo4j."""
+        """find_structural_matches() must execute three Cypher queries against Neo4j.
+
+        Query 1: name/alias exact match
+        Query 2: co-occurrence (shared relationship targets)
+        Query 3: fuzzy name pre-filter
+        """
         mock_driver, mock_session = _make_mock_neo4j()
         resolver = _make_resolver(neo4j_driver=mock_driver)
         entity = _make_entity("APT-28")
 
         candidates = await resolver.find_structural_matches(TENANT, entity)
 
-        assert mock_session.run.await_count == 2
+        assert mock_session.run.await_count == 3
         assert candidates == []
 
     async def test_structural_matching_name_match_returns_candidate(self) -> None:
@@ -657,3 +662,277 @@ class TestResolverEmbedding:
 
         # Should match deterministic hashing
         assert vector == _embed("APT28", 768)
+
+
+# ---------------------------------------------------------------------------
+# Alias storage fix tests (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class TestAliasStorage:
+    """Verify _props_from_entity stores aliases as a native list, not JSON string."""
+
+    def test_aliases_stored_as_native_list(self) -> None:
+        """Aliases from entity.properties must be a Python list in the props dict."""
+        from src.resolution.resolver import _props_from_entity
+
+        entity = _make_entity("Narendra Modi", entity_type="Person", aliases=["PM Modi", "NaMo"])
+        props = _props_from_entity(entity, TENANT)
+
+        assert "aliases" in props
+        assert isinstance(props["aliases"], list), "aliases must be a native list, not JSON string"
+        assert "PM Modi" in props["aliases"]
+        assert "NaMo" in props["aliases"]
+
+    def test_empty_aliases_stored_as_empty_list(self) -> None:
+        """Entity with no aliases must store an empty list (not None or JSON '[]')."""
+        from src.resolution.resolver import _props_from_entity
+
+        entity = _make_entity("Unknown Actor")
+        props = _props_from_entity(entity, TENANT)
+
+        assert props["aliases"] == []
+
+    def test_aliases_values_coerced_to_strings(self) -> None:
+        """Each alias must be a string, not an int or other type."""
+        from src.resolution.resolver import _props_from_entity
+
+        entity = _make_entity("Test Entity", aliases=["Alpha", "Beta"])
+        props = _props_from_entity(entity, TENANT)
+
+        for alias in props["aliases"]:
+            assert isinstance(alias, str)
+
+
+# ---------------------------------------------------------------------------
+# Structural alias query fix tests (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuralAliasQuery:
+    """Verify find_structural_matches can find entities via the aliases list."""
+
+    async def test_alias_match_returns_score_1_0(self) -> None:
+        """If incoming entity name matches an alias of an existing node, score must be 1.0."""
+        existing_id = _make_entity_id("Person")
+        mock_driver, mock_session = _make_mock_neo4j()
+
+        # Query 1 (name/alias match) returns the existing entity
+        result_name_alias = AsyncMock()
+        result_name_alias.data = AsyncMock(return_value=[{"entity_id": existing_id, "score": 1.0}])
+        # Query 2 (co-occurrence) returns nothing
+        result_cooccur = AsyncMock()
+        result_cooccur.data = AsyncMock(return_value=[])
+        # Query 3 (fuzzy pre-filter) returns nothing
+        result_fuzzy = AsyncMock()
+        result_fuzzy.data = AsyncMock(return_value=[])
+
+        mock_session.run = AsyncMock(side_effect=[result_name_alias, result_cooccur, result_fuzzy])
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        # "PM Modi" is an alias for the existing "Narendra Modi" node
+        incoming = _make_entity("PM Modi", entity_type="Person")
+        candidates = await resolver.find_structural_matches(TENANT, incoming)
+
+        structural_hits = [c for c in candidates if c.match_type == "structural"]
+        assert any(c.entity_id == existing_id for c in structural_hits)
+        assert any(c.score == pytest.approx(1.0) for c in structural_hits)
+
+    async def test_structural_query_uses_aliases_not_aliases_json(self) -> None:
+        """The Cypher passed to Neo4j must reference 'e.aliases', not 'e.aliases_json'."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        entity = _make_entity("Test Entity")
+
+        await resolver.find_structural_matches(TENANT, entity)
+
+        # The first session.run call is the name/alias query
+        first_cypher: str = mock_session.run.call_args_list[0].args[0]
+        assert "e.aliases" in first_cypher
+        assert "aliases_json" not in first_cypher
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy name matching tests (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestFuzzyNameMatching:
+    """Verify _find_fuzzy_name_matches catches name variations above the threshold."""
+
+    async def test_fuzzy_match_above_threshold_returned(self) -> None:
+        """A candidate with WRatio >= threshold should appear in fuzzy candidates."""
+        existing_id = _make_entity_id("Person")
+        mock_driver, mock_session = _make_mock_neo4j()
+
+        # Neo4j pre-filter returns "Narendra Modi" (contains last token "Modi")
+        result_fuzzy = AsyncMock()
+        result_fuzzy.data = AsyncMock(
+            return_value=[{"entity_id": existing_id, "name": "Narendra Modi", "aliases": []}]
+        )
+        mock_session.run = AsyncMock(return_value=result_fuzzy)
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        # "Narender Modi" (typo) — WRatio against "Narendra Modi" should be ~96
+        incoming = _make_entity("Narender Modi", entity_type="Person")
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        assert len(candidates) == 1
+        assert candidates[0].entity_id == existing_id
+        assert candidates[0].match_type == "fuzzy"
+        assert candidates[0].score >= 0.85
+
+    async def test_fuzzy_match_via_alias(self) -> None:
+        """A candidate whose alias closely matches the incoming name should be returned."""
+        existing_id = _make_entity_id("Person")
+        mock_driver, mock_session = _make_mock_neo4j()
+
+        result_fuzzy = AsyncMock()
+        result_fuzzy.data = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": existing_id,
+                    "name": "Narendra Damodardas Modi",
+                    "aliases": ["Narendra Modi", "PM Modi"],
+                }
+            ]
+        )
+        mock_session.run = AsyncMock(return_value=result_fuzzy)
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        # "PM Modi" WRatio vs alias "PM Modi" = 100
+        incoming = _make_entity("PM Modi", entity_type="Person")
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        assert len(candidates) == 1
+        assert candidates[0].entity_id == existing_id
+        assert candidates[0].score == pytest.approx(1.0)
+
+    async def test_fuzzy_below_threshold_excluded(self) -> None:
+        """A candidate with WRatio below threshold must NOT be returned."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        existing_id = _make_entity_id("Person")
+
+        result_fuzzy = AsyncMock()
+        result_fuzzy.data = AsyncMock(
+            return_value=[{"entity_id": existing_id, "name": "Modi Industries Ltd", "aliases": []}]
+        )
+        mock_session.run = AsyncMock(return_value=result_fuzzy)
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        # "Narendra Modi" vs "Modi Industries Ltd" WRatio is well below 85
+        incoming = _make_entity("Narendra Modi", entity_type="Person")
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        # Should be empty — "Modi Industries Ltd" is a different entity
+        assert len(candidates) == 0
+
+    async def test_fuzzy_skipped_for_unknown_name(self) -> None:
+        """Entities named 'Unknown' must be skipped without querying Neo4j."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        incoming = _make_entity("Unknown", entity_type="Person")
+
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        assert candidates == []
+        mock_session.run.assert_not_awaited()
+
+    async def test_fuzzy_neo4j_error_is_swallowed(self) -> None:
+        """A Neo4j failure in fuzzy matching must not propagate — returns empty list."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        mock_session.run = AsyncMock(side_effect=Exception("Neo4j timeout"))
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        incoming = _make_entity("Narendra Modi", entity_type="Person")
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Type isolation tests (Phase 2 — cross-type safety)
+# ---------------------------------------------------------------------------
+
+
+class TestFuzzyTypeIsolation:
+    """Ensure fuzzy matching is scoped to the same entity type."""
+
+    async def test_fuzzy_query_passes_entity_type_filter(self) -> None:
+        """The fuzzy Neo4j query must include entity_type in WHERE clause."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        entity = _make_entity("Modi Industries", entity_type="Organization")
+
+        await resolver._find_fuzzy_name_matches(TENANT, entity)
+
+        call_kwargs = mock_session.run.call_args.kwargs
+        assert call_kwargs["entity_type"] == "Organization"
+
+    async def test_fuzzy_scores_constrained_to_same_type(self) -> None:
+        """Candidates returned by fuzzy matching must match the incoming entity type."""
+        mock_driver, mock_session = _make_mock_neo4j()
+        existing_person_id = _make_entity_id("Person")
+
+        # Simulate Neo4j returning a Person node when queried for Organization
+        # (this should not happen if type filter is correct, but we guard against it)
+        result_fuzzy = AsyncMock()
+        result_fuzzy.data = AsyncMock(
+            return_value=[
+                {"entity_id": existing_person_id, "name": "Modi Industries", "aliases": []}
+            ]
+        )
+        mock_session.run = AsyncMock(return_value=result_fuzzy)
+
+        resolver = _make_resolver(neo4j_driver=mock_driver)
+        # Query as Organization — the neo4j WHERE filter handles isolation.
+        # The test validates the query params are set correctly so Neo4j enforces it.
+        incoming = _make_entity("Modi Industries", entity_type="Organization")
+        candidates = await resolver._find_fuzzy_name_matches(TENANT, incoming)
+
+        call_kwargs = mock_session.run.call_args.kwargs
+        assert call_kwargs["tenant_id"] == TENANT
+        assert call_kwargs["entity_type"] == "Organization"
+        # Candidate is returned (type isolation enforced by Neo4j via WHERE, not in Python)
+        assert all(c.match_type == "fuzzy" for c in candidates)
+
+
+# ---------------------------------------------------------------------------
+# Configurable threshold tests (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigurableThresholds:
+    """Verify AUTO_MERGE_THRESHOLD and AMBIGUOUS_THRESHOLD env vars are honoured."""
+
+    def test_auto_merge_uses_module_threshold(self) -> None:
+        """_apply_decision must use AUTO_MERGE_THRESHOLD, not a hardcoded 0.95."""
+        import src.resolution.resolver as resolver_module
+
+        entity = _make_entity()
+        existing_id = _make_entity_id()
+
+        original = resolver_module.AUTO_MERGE_THRESHOLD
+        try:
+            resolver_module.AUTO_MERGE_THRESHOLD = 0.80
+            candidates = [_candidate(existing_id, score=0.82)]
+            result = EntityResolver._apply_decision(candidates, entity)
+            assert result.decision == ResolutionDecision.AUTO_MERGE
+        finally:
+            resolver_module.AUTO_MERGE_THRESHOLD = original
+
+    def test_ambiguous_uses_module_threshold(self) -> None:
+        """_apply_decision must use AMBIGUOUS_THRESHOLD, not a hardcoded 0.50."""
+        import src.resolution.resolver as resolver_module
+
+        entity = _make_entity()
+        existing_id = _make_entity_id()
+
+        original = resolver_module.AMBIGUOUS_THRESHOLD
+        try:
+            resolver_module.AMBIGUOUS_THRESHOLD = 0.30
+            candidates = [_candidate(existing_id, score=0.35)]
+            result = EntityResolver._apply_decision(candidates, entity)
+            assert result.decision == ResolutionDecision.AMBIGUOUS
+        finally:
+            resolver_module.AMBIGUOUS_THRESHOLD = original

@@ -173,8 +173,8 @@ class CommunityDetector:
 
         async with self._driver.session() as session:
             result = await session.run(
-                "MATCH (origin:STIXEntity {id: $entity_id, tenant_id: $tenant_id})"
-                f"-[*1..{hop_depth}]-(neighbor:STIXEntity {{tenant_id: $tenant_id}}) "
+                "MATCH (origin:Entity {id: $entity_id, tenant_id: $tenant_id})"
+                f"-[*1..{hop_depth}]-(neighbor:Entity {{tenant_id: $tenant_id}}) "
                 "RETURN DISTINCT neighbor.id AS nid",
                 entity_id=entity_id,
                 tenant_id=tenant_id,
@@ -186,8 +186,8 @@ class CommunityDetector:
         # Fetch edges within the subgraph
         async with self._driver.session() as session:
             edge_result = await session.run(
-                "MATCH (a:STIXEntity {tenant_id: $tenant_id})"
-                "-[r]-(b:STIXEntity {tenant_id: $tenant_id}) "
+                "MATCH (a:Entity {tenant_id: $tenant_id})"
+                "-[r]-(b:Entity {tenant_id: $tenant_id}) "
                 "WHERE a.id IN $ids AND b.id IN $ids "
                 "RETURN a.id AS source_id, b.id AS target_id",
                 tenant_id=tenant_id,
@@ -232,9 +232,9 @@ class CommunityDetector:
             project_cypher = (
                 "CALL gds.graph.project.cypher("
                 "  'omni_g_graph',"
-                "  'MATCH (n:STIXEntity {tenant_id: $tenant_id}) RETURN id(n) AS id',"
-                "  'MATCH (n:STIXEntity {tenant_id: $tenant_id})-[r]->"
-                "(m:STIXEntity {tenant_id: $tenant_id}) "
+                "  'MATCH (n:Entity {tenant_id: $tenant_id}) RETURN id(n) AS id',"
+                "  'MATCH (n:Entity {tenant_id: $tenant_id})-[r]->"
+                "(m:Entity {tenant_id: $tenant_id}) "
                 "RETURN id(n) AS source, id(m) AS target',"
                 "  {parameters: {tenant_id: $tenant_id}}"
                 ") YIELD graphName"
@@ -269,8 +269,8 @@ class CommunityDetector:
         algorithm = "python_cc"
         async with self._driver.session() as session:
             result = await session.run(
-                "MATCH (n:STIXEntity {tenant_id: $tenant_id})"
-                "-[r]-(m:STIXEntity {tenant_id: $tenant_id}) "
+                "MATCH (n:Entity {tenant_id: $tenant_id})"
+                "-[r]-(m:Entity {tenant_id: $tenant_id}) "
                 "RETURN n.id AS source_id, m.id AS target_id",
                 tenant_id=tenant_id,
             )
@@ -282,7 +282,7 @@ class CommunityDetector:
             # Fetch isolated nodes
             async with self._driver.session() as session:
                 iso_result = await session.run(
-                    "MATCH (n:STIXEntity {tenant_id: $tenant_id}) RETURN n.id AS nid",
+                    "MATCH (n:Entity {tenant_id: $tenant_id}) RETURN n.id AS nid",
                     tenant_id=tenant_id,
                 )
                 iso_records = await iso_result.data()

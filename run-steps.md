@@ -67,9 +67,13 @@ uv run uvicorn src.processor.main:app --host 0.0.0.0 --port 8001
 cd services/aggregator
 go run ./cmd/aggregator
 
-# Terminal 5 — Delivery (Next.js + WebSocket gateway)
+# Terminal 5 — Delivery (Next.js)
 cd services/delivery
 pnpm dev
+
+# Terminal 6 — WebSocket Gateway (Kafka → Socket.io bridge)
+cd services/delivery
+pnpm gateway
 ```
 
 Open **http://localhost:3000** in your browser.
@@ -88,6 +92,7 @@ curl http://localhost:6379          # Redis (PONG via redis-cli ping)
 curl http://localhost:8080/health   # Aggregator
 curl http://localhost:8001/health   # Processor
 curl http://localhost:3000/api/health  # Delivery
+curl http://localhost:9464/metrics  # WebSocket Gateway (Prometheus metrics)
 
 # OSINT plugins
 curl http://localhost:8090/health   # mcp-echo

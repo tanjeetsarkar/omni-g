@@ -33,6 +33,7 @@ const PIPELINE_STAGES = [
   "schema_validation",
   "deduplication",
   "llm_extraction",
+  "grounding_validation",
   "entity_resolution",
   "graph_persistence",
   "graphrag_index",
