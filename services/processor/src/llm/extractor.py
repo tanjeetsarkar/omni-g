@@ -179,7 +179,7 @@ class LLMExtractor:
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> ExtractionResult:
-        """Extract STIX entities from text, with automatic fallback on LLM errors."""
+        """Extract entities from text, with automatic fallback on LLM errors."""
         source_type: str = (metadata.get("source_type") or "general") if metadata else "general"
         async with self._semaphore:
             entities = await self._try_extract(text, source_type)
