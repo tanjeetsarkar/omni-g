@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     kafka_entities_topic: str = Field(default="processed-entities", alias="KAFKA_ENTITIES_TOPIC")
     kafka_alerts_topic: str = Field(default="analyst-alerts", alias="KAFKA_ALERTS_TOPIC")
     kafka_evidence_topic: str = Field(default="evidence-created", alias="KAFKA_EVIDENCE_TOPIC")
+    kafka_assessment_topic: str = Field(
+        default="assessments-produced", alias="KAFKA_ASSESSMENT_TOPIC"
+    )
     kafka_processor_events_topic: str = Field(
         default="processor-events", alias="KAFKA_PROCESSOR_EVENTS_TOPIC"
     )

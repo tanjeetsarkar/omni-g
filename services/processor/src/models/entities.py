@@ -81,6 +81,8 @@ class ExtractionResult(BaseModel):
     kiq_id: str | None = None
     # V2: collected evidence objects created after grounding validation.
     collected_evidence: list[CollectedEvidence] = Field(default_factory=list)
+    # V2 Step 7: first-pass assessment produced for KIQ-tagged events.
+    assessment: Assessment | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +172,111 @@ class CollectedEvidence(BaseModel):
     # Application state
     status: str = "NEW"  # NEW, CONFIRMED, DISPUTED, SUPERSEDED
     tags: list[str] = Field(default_factory=list)
+
+    created: datetime
+    modified: datetime
+
+
+# ---------------------------------------------------------------------------
+# V2 Assessment models (Step 7)
+# ---------------------------------------------------------------------------
+
+
+class ConfidenceBand(BaseModel):
+    """Probability band for confidence expression in a V2 Assessment."""
+
+    low: float = Field(ge=0.0, le=1.0)  # Conservative lower bound
+    mid: float = Field(ge=0.0, le=1.0)  # Point estimate
+    high: float = Field(ge=0.0, le=1.0)  # Optimistic upper bound
+
+
+class Hypothesis(BaseModel):
+    """Candidate explanation for a KIQ, supporting Analysis of Competing Hypotheses (ACH)."""
+
+    # Identity
+    id: str  # "hypothesis--{uuid4}"
+    tenant_id: str  # Multi-tenant isolation (required)
+
+    # Context
+    kiq_id: str  # Which KIQ does this explain?
+
+    # The hypothesis
+    statement: str  # E.g., "Acme Corp is planning to acquire Retail Inc."
+    reasoning: str  # Why this is plausible
+
+    # ACH scoring
+    likelihood_ratio: float | None = None  # H / ~H for Bayesian updates
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+
+    # Status and lifecycle
+    status: str = "CANDIDATE"  # CANDIDATE, PLAUSIBLE, PROBABLE, LEADING, REJECTED
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    generated_by: str = "LLM"  # LLM, ANALYST, ACH
+    analyst_notes: str | None = None
+
+    created: datetime
+    modified: datetime
+
+
+class Assessment(BaseModel):
+    """Final analyst-grade assessment for a KIQ: BLUF + confidence band + evidence + gaps."""
+
+    # Identity
+    id: str  # "assessment--{uuid4}"
+    tenant_id: str  # Multi-tenant isolation (required)
+
+    # Context
+    kiq_id: str  # Which KIQ does this assess?
+    hypothesis_id: str | None = None  # Which hypothesis won ACH (if any)?
+
+    # BLUF (Bottom Line Up Front)
+    conclusion: str  # Short declarative statement answering the KIQ
+    confidence: ConfidenceBand  # Probability band: low / mid / high
+
+    # Reasoning and evidence
+    reasoning: str  # Explanation of how we reached this conclusion
+    assumptions: list[str] = Field(default_factory=list)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)  # CollectedEvidence IDs
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+
+    # Intelligence gaps and next steps
+    collection_gaps: list[str] = Field(default_factory=list)  # CollectionGap IDs
+    recommended_next_actions: list[str] = Field(default_factory=list)
+
+    # Status and versioning
+    status: str = "DRAFT"  # DRAFT, READY, PUBLISHED, SUPERSEDED
+    produced_by: str = "PROCESSOR"  # PROCESSOR, ANALYST, HYBRID
+    version: int = 1
+    superseded_by_id: str | None = None  # If a newer assessment replaces this
+
+    created: datetime
+    modified: datetime
+
+
+class CollectionGap(BaseModel):
+    """Explicit missing information needed to raise confidence or resolve contradictions."""
+
+    # Identity
+    id: str  # "gap--{uuid4}"
+    tenant_id: str  # Multi-tenant isolation (required)
+
+    # Context
+    kiq_id: str  # Which KIQ does this gap relate to?
+    assessment_id: str | None = None  # Which assessment identified this gap?
+
+    # The gap
+    gap_statement: str  # E.g., "Current financial status of Retail Inc. (FY 2025)"
+    why_needed: str  # E.g., "To assess acquisition financing likelihood"
+
+    # Collection guidance
+    suggested_sources: list[str] = Field(default_factory=list)
+    suggested_plugins: list[str] = Field(default_factory=list)
+    collection_priority: int = 0  # Higher = more urgent
+
+    # Status and tasking
+    status: str = "IDENTIFIED"  # IDENTIFIED, TASKED, IN_PROGRESS, FILLED, INVALIDATED
+    tasking_issued: bool = False  # Has this been tasked back to Aggregator?
 
     created: datetime
     modified: datetime

@@ -25,6 +25,8 @@ from ..models.entities import (
 )
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
+from .assessment import AssessmentService
+from .assessment_publisher import AssessmentPublisher
 from .evidence_publisher import EvidencePublisher
 from .stage_publisher import StageEventPublisher
 
@@ -67,6 +69,12 @@ GROUNDING_REJECTIONS = Counter(
 EVIDENCE_CREATED = Counter(
     "processor_evidence_created_total",
     "CollectedEvidence objects created from grounded extraction results",
+    ["tenant_id"],
+)
+
+ASSESSMENTS_PRODUCED = Counter(
+    "processor_assessments_produced_total",
+    "V2 Assessment objects produced for KIQ-tagged pipeline runs",
     ["tenant_id"],
 )
 
@@ -275,6 +283,8 @@ class ProcessingPipeline:
         alert_publisher: AlertPublisher | None = None,
         stage_publisher: StageEventPublisher | None = None,
         evidence_publisher: EvidencePublisher | None = None,
+        assessment_service: AssessmentService | None = None,
+        assessment_publisher: AssessmentPublisher | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
@@ -284,6 +294,8 @@ class ProcessingPipeline:
         self._alert_publisher = alert_publisher
         self._stage_publisher = stage_publisher
         self._evidence_publisher = evidence_publisher
+        self._assessment_service = assessment_service
+        self._assessment_publisher = assessment_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
@@ -533,6 +545,64 @@ class ProcessingPipeline:
         if self._evidence_publisher is not None:
             for ev in evidence_list:
                 await self._evidence_publisher.publish(ev)
+
+        # ── Step 3.7: Assessment generation ───────────────────────────────
+        # For KIQ-tagged events with grounded evidence, generate a first-pass
+        # Assessment (BLUF + confidence band + intelligence gaps).
+        # Untasked events (kiq_id=None) are skipped; assessment is optional.
+        if self._assessment_service is not None and envelope.kiq_id and evidence_list:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "assessment_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "evidence_count": len(evidence_list),
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "assessment_generation", "active"
+                )
+            t0 = time.monotonic()
+            assessment_result = await self._assessment_service.generate(
+                kiq_id=envelope.kiq_id,
+                tenant_id=envelope.tenant_id,
+                evidence_list=evidence_list,
+            )
+            PIPELINE_STAGE_DURATION.labels(stage="assessment_generation").observe(
+                time.monotonic() - t0
+            )
+            if assessment_result is not None:
+                assessment_obj, _gaps = assessment_result
+                extraction = extraction.model_copy(update={"assessment": assessment_obj})
+                ASSESSMENTS_PRODUCED.labels(tenant_id=envelope.tenant_id).inc()
+                logger.info(
+                    "pipeline_assessment_produced",
+                    extra={
+                        "event_id": envelope.id,
+                        "tenant_id": envelope.tenant_id,
+                        "kiq_id": envelope.kiq_id,
+                        "assessment_id": assessment_obj.id,
+                        "gaps": len(_gaps),
+                        "conclusion_preview": assessment_obj.conclusion[:120],
+                    },
+                )
+                if self._assessment_publisher is not None:
+                    await self._assessment_publisher.publish(assessment_obj)
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "assessment_generation", "done"
+                )
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "assessment_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
 
         # ── Step 4: Entity resolution ──────────────────────────────────────
         if self._resolver is not None:

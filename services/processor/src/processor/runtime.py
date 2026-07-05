@@ -16,6 +16,8 @@ from ..graphrag.summarizer import CommunitySummarizer
 from ..llm.extractor import LLMExtractor
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher
+from .assessment import AssessmentService
+from .assessment_publisher import AssessmentPublisher
 from .config import Settings
 from .evidence_publisher import EvidencePublisher
 from .pipeline import ProcessingPipeline
@@ -33,6 +35,7 @@ class ProcessorRuntime:
     alert_publisher: AlertPublisher
     stage_publisher: StageEventPublisher
     evidence_publisher: EvidencePublisher
+    assessment_publisher: AssessmentPublisher
 
     @classmethod
     async def create(cls, cfg: Settings, *, worker_id: int) -> ProcessorRuntime:
@@ -99,6 +102,11 @@ class ProcessorRuntime:
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_evidence_topic,
         )
+        assessment_service = AssessmentService()
+        assessment_publisher = AssessmentPublisher(
+            brokers=cfg.kafka_brokers,
+            topic=cfg.kafka_assessment_topic,
+        )
         stage_publisher = StageEventPublisher(
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_processor_events_topic,
@@ -113,6 +121,8 @@ class ProcessorRuntime:
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
             evidence_publisher=evidence_publisher,
+            assessment_service=assessment_service,
+            assessment_publisher=assessment_publisher,
         )
 
         logger.info(
@@ -132,6 +142,7 @@ class ProcessorRuntime:
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
             evidence_publisher=evidence_publisher,
+            assessment_publisher=assessment_publisher,
         )
 
     async def process_event(self, event: dict[str, Any]) -> None:
@@ -143,3 +154,4 @@ class ProcessorRuntime:
         await self.qdrant_client.close()
         self.alert_publisher.close()
         self.stage_publisher.close()
+        self.assessment_publisher.close()
