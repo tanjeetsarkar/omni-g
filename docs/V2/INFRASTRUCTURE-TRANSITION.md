@@ -48,12 +48,12 @@ V2 keeps these core platform dependencies:
 
 ### New runtime roles
 
-- `processor-worker` — Celery worker for analysis execution
-- `processor-beat` — Celery Beat for recurring work
+- `processor-worker` — Celery worker for analysis execution (**implemented**: `services` and `all` profiles)
+- `processor-beat` — Celery Beat for recurring work (**implemented**: `services` and `all` profiles)
 
 ### Optional runtime role
 
-- `flower` — task monitoring UI for local debugging and operations
+- `flower` — task monitoring UI for local debugging and operations (not yet added; add under a `celery-debug` profile when needed)
 
 ## Redis Usage Split
 
@@ -99,17 +99,19 @@ The local development path must remain lightweight.
 Recommended profiles:
 
 - baseline path: current non-Celery stack for basic development and UI work
-- orchestration path: current stack plus `processor-worker` and `processor-beat`
-- optional diagnostics path: add `flower` only when debugging queues
+- orchestration path: `--profile services` (or `--profile all`) now includes `processor-worker` and `processor-beat` automatically
+- optional diagnostics path: add `flower` under a `celery-debug` profile when debugging queues
 
 ## Compose and Config Changes
 
-Planned changes:
+Implemented:
 
-- add Celery settings to Processor configuration
-- add worker and beat commands to compose
-- document environment variables for broker URL, result backend, concurrency, and queue routing
-- document low-memory defaults for local development
+- Celery settings added to Processor configuration (`CELERY_ENABLED`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `CELERY_TASK_QUEUE`, `CELERY_TASK_ALWAYS_EAGER`, `CELERY_TASK_IGNORE_RESULT`)
+- `processor-worker` service: `celery … worker -Q processor-process-event --concurrency=2`; shares the same image as `processor`; depends on `redis` and `neo4j` healthy
+- `processor-beat` service: `celery … beat`; depends on `redis` healthy
+- `CELERY_TASK_ALWAYS_EAGER` hardcoded to `false` in both worker services and the main processor service so tasks route through Redis to real workers
+- `CELERY_WORKER_CONCURRENCY` env var (default `2`) controls worker parallelism
+- `CELERY_LOG_LEVEL` env var (default `info`) shared across all three Celery surfaces
 
 ## Validation Targets
 

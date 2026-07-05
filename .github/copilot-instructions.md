@@ -48,6 +48,7 @@ When reviewing architectural decisions or implementation approaches, evaluate ag
 - All extracted entities must conform to the generic Entity model: `id, type (string), name, description, properties (dict), confidence, tenant_id, source_id, created, modified`
 - Entity `type` is open-ended and determined by the LLM from context (Person, Organization, Event, Location, Topic, Concept, etc.)—do not constrain to a fixed ontology
 - Relationships carry open-ended `type` strings (KNOWS, LOCATED_AT, PARTICIPATED_IN, etc.) and a `confidence` score
+- All V2 intelligence-cycle records (KIQ, CollectedEvidence, Hypothesis, Assessment, CollectionGap) must conform to schemas defined in **docs/V2/DOMAIN-MODEL.md**
 - Pydantic enforces the base schema at the processing edge; `properties` dict captures domain-specific attributes
 - **Example Challenge:** "Can we skip Pydantic validation?" **Answer:** No—schema validation at the ingestion edge is the only defense against silent data corruption downstream.
 
@@ -58,9 +59,9 @@ When reviewing architectural decisions or implementation approaches, evaluate ag
 - **Example Challenge:** "Should the dashboard show a full pre-loaded graph?" **Answer:** No—search-driven entry keeps the UI focused, and V2 dissemination should prioritize assessments before broad graph sprawl.
 
 **Principle 5: Analytical Rigor**
-- Validate that evidence carries provenance, source classification, and scoring metadata.
-- Prefer explicit source reliability and information credibility over opaque confidence-only decisions.
-- Require competing-hypothesis or contradiction-aware workflows for major assessments.
+- Validate that evidence carries provenance, source classification, and scoring metadata per **docs/V2/DOMAIN-MODEL.md** CollectedEvidence schema.
+- Prefer explicit source reliability and information credibility (Admiralty-style A–F and 1–6 ratings) over opaque confidence-only decisions.
+- Require competing-hypothesis or contradiction-aware workflows for major assessments; see **docs/V2/DOMAIN-MODEL.md** Hypothesis and Assessment models.
 - **Example Challenge:** "Can we issue a conclusion from the first plausible explanation?" **Answer:** No—V2 requires alternative hypotheses and explicit support versus contradiction accounting before dissemination.
 
 **Principle 6: Multi-Tenant Isolation**
@@ -202,11 +203,11 @@ When security is discussed, ensure these are addressed:
 - [ ] Confidence thresholds documented (auto-merge >95%, ambiguity 50-95%, reject <50%)
 - [ ] Users can filter by confidence + source in the graph UI
 
-**Checkpoint 3A: V2 Evidence and Assessment Discipline**
-- [ ] Every collected evidence object has KIQ linkage or explicit justification for being untasked
-- [ ] Evidence records include source class, reliability, credibility, and source span or citation
-- [ ] Major assessments include supporting and contradictory evidence
-- [ ] Dissemination includes intelligence gaps and recommended next collection steps
+**Checkpoint 3A: V2 Evidence and Assessment Discipline (see docs/V2/DOMAIN-MODEL.md)**
+- [ ] Every CollectedEvidence object has KIQ linkage or explicit justification for being untasked (per CollectedEvidence schema)
+- [ ] Evidence records include source class (SourceClassification), reliability (ReliabilityRating A–F), credibility (CredibilityRating 1–6), and source span or citation
+- [ ] Major Assessment objects include supporting_evidence_ids and contradicting_evidence_ids (per Assessment schema)
+- [ ] Assessment objects include collection_gaps list linking to CollectionGap objects and recommended_next_actions
 
 **Checkpoint 4: Observability & Alerting**
 - [ ] Audit log includes: timestamp, actor (user/plugin), action, entity, change
@@ -253,17 +254,19 @@ ENTITY-ONLY APPROACH:
 - Con: No first-class way to represent tasking, competing hypotheses, or BLUF outputs
 
 V2 APPROACH (recommended):
-- Keep the generic entity model
-- Add KIQ, evidence, hypothesis, assessment, and collection-gap records around it
+- Keep the generic entity model (Entity, Relationship)
+- Add KIQ, CollectedEvidence, Hypothesis, Assessment, and CollectionGap records per docs/V2/DOMAIN-MODEL.md
 - Pro: Supports intelligence-cycle workflow without constraining entity extraction
 - Con: More application-level modeling work
 
 Implementation:
 - Preserve the base Entity and Relationship schema
-- Introduce explicit assessment-side models in Processor and Delivery contracts
-- Keep provenance and tenant isolation on all new records
+- Introduce KIQ, CollectedEvidence, Hypothesis, Assessment, CollectionGap models in Processor (and KIQ in Aggregator)
+- All records must comply with schemas in docs/V2/DOMAIN-MODEL.md
+- Keep provenance (source_id, owner_id) and tenant isolation (tenant_id) on all new records
 
 This aligns the platform with the V2 roadmap instead of leaving dissemination and analysis implicit.
+Refer to docs/V2/DOMAIN-MODEL.md for complete record definitions, service ownership, and Kafka event schema.
 ```
 
 ### Pattern 3: Warning About Anti-Patterns
@@ -324,15 +327,16 @@ What's your expected ingestion rate for this workload?
 
 When asked about Omni-G architecture, refer to these files:
 
-1. **docs/V2/ARCHITECTURE.md** — Active target architecture for the overhaul
-2. **docs/V2/ROADMAP.md** — Active migration roadmap for the overhaul
-3. **docs/V2/INFRASTRUCTURE-TRANSITION.md** — Runtime and orchestration transition target
-4. **techstack.md** — Canonical stack baseline with approved technologies
-5. **prerequisites.md** — Development environment setup and constraints
-6. **docs/agent-contexts/gap-matrix.md** — Living delta between V2 vision, roadmap, and implementation
-7. **docs/V1/** — Historical pre-overhaul baseline, only when legacy context is needed
+1. **docs/V2/DOMAIN-MODEL.md** — Canonical V2 record definitions (KIQ, CollectedEvidence, Hypothesis, Assessment, CollectionGap); ALWAYS reference this for any feature touching evidence, assessments, or intelligence-cycle workflow
+2. **docs/V2/ARCHITECTURE.md** — Active target architecture for the overhaul
+3. **docs/V2/ROADMAP.md** — Active migration roadmap for the overhaul
+4. **docs/V2/INFRASTRUCTURE-TRANSITION.md** — Runtime and orchestration transition target
+5. **techstack.md** — Canonical stack baseline with approved technologies
+6. **prerequisites.md** — Development environment setup and constraints
+7. **docs/agent-contexts/gap-matrix.md** — Living delta between V2 vision, roadmap, and implementation
+8. **docs/V1/** — Historical pre-overhaul baseline, only when legacy context is needed
 
-When giving advice, prioritize the V2 documents unless the question is explicitly about legacy behavior.
+When giving advice, prioritize the V2 documents unless the question is explicitly about legacy behavior. For any feature involving KIQ, evidence, hypothesis, assessment, or collection gap, consult **docs/V2/DOMAIN-MODEL.md** first.
 
 ## Documentation Hygiene
 
@@ -370,16 +374,18 @@ You validate, advise, and warn—but don't execute.
 - Warning about anti-patterns or scope creep
 - Confirming multi-tenant isolation approach
 - Evaluating plugin sandboxing strategy
+- **Implementing any feature touching KIQ, evidence, hypothesis, assessment, or collection gaps** — refer to docs/V2/DOMAIN-MODEL.md first
 
 **Invoke the Developer agent when:**
 - You need hands-on coding assistance
 - Bugs need debugging
 - Implementation details need clarification
+- For any V2 record implementation (KIQ, CollectedEvidence, Hypothesis, Assessment, CollectionGap): provide docs/V2/DOMAIN-MODEL.md as context first
 
 **Invoke Service Specialists when:**
-- Go-specific issues (Aggregator)
-- Python/GraphRAG issues (Processor)
-- Next.js/WebSocket/React Flow issues (Delivery)
+- Go-specific issues (Aggregator) — provide KIQ schema from docs/V2/DOMAIN-MODEL.md if tasking-related
+- Python/GraphRAG issues (Processor) — provide evidence/hypothesis/assessment/gap schemas from docs/V2/DOMAIN-MODEL.md if implementing intelligence-cycle features
+- Next.js/WebSocket/React Flow issues (Delivery) — provide assessment/gap schemas from docs/V2/DOMAIN-MODEL.md if implementing BLUF or evidence display
 - DevOps/Docker/observability issues
 
 ---

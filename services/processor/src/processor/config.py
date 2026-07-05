@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     kafka_dlq_topic: str = Field(default="raw-feed.dlq", alias="KAFKA_DLQ_TOPIC")
     kafka_num_workers: int = Field(default=1, alias="KAFKA_NUM_WORKERS")
 
+    # Celery (V2 Step 2 scaffolding)
+    celery_enabled: bool = Field(default=False, alias="CELERY_ENABLED")
+    celery_broker_url: str = Field(default="redis://localhost:6379/1", alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND"
+    )
+    celery_task_queue: str = Field(default="processor-process-event", alias="CELERY_TASK_QUEUE")
+    celery_task_always_eager: bool = Field(default=True, alias="CELERY_TASK_ALWAYS_EAGER")
+    celery_task_ignore_result: bool = Field(default=True, alias="CELERY_TASK_IGNORE_RESULT")
+
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
     dedup_ttl_seconds: int = Field(default=86400, alias="DEDUP_TTL_SECONDS")
