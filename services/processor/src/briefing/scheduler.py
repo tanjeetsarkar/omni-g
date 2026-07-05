@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
 from .script_generator import BriefingScriptGenerator
 from .storage import MinIOStorageService
 from .tts_synthesizer import TTSSynthesizer
@@ -12,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class BriefingScheduler:
-    """Schedule daily audio briefings per tenant.
+    """On-demand audio briefing runner per tenant.
 
-    On :meth:`start`, an :class:`AsyncIOScheduler` job is registered for each
-    tenant that runs at ``briefing_hour:00 UTC`` every day.  Call
-    :meth:`on_demand` to trigger a briefing immediately for any tenant.
+    Call :meth:`on_demand` to trigger a briefing immediately for any tenant.
+    Recurring scheduled execution is handled by Celery Beat
+    (``CELERY_BRIEFING_ENABLED=true``).
     """
 
     def __init__(
@@ -30,47 +28,6 @@ class BriefingScheduler:
         self._tts = tts_synthesizer
         self._storage = storage
         self._briefing_hour = briefing_hour
-        self._scheduler: AsyncIOScheduler | None = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    async def start(self, tenant_ids: list[str]) -> None:
-        """Start the APScheduler-backed daily scheduler for *tenant_ids*.
-
-        .. deprecated::
-            Scheduled execution has moved to Celery Beat.  Set
-            ``CELERY_BRIEFING_ENABLED=true`` and run a ``celery beat`` process to
-            replace this path.  This method is kept for backward compatibility with
-            environments that do not use Celery and will be removed in a later step.
-        """
-        self._scheduler = AsyncIOScheduler(timezone="UTC")
-        for tenant_id in tenant_ids:
-            self._scheduler.add_job(
-                self._run_briefing,
-                trigger="cron",
-                hour=self._briefing_hour,
-                minute=0,
-                args=[tenant_id],
-                id=f"briefing_{tenant_id}",
-                replace_existing=True,
-            )
-            logger.info(
-                "briefing_job_scheduled",
-                extra={"tenant_id": tenant_id, "hour_utc": self._briefing_hour},
-            )
-        self._scheduler.start()
-
-    async def stop(self) -> None:
-        """Gracefully shut down the APScheduler-backed scheduler.
-
-        .. deprecated::
-            See :meth:`start` — this path is superseded by Celery Beat.
-        """
-        if self._scheduler is not None and self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
-            logger.info("briefing_scheduler_stopped")
 
     async def on_demand(self, tenant_id: str) -> str:
         """Generate, synthesize, upload, and return the object key immediately."""
@@ -82,21 +39,3 @@ class BriefingScheduler:
             extra={"tenant_id": tenant_id, "object_key": object_key},
         )
         return object_key
-
-    # ------------------------------------------------------------------
-    # Internal job handler
-    # ------------------------------------------------------------------
-
-    async def _run_briefing(self, tenant_id: str) -> None:
-        """Generate, synthesize, upload briefing for *tenant_id* and log result."""
-        try:
-            object_key = await self.on_demand(tenant_id)
-            logger.info(
-                "scheduled_briefing_complete",
-                extra={"tenant_id": tenant_id, "object_key": object_key},
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "scheduled_briefing_failed",
-                extra={"tenant_id": tenant_id, "error": str(exc)},
-            )

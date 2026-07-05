@@ -30,7 +30,7 @@ GRAPH_WRITE_ERRORS = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# STIX relationship type → Neo4j edge type mapping
+# Relationship type normalization
 # ---------------------------------------------------------------------------
 
 _REL_TYPE_MAP: dict[str, str] = {
@@ -42,16 +42,16 @@ _REL_TYPE_MAP: dict[str, str] = {
 }
 
 
-def _map_relationship_type(stix_rel_type: str) -> str:
-    """Map a STIX relationship_type string to a Neo4j edge label.
+def _map_relationship_type(rel_type: str) -> str:
+    """Map a relationship type string to a Neo4j edge label.
 
-    Known types are looked up from :data:`_REL_TYPE_MAP`.  Unknown types are
-    upper-cased and have hyphens replaced with underscores, e.g.
-    ``"attributed-to"`` → ``"ATTRIBUTED_TO"``.
+    Known hyphenated types are looked up from :data:`_REL_TYPE_MAP`.  All
+    other types are upper-cased and have non-alphanumeric characters replaced
+    with underscores, e.g. ``"attributed-to"`` → ``"ATTRIBUTED_TO"``.
     """
-    if stix_rel_type in _REL_TYPE_MAP:
-        return _REL_TYPE_MAP[stix_rel_type]
-    return re.sub(r"[^a-zA-Z0-9_]", "_", stix_rel_type).upper()
+    if rel_type in _REL_TYPE_MAP:
+        return _REL_TYPE_MAP[rel_type]
+    return re.sub(r"[^a-zA-Z0-9_]", "_", rel_type).upper()
 
 
 def _safe_label(s: str) -> str:

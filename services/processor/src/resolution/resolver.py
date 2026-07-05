@@ -84,13 +84,14 @@ def _safe_label(s: str) -> str:
     return safe
 
 
-def _stix_id_to_qdrant_id(stix_id: str) -> str:
-    """Extract the UUID portion from a STIX ID for use as a Qdrant point ID.
+def _entity_id_to_qdrant_id(entity_id: str) -> str:
+    """Extract the UUID portion from an entity ID for use as a Qdrant point ID.
 
-    ``"threat-actor--550e8400-..."`` → ``"550e8400-..."``
+    ``"entity--550e8400-..."`` → ``"550e8400-..."``, or returns the input
+    unchanged if it does not contain ``"--"``.
     """
-    parts = stix_id.split("--", 1)
-    return parts[1] if len(parts) == 2 else stix_id  # noqa: PLR2004
+    parts = entity_id.split("--", 1)
+    return parts[1] if len(parts) == 2 else entity_id  # noqa: PLR2004
 
 
 def _get_entity_name(entity: Entity) -> str:
@@ -141,7 +142,7 @@ def _props_from_entity(entity: Entity, tenant_id: str) -> dict[str, Any]:
 
 
 class EntityResolver:
-    """Resolve incoming STIX entities against the knowledge graph.
+    """Resolve incoming entities against the knowledge graph.
 
     Two-stage matching pipeline
     ---------------------------
@@ -276,7 +277,7 @@ class EntityResolver:
 
         text = f"{entity.type} {_get_entity_name(entity)}"
         vector = await self._embed(text)
-        qdrant_id = _stix_id_to_qdrant_id(entity.id)
+        qdrant_id = _entity_id_to_qdrant_id(entity.id)
 
         await self._qdrant.upsert(
             collection_name=collection,
@@ -555,7 +556,7 @@ class EntityResolver:
         type_label: str,
         tenant_label: str,
     ) -> str:
-        """MERGE a new entity node in Neo4j and return its STIX ID."""
+        """MERGE a new entity node in Neo4j and return its ID."""
         cypher = (  # noqa: S608
             f"MERGE (e:Entity:{type_label}:{tenant_label} {{id: $id}}) "
             "ON CREATE SET e += $props, e.created_at = datetime() "

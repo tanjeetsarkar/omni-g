@@ -99,7 +99,7 @@ def _connected_components(edges: list[tuple[str, str]]) -> dict[str, int]:
 
 
 class CommunityDetector:
-    """Detect communities in the STIX knowledge graph.
+    """Detect communities in the knowledge graph.
 
     Attempts to use the Neo4j GDS ``leiden`` (or ``louvain``) algorithm.
     Falls back to a pure-Python connected-components implementation if GDS
