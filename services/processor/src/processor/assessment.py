@@ -22,7 +22,13 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ..models.entities import Assessment, CollectedEvidence, CollectionGap, ConfidenceBand
+from ..models.entities import (
+    Assessment,
+    CollectedEvidence,
+    CollectionGap,
+    ConfidenceBand,
+    Hypothesis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +125,7 @@ class AssessmentService:
         kiq_id: str,
         tenant_id: str,
         evidence_list: list[CollectedEvidence],
+        leading_hypothesis: Hypothesis | None = None,
     ) -> tuple[Assessment, list[CollectionGap]] | None:
         """Generate a first-pass Assessment for the given KIQ and evidence.
 
@@ -126,6 +133,10 @@ class AssessmentService:
         ``evidence_list`` is empty (nothing to assess).  On LLM failure, falls
         back to the rule-based degenerate assessment rather than returning
         ``None``.
+
+        When *leading_hypothesis* is provided its ``id`` is stored on the
+        produced :class:`~src.models.entities.Assessment` as ``hypothesis_id``
+        so analysts can trace which ACH hypothesis drove this conclusion.
         """
         if not evidence_list:
             return None
@@ -146,7 +157,9 @@ class AssessmentService:
             )
             llm_result = self._degenerate_assessment(evidence_list)
 
-        return self._build_assessment_and_gaps(kiq_id, tenant_id, evidence_list, llm_result)
+        return self._build_assessment_and_gaps(
+            kiq_id, tenant_id, evidence_list, llm_result, leading_hypothesis
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -215,6 +228,7 @@ class AssessmentService:
         tenant_id: str,
         evidence_list: list[CollectedEvidence],
         llm_result: _LLMAssessmentOutput,
+        leading_hypothesis: Hypothesis | None = None,
     ) -> tuple[Assessment, list[CollectionGap]]:
         now = datetime.now(UTC)
         assessment_id = f"assessment--{uuid4()}"
@@ -261,6 +275,7 @@ class AssessmentService:
             id=assessment_id,
             tenant_id=tenant_id,
             kiq_id=kiq_id,
+            hypothesis_id=leading_hypothesis.id if leading_hypothesis else None,
             conclusion=llm_result.conclusion,
             confidence=ConfidenceBand(low=low, mid=mid, high=high),
             reasoning=llm_result.reasoning,

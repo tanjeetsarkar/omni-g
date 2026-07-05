@@ -185,3 +185,117 @@ def enqueue_generate_briefing(tenant_id: str) -> str:
     """Enqueue a generate_briefing task for *tenant_id* and return the Celery task id."""
     result = generate_briefing_task.delay(tenant_id)  # noqa
     return str(result.id)
+
+
+# ---------------------------------------------------------------------------
+# Background KIQ reanalysis — V2 Step 9
+# ---------------------------------------------------------------------------
+# Accepts serialised CollectedEvidence records for a KIQ and runs a full
+# Hypothesis-generation + ACH-scoring + Assessment-production pass outside the
+# Kafka hot path.  The task is dispatched by ProcessingPipeline after the
+# inline hypothesis step so Kafka intake is never blocked by LLM-heavy ACH.
+# ---------------------------------------------------------------------------
+
+
+async def _async_reanalyze_kiq(
+    kiq_id: str,
+    tenant_id: str,
+    evidence_payload: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Async core: deserialise evidence, run ACH, produce updated Assessment."""
+    # Lazy imports to avoid circular dependency: tasks → runtime → pipeline
+    from ..models.entities import CollectedEvidence  # noqa: PLC0415
+    from .assessment import AssessmentService  # noqa: PLC0415
+    from .hypothesis import HypothesisService  # noqa: PLC0415
+
+    evidence_list = [CollectedEvidence.model_validate(e) for e in evidence_payload]
+    if not evidence_list:
+        logger.info(
+            "reanalyze_kiq_skipped",
+            extra={"kiq_id": kiq_id, "tenant_id": tenant_id, "reason": "no_evidence"},
+        )
+        return {"status": "skipped", "reason": "no_evidence", "kiq_id": kiq_id}
+
+    hypothesis_svc = HypothesisService()
+    assessment_svc = AssessmentService()
+
+    hypotheses = await hypothesis_svc.generate_candidates(kiq_id, tenant_id, evidence_list)
+    leading = hypotheses[0] if hypotheses else None
+
+    assessment_result = await assessment_svc.generate(
+        kiq_id=kiq_id,
+        tenant_id=tenant_id,
+        evidence_list=evidence_list,
+        leading_hypothesis=leading,
+    )
+    if assessment_result is None:
+        logger.info(
+            "reanalyze_kiq_no_assessment",
+            extra={"kiq_id": kiq_id, "tenant_id": tenant_id},
+        )
+        return {"status": "skipped", "reason": "no_assessment", "kiq_id": kiq_id}
+
+    assessment, gaps = assessment_result
+    logger.info(
+        "reanalyze_kiq_complete",
+        extra={
+            "kiq_id": kiq_id,
+            "tenant_id": tenant_id,
+            "hypotheses_count": len(hypotheses),
+            "assessment_id": assessment.id,
+            "hypothesis_id": assessment.hypothesis_id,
+            "gaps_count": len(gaps),
+        },
+    )
+    return {
+        "status": "completed",
+        "kiq_id": kiq_id,
+        "assessment_id": assessment.id,
+        "hypotheses_count": len(hypotheses),
+        "gaps_count": len(gaps),
+    }
+
+
+def _run_reanalyze_kiq(
+    kiq_id: str,
+    tenant_id: str,
+    evidence_payload: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Synchronous wrapper for *_async_reanalyze_kiq* — separated for testability."""
+    loop = _get_worker_loop()
+    return loop.run_until_complete(_async_reanalyze_kiq(kiq_id, tenant_id, evidence_payload))
+
+
+@celery_app.task(  # type: ignore[misc]
+    name="processor.reanalyze_kiq",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 2},
+)
+def reanalyze_kiq_task(
+    self: Any,
+    kiq_id: str,
+    tenant_id: str,
+    evidence_payload: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Background ACH reanalysis for a KIQ.
+
+    Accepts serialised :class:`~src.models.entities.CollectedEvidence` records
+    and runs hypothesis generation, ACH scoring, and Assessment production
+    outside the Kafka hot path.  Dispatched by
+    :class:`~src.processor.pipeline.ProcessingPipeline` immediately after the
+    inline hypothesis-generation step so Kafka intake is never blocked by
+    LLM-heavy ACH scoring.
+    """
+    return _run_reanalyze_kiq(kiq_id, tenant_id, evidence_payload)
+
+
+def enqueue_reanalyze_kiq(
+    kiq_id: str,
+    tenant_id: str,
+    evidence_payload: list[dict[str, Any]],
+) -> str:
+    """Enqueue a reanalyze_kiq task and return the Celery task id."""
+    result = reanalyze_kiq_task.delay(kiq_id, tenant_id, evidence_payload)  # noqa
+    return str(result.id)

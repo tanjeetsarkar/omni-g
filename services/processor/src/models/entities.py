@@ -81,6 +81,8 @@ class ExtractionResult(BaseModel):
     kiq_id: str | None = None
     # V2: collected evidence objects created after grounding validation.
     collected_evidence: list[CollectedEvidence] = Field(default_factory=list)
+    # V2 Step 9: competing hypotheses generated for KIQ-tagged events.
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
     # V2 Step 7: first-pass assessment produced for KIQ-tagged events.
     assessment: Assessment | None = None
 

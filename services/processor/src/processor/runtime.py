@@ -20,6 +20,7 @@ from .assessment import AssessmentService
 from .assessment_publisher import AssessmentPublisher
 from .config import Settings
 from .evidence_publisher import EvidencePublisher
+from .hypothesis import HypothesisService
 from .pipeline import ProcessingPipeline
 from .stage_publisher import StageEventPublisher
 
@@ -107,10 +108,14 @@ class ProcessorRuntime:
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_assessment_topic,
         )
+        hypothesis_service = HypothesisService()
         stage_publisher = StageEventPublisher(
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_processor_events_topic,
         )
+
+        # Late import to avoid circular dependency: tasks → runtime → pipeline
+        from .tasks import enqueue_reanalyze_kiq  # noqa: PLC0415
 
         pipeline = ProcessingPipeline(
             deduplicator=deduplicator,
@@ -123,6 +128,8 @@ class ProcessorRuntime:
             evidence_publisher=evidence_publisher,
             assessment_service=assessment_service,
             assessment_publisher=assessment_publisher,
+            hypothesis_service=hypothesis_service,
+            reanalyze_enqueuer=enqueue_reanalyze_kiq,
         )
 
         logger.info(

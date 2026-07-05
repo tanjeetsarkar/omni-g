@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -19,6 +20,7 @@ from ..models.entities import (
     CredibilityRating,
     Entity,
     ExtractionResult,
+    Hypothesis,
     Relationship,
     ReliabilityRating,
     SourceClassification,
@@ -28,6 +30,7 @@ from .alert_publisher import AlertPublisher, AnalystAlert
 from .assessment import AssessmentService
 from .assessment_publisher import AssessmentPublisher
 from .evidence_publisher import EvidencePublisher
+from .hypothesis import HypothesisService
 from .stage_publisher import StageEventPublisher
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,12 @@ EVIDENCE_CREATED = Counter(
 ASSESSMENTS_PRODUCED = Counter(
     "processor_assessments_produced_total",
     "V2 Assessment objects produced for KIQ-tagged pipeline runs",
+    ["tenant_id"],
+)
+
+HYPOTHESES_GENERATED = Counter(
+    "processor_hypotheses_generated_total",
+    "Competing Hypothesis objects generated for KIQ-tagged pipeline runs",
     ["tenant_id"],
 )
 
@@ -285,6 +294,8 @@ class ProcessingPipeline:
         evidence_publisher: EvidencePublisher | None = None,
         assessment_service: AssessmentService | None = None,
         assessment_publisher: AssessmentPublisher | None = None,
+        hypothesis_service: HypothesisService | None = None,
+        reanalyze_enqueuer: Callable[..., Any] | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
@@ -296,6 +307,8 @@ class ProcessingPipeline:
         self._evidence_publisher = evidence_publisher
         self._assessment_service = assessment_service
         self._assessment_publisher = assessment_publisher
+        self._hypothesis_service = hypothesis_service
+        self._reanalyze_enqueuer = reanalyze_enqueuer
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
@@ -546,7 +559,85 @@ class ProcessingPipeline:
             for ev in evidence_list:
                 await self._evidence_publisher.publish(ev)
 
-        # ── Step 3.7: Assessment generation ───────────────────────────────
+        # ── Step 3.7: Hypothesis generation (ACH) ─────────────────────────
+        # For KIQ-tagged events with grounded evidence, generate competing
+        # hypotheses and perform an ACH scoring pass. The leading hypothesis
+        # is retained for the assessment step. A background reanalysis task is
+        # also dispatched so deep ACH scoring runs outside the hot path.
+        hypotheses: list[Hypothesis] = []
+        leading_hypothesis: Hypothesis | None = None
+        if self._hypothesis_service is not None and envelope.kiq_id and evidence_list:
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "hypothesis_generation", "active"
+                )
+            t0 = time.monotonic()
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "hypothesis_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "evidence_count": len(evidence_list),
+                },
+            )
+            hypotheses = await self._hypothesis_service.generate_candidates(
+                kiq_id=envelope.kiq_id,
+                tenant_id=envelope.tenant_id,
+                evidence_list=evidence_list,
+            )
+            leading_hypothesis = hypotheses[0] if hypotheses else None
+            PIPELINE_STAGE_DURATION.labels(stage="hypothesis_generation").observe(
+                time.monotonic() - t0
+            )
+            HYPOTHESES_GENERATED.labels(tenant_id=envelope.tenant_id).inc(len(hypotheses))
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "hypothesis_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "hypotheses_count": len(hypotheses),
+                    "leading_hypothesis": leading_hypothesis.statement[:120]
+                    if leading_hypothesis
+                    else None,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "hypothesis_generation", "done"
+                )
+            # Dispatch background reanalysis so full ACH scoring runs outside the
+            # hot path without blocking Kafka intake.
+            if self._reanalyze_enqueuer is not None and hypotheses:
+                try:
+                    self._reanalyze_enqueuer(
+                        envelope.kiq_id,
+                        envelope.tenant_id,
+                        [ev.model_dump(mode="json") for ev in evidence_list],
+                    )
+                    logger.debug(
+                        "pipeline_reanalyze_kiq_dispatched",
+                        extra={
+                            "event_id": envelope.id,
+                            "kiq_id": envelope.kiq_id,
+                            "tenant_id": envelope.tenant_id,
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "pipeline_reanalyze_kiq_dispatch_failed",
+                        extra={
+                            "event_id": envelope.id,
+                            "kiq_id": envelope.kiq_id,
+                            "error": str(exc),
+                        },
+                    )
+        extraction = extraction.model_copy(update={"hypotheses": hypotheses})
+
+        # ── Step 3.8: Assessment generation ───────────────────────────────
         # For KIQ-tagged events with grounded evidence, generate a first-pass
         # Assessment (BLUF + confidence band + intelligence gaps).
         # Untasked events (kiq_id=None) are skipped; assessment is optional.
@@ -570,6 +661,7 @@ class ProcessingPipeline:
                 kiq_id=envelope.kiq_id,
                 tenant_id=envelope.tenant_id,
                 evidence_list=evidence_list,
+                leading_hypothesis=leading_hypothesis,
             )
             PIPELINE_STAGE_DURATION.labels(stage="assessment_generation").observe(
                 time.monotonic() - t0
