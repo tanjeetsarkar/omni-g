@@ -92,3 +92,96 @@ def enqueue_process_event(event: dict[str, Any]) -> str:
     """Enqueue one coarse process_event task and return the Celery task id."""
     result = process_event_task.delay(event)  # noqa
     return str(result.id)
+
+
+# ---------------------------------------------------------------------------
+# Briefing task — Celery Beat scheduled generation per tenant
+# ---------------------------------------------------------------------------
+
+
+async def _async_generate_briefing(tenant_id: str) -> dict[str, Any]:
+    """Async core of briefing generation for *tenant_id*.
+
+    Creates all required dependencies, delegates to ``BriefingScheduler.on_demand``,
+    then closes the Neo4j driver.  Imported lazily so briefing packages are not
+    loaded in workers that never run briefing tasks.
+    """
+    from neo4j import AsyncGraphDatabase
+
+    from ..briefing.scheduler import BriefingScheduler
+    from ..briefing.script_generator import BriefingScriptGenerator
+    from ..briefing.storage import MinIOStorageService
+    from ..briefing.tts_synthesizer import TTSSynthesizer
+    from ..graphrag.community import CommunityDetector
+    from ..graphrag.indexer import GraphRAGIndexer
+    from ..graphrag.summarizer import CommunitySummarizer
+    from ..llm.extractor import LLMExtractor
+
+    settings = get_settings()
+    neo4j_driver = AsyncGraphDatabase.driver(
+        settings.neo4j_url,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+    )
+    try:
+        community_detector = CommunityDetector(neo4j_driver)
+        summarizer = CommunitySummarizer(
+            neo4j_driver,
+            ollama_url=settings.ollama_url,
+            model=settings.ollama_model,
+            openai_api_key=settings.openai_api_key,
+        )
+        graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
+        llm_extractor = LLMExtractor()
+        script_gen = BriefingScriptGenerator(graphrag_indexer, llm_extractor)
+        tts = TTSSynthesizer(
+            kokoro_url=settings.kokoro_url,
+            elevenlabs_api_key=settings.elevenlabs_api_key,
+        )
+        storage = MinIOStorageService(
+            endpoint_url=settings.minio_url,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            bucket=settings.minio_bucket,
+        )
+        scheduler = BriefingScheduler(script_gen, tts, storage, settings.briefing_hour)
+        object_key = await scheduler.on_demand(tenant_id)
+        logger.info(
+            "briefing_task_complete",
+            extra={"tenant_id": tenant_id, "object_key": object_key},
+        )
+        return {"status": "completed", "tenant_id": tenant_id, "object_key": object_key}
+    finally:
+        await neo4j_driver.close()
+
+
+def _run_briefing_for_tenant(tenant_id: str) -> dict[str, Any]:
+    """Synchronous wrapper for *_async_generate_briefing* — separated for testability."""
+    loop = _get_worker_loop()
+    return loop.run_until_complete(_async_generate_briefing(tenant_id))
+
+
+@celery_app.task(  # type: ignore[misc]
+    name="processor.generate_briefing",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
+def generate_briefing_task(self: Any, tenant_id: str) -> dict[str, Any]:
+    """Generate an audio briefing for *tenant_id*.
+
+    This task is dispatched by Celery Beat on a daily cron schedule when
+    ``CELERY_BRIEFING_ENABLED=true``.  One task entry is registered per tenant
+    listed in ``BRIEFING_TENANTS``, firing at ``BRIEFING_HOUR:00 UTC``.
+
+    The briefing runs the full
+    ``BriefingScriptGenerator → TTSSynthesizer → MinIOStorageService`` path,
+    reusing the worker-process event loop.
+    """
+    return _run_briefing_for_tenant(tenant_id)
+
+
+def enqueue_generate_briefing(tenant_id: str) -> str:
+    """Enqueue a generate_briefing task for *tenant_id* and return the Celery task id."""
+    result = generate_briefing_task.delay(tenant_id)  # noqa
+    return str(result.id)

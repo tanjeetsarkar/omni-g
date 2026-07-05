@@ -146,3 +146,85 @@ def test_process_event_task_resets_runtime_on_error(
     # Runtime must have been closed and cleared
     runtime.close.assert_awaited_once()
     assert processor_tasks._worker_runtime is None
+
+
+# ---------------------------------------------------------------------------
+# generate_briefing_task: Celery Beat briefing generation per tenant
+# ---------------------------------------------------------------------------
+
+
+def test_run_briefing_for_tenant_delegates_to_async_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_run_briefing_for_tenant delegates to _async_generate_briefing and returns its result."""
+    expected: dict[str, str] = {
+        "status": "completed",
+        "tenant_id": "tenant1",
+        "object_key": "briefings/tenant1/2024-01-15/abc.mp3",
+    }
+
+    async def fake_async_generate(tenant_id: str) -> dict[str, str]:
+        return expected
+
+    monkeypatch.setattr(processor_tasks, "_async_generate_briefing", fake_async_generate)
+
+    result = processor_tasks._run_briefing_for_tenant("tenant1")
+
+    assert result == expected
+
+
+def test_build_briefing_beat_schedule_creates_entry_per_tenant() -> None:
+    """_build_briefing_beat_schedule returns one entry per tenant at the configured hour."""
+    from celery.schedules import crontab
+
+    from src.processor.celery_app import _build_briefing_beat_schedule
+    from src.processor.config import Settings
+
+    settings = Settings(BRIEFING_HOUR=6, BRIEFING_TENANTS="alpha,beta")
+    schedule = _build_briefing_beat_schedule(settings)
+
+    assert set(schedule.keys()) == {"briefing-alpha-daily", "briefing-beta-daily"}
+    for key, tenant_id in (
+        ("briefing-alpha-daily", "alpha"),
+        ("briefing-beta-daily", "beta"),
+    ):
+        entry = schedule[key]
+        assert entry["task"] == "processor.generate_briefing"
+        assert entry["args"] == (tenant_id,)
+        assert isinstance(entry["schedule"], crontab)
+
+
+def test_create_celery_app_sets_beat_schedule_when_briefing_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_celery_app populates beat_schedule when CELERY_BRIEFING_ENABLED=true."""
+    from src.processor.celery_app import create_celery_app
+    from src.processor.config import Settings
+
+    settings = Settings(
+        CELERY_BRIEFING_ENABLED=True,
+        BRIEFING_HOUR=7,
+        BRIEFING_TENANTS="default",
+    )
+    monkeypatch.setattr("src.processor.celery_app.get_settings", lambda: settings)
+
+    app = create_celery_app()
+
+    assert hasattr(app.conf, "beat_schedule")
+    assert "briefing-default-daily" in app.conf.beat_schedule
+    assert app.conf.timezone == "UTC"
+
+
+def test_create_celery_app_no_beat_schedule_when_briefing_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_celery_app does not set beat_schedule when CELERY_BRIEFING_ENABLED=false."""
+    from src.processor.celery_app import create_celery_app
+    from src.processor.config import Settings
+
+    settings = Settings(CELERY_BRIEFING_ENABLED=False, BRIEFING_TENANTS="default")
+    monkeypatch.setattr("src.processor.celery_app.get_settings", lambda: settings)
+
+    app = create_celery_app()
+
+    assert not app.conf.beat_schedule

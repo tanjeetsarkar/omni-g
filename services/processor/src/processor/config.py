@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     celery_task_queue: str = Field(default="processor-process-event", alias="CELERY_TASK_QUEUE")
     celery_task_always_eager: bool = Field(default=True, alias="CELERY_TASK_ALWAYS_EAGER")
     celery_task_ignore_result: bool = Field(default=True, alias="CELERY_TASK_IGNORE_RESULT")
+    celery_briefing_enabled: bool = Field(default=False, alias="CELERY_BRIEFING_ENABLED")
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")

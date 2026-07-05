@@ -37,7 +37,14 @@ class BriefingScheduler:
     # ------------------------------------------------------------------
 
     async def start(self, tenant_ids: list[str]) -> None:
-        """Start the scheduler with daily jobs for each *tenant_id*."""
+        """Start the APScheduler-backed daily scheduler for *tenant_ids*.
+
+        .. deprecated::
+            Scheduled execution has moved to Celery Beat.  Set
+            ``CELERY_BRIEFING_ENABLED=true`` and run a ``celery beat`` process to
+            replace this path.  This method is kept for backward compatibility with
+            environments that do not use Celery and will be removed in a later step.
+        """
         self._scheduler = AsyncIOScheduler(timezone="UTC")
         for tenant_id in tenant_ids:
             self._scheduler.add_job(
@@ -56,7 +63,11 @@ class BriefingScheduler:
         self._scheduler.start()
 
     async def stop(self) -> None:
-        """Gracefully shut down the scheduler."""
+        """Gracefully shut down the APScheduler-backed scheduler.
+
+        .. deprecated::
+            See :meth:`start` — this path is superseded by Celery Beat.
+        """
         if self._scheduler is not None and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("briefing_scheduler_stopped")
