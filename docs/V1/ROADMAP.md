@@ -1,7 +1,5 @@
 # Omni-G Roadmap (Milestone-Based)
 
-> Legacy V1 roadmap. The pre-overhaul baseline is archived in `docs/V1/ROADMAP.md`. The active overhaul roadmap is `docs/V2/ROADMAP.md`.
-
 **Last Updated:** June 1, 2026
 **Status:** M1 In Progress · M2 Complete (M2.3 needs rework) · M3 Complete (M3.3 needs rework) · M4 Complete (M4.2 needs rework) · M5 Partial (M5.2 needs rework) · M6 Not Started
 

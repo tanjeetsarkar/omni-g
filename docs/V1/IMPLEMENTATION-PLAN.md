@@ -1,7 +1,5 @@
 # Omni-G Implementation Plan
 
-> Legacy V1 implementation plan. The archived baseline is in `docs/V1/IMPLEMENTATION-PLAN.md`. The active overhaul planning set begins in `docs/V2/`.
-
 **Project Status:** Phase 1 - Foundation & Infrastructure
 **Last Updated:** May 16, 2026
 **Repository:** github.com/yourusername/omni-g

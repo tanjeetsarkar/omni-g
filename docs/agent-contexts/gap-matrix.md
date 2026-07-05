@@ -2,7 +2,7 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** June 14, 2026 — Delivery pipeline bug-fix: gateway missing from Docker/run-steps, PROCESSOR_URL wrong port, no immediate Qdrant query, silent refreshGraph errors, 90s fallback, dual-socket eliminated, grid-cols-8 fix
+**Last Updated:** July 5, 2026 — V1/V2 documentation split started, V2 overhaul architecture/roadmap published, Celery migration target documented
 
 ## Scope Change (Intentional, June 2026)
 
@@ -31,6 +31,27 @@ This document should be updated after every implementation change. Capture only 
 - what is intentionally staged in the roadmap
 - what is still missing or only partially implemented
 - what doc or naming drift should be normalized next
+
+## V2 Overhaul Program (July 2026)
+
+### New Migration Baseline
+
+- `docs/V1/` now preserves the pre-overhaul roadmap, architecture, and tech-stack baseline.
+- `docs/V2/` is now the active planning target for the overhaul aligned to `overhaul.md`.
+- V2 keeps the three-service split and Kafka backbone, but changes Processor orchestration from inline consumer-bound execution to Kafka-to-Celery dispatch.
+- `.github/copilot-instructions.md` now points architecture guidance at the V2 docs and V2 operating model instead of the legacy roadmap.
+
+### Open V2 Gaps Versus Overhaul Target
+
+| Area | V2 Target | Current Implementation | Gap Type | Priority |
+|------|-----------|------------------------|----------|----------|
+| KIQ-driven tasking | Aggregator should collect and publish against explicit Key Intelligence Questions | Aggregator supports search and enrichment, but not KIQ lifecycle, collection policies, or task-bound ingestion | Architecture and product gap | High |
+| Processor orchestration | Kafka intake should dispatch analytical work to Celery workers and Celery Beat | Processor still runs `ProcessingPipeline.process()` inline inside Kafka consumer workers | Runtime architecture gap | High |
+| Source evaluation | Every evidence object should carry source reliability and information credibility usable in analyst outputs | Provenance and source spans exist, but no Admiralty-style reliability and credibility model is implemented | Analytical model gap | High |
+| Competing hypotheses | Processor should generate and compare multiple hypotheses before issuing an assessment | Current Processor extracts, resolves, persists, and alerts, but does not maintain a hypothesis set or contradiction matrix | Analytical workflow gap | High |
+| BLUF dissemination | Delivery should present conclusion, confidence band, intelligence gaps, and next action before deep graph exploration | Delivery is search-first and real-time, but still graph-centered rather than assessment-centered | UX and dissemination gap | High |
+| Scheduled analytical jobs | Recurring briefings, re-analysis, and background maintenance should run through Celery Beat | Briefing scheduling exists through APScheduler-oriented logic and GraphRAG background behavior, not through a unified task queue | Runtime simplification gap | Medium |
+| V1 carryover cleanup | Non-KIQ-driven "interesting things" paths should be demoted or removed where they conflict with V2 workflow | Current pipeline still optimizes for general discovery and synthesis outputs | Product simplification gap | Medium |
 
 ## Current Snapshot
 
