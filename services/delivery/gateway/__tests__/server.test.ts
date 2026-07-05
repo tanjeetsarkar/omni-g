@@ -162,6 +162,7 @@ import {
   AlertMessage,
   createKafkaConsumer,
   handleKafkaMessageValue,
+  handleAssessmentEventValue,
   io,
   parseAlert,
   parseTimestampMs,
@@ -679,6 +680,153 @@ describe("WebSocket Gateway – M5.1 hardening", () => {
       expect(
         getCounter("delivery_connection_lifecycle_total")?.inc,
       ).toHaveBeenCalledWith({ event: "subscribe" });
+    });
+  });
+
+  describe("assessment event handling", () => {
+    const consoleSpy = jest
+      .spyOn(console, "log")
+      .mockImplementation(() => undefined);
+
+    beforeEach(() => {
+      getSocketServerMock().__emits.length = 0;
+    });
+
+    afterAll(() => {
+      consoleSpy.mockRestore();
+    });
+
+    it("broadcasts valid assessment payload as assessment_event to tenant room", () => {
+      const payload = {
+        id: "assessment--abc123",
+        tenant_id: "alpha",
+        kiq_id: "kiq--xyz",
+        conclusion: "Test conclusion",
+        confidence: { low: 0.3, mid: 0.6, high: 0.8 },
+        reasoning: "Test reasoning",
+        assumptions: [],
+        supporting_evidence_ids: [],
+        contradicting_evidence_ids: [],
+        collection_gaps: [],
+        recommended_next_actions: [],
+        status: "PUBLISHED",
+        produced_by: "PROCESSOR",
+        version: 1,
+        hypothesis_id: null,
+        superseded_by_id: null,
+        created: "2026-07-05T10:00:00Z",
+        modified: "2026-07-05T10:00:00Z",
+      };
+
+      handleAssessmentEventValue(Buffer.from(JSON.stringify(payload)));
+
+      const emits = getSocketServerMock().__emits;
+      const assessmentEmit = emits.find((e) => e.event === "assessment_event");
+      expect(assessmentEmit).toBeDefined();
+      expect(assessmentEmit?.room).toBe("tenant:alpha");
+      expect((assessmentEmit?.payload as Record<string, unknown>).id).toBe(
+        "assessment--abc123",
+      );
+    });
+
+    it("ignores payloads missing tenant_id", () => {
+      handleAssessmentEventValue(
+        Buffer.from(
+          JSON.stringify({
+            id: "assessment--abc",
+            conclusion: "No tenant",
+          }),
+        ),
+      );
+
+      const emits = getSocketServerMock().__emits;
+      expect(emits.find((e) => e.event === "assessment_event")).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("ignores payloads missing id", () => {
+      handleAssessmentEventValue(
+        Buffer.from(
+          JSON.stringify({
+            tenant_id: "alpha",
+            conclusion: "No id",
+          }),
+        ),
+      );
+
+      const emits = getSocketServerMock().__emits;
+      expect(emits.find((e) => e.event === "assessment_event")).toBeUndefined();
+    });
+
+    it("ignores invalid JSON", () => {
+      handleAssessmentEventValue(Buffer.from("not json"));
+      const emits = getSocketServerMock().__emits;
+      expect(emits.find((e) => e.event === "assessment_event")).toBeUndefined();
+    });
+
+    it("handles null message value gracefully", () => {
+      expect(() => handleAssessmentEventValue(null)).not.toThrow();
+    });
+  });
+
+  describe("assessments-produced Kafka topic", () => {
+    beforeEach(() => {
+      getSocketServerMock().__emits.length = 0;
+      getKafkaMock().consumer.connect.mockClear();
+      getKafkaMock().consumer.subscribe.mockClear();
+      getKafkaMock().consumer.run.mockClear();
+      getKafkaMock().resetCapturedEachMessage();
+    });
+    it("subscribes to assessments-produced topic on startConsumer", async () => {
+      const consumer = createKafkaConsumer();
+      await startConsumer(consumer);
+
+      expect(getKafkaMock().consumer.subscribe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          topic: "assessments-produced",
+          fromBeginning: false,
+        }),
+      );
+    });
+
+    it("routes assessments-produced messages to handleAssessmentEventValue", async () => {
+      const consumer = createKafkaConsumer();
+      await startConsumer(consumer);
+
+      const eachMessage = getKafkaMock().getCapturedEachMessage();
+      expect(eachMessage).not.toBeNull();
+
+      const payload = {
+        id: "assessment--route-test",
+        tenant_id: "beta",
+        kiq_id: "kiq--123",
+        conclusion: "Route test conclusion",
+        confidence: { low: 0.2, mid: 0.5, high: 0.7 },
+        reasoning: "",
+        assumptions: [],
+        supporting_evidence_ids: [],
+        contradicting_evidence_ids: [],
+        collection_gaps: [],
+        recommended_next_actions: [],
+        status: "DRAFT",
+        produced_by: "PROCESSOR",
+        version: 1,
+        hypothesis_id: null,
+        superseded_by_id: null,
+        created: "2026-07-05T10:00:00Z",
+        modified: "2026-07-05T10:00:00Z",
+      };
+
+      await eachMessage!({
+        topic: "assessments-produced",
+        partition: 0,
+        message: { value: Buffer.from(JSON.stringify(payload)) },
+      });
+
+      const emits = getSocketServerMock().__emits;
+      const assessmentEmit = emits.find((e) => e.event === "assessment_event");
+      expect(assessmentEmit).toBeDefined();
+      expect(assessmentEmit?.room).toBe("tenant:beta");
     });
   });
 });

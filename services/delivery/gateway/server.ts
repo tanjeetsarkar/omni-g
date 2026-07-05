@@ -29,6 +29,8 @@ const KAFKA_BROKERS = (process.env.KAFKA_BROKERS ?? "localhost:9092").split(
 const KAFKA_ALERTS_TOPIC = process.env.KAFKA_ALERTS_TOPIC ?? "analyst-alerts";
 const KAFKA_PROCESSOR_EVENTS_TOPIC =
   process.env.KAFKA_PROCESSOR_EVENTS_TOPIC ?? "processor-events";
+const KAFKA_ASSESSMENT_TOPIC =
+  process.env.KAFKA_ASSESSMENT_TOPIC ?? "assessments-produced";
 
 // ─── Prometheus registry ─────────────────────────────────────────────────────
 const registry = new Registry();
@@ -350,6 +352,40 @@ export function handleStageEventValue(messageValue: Buffer | null): void {
   io.to(room).emit("pipeline_stage", ev);
 }
 
+/**
+ * handleAssessmentEventValue — parses an `assessment.produced` Kafka message
+ * and broadcasts it to the tenant room as an `assessment_event` Socket.io event.
+ */
+export function handleAssessmentEventValue(messageValue: Buffer | null): void {
+  if (!messageValue) return;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(messageValue.toString()) as unknown;
+  } catch {
+    console.warn("[gateway] invalid assessment payload: not valid JSON");
+    return;
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const ev = raw as Record<string, unknown>;
+
+  if (typeof ev.tenant_id !== "string" || !ev.tenant_id) {
+    console.warn("[gateway] assessment payload missing tenant_id; skipping");
+    return;
+  }
+  if (typeof ev.id !== "string" || typeof ev.conclusion !== "string") {
+    console.warn(
+      "[gateway] assessment payload missing required fields; skipping",
+    );
+    return;
+  }
+
+  const room = `tenant:${ev.tenant_id}`;
+  io.to(room).emit("assessment_event", ev);
+  console.log(`[gateway] broadcast assessment_event to ${room}: ${ev.id}`);
+}
+
 export function createKafkaConsumer(): Consumer {
   const kafka = new Kafka({
     clientId: "delivery-gateway",
@@ -370,6 +406,10 @@ export async function startConsumer(consumer: Consumer): Promise<void> {
     topic: KAFKA_PROCESSOR_EVENTS_TOPIC,
     fromBeginning: false,
   });
+  await consumer.subscribe({
+    topic: KAFKA_ASSESSMENT_TOPIC,
+    fromBeginning: false,
+  });
 
   await consumer.run({
     autoCommit: true,
@@ -378,6 +418,8 @@ export async function startConsumer(consumer: Consumer): Promise<void> {
         handleKafkaMessageValue(message.value);
       } else if (topic === KAFKA_PROCESSOR_EVENTS_TOPIC) {
         handleStageEventValue(message.value);
+      } else if (topic === KAFKA_ASSESSMENT_TOPIC) {
+        handleAssessmentEventValue(message.value);
       }
     },
   });
