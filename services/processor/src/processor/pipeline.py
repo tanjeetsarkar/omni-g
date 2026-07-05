@@ -257,11 +257,11 @@ class ProcessingPipeline:
     1. **Schema validation** — validates the event envelope; raises
        :exc:`SchemaViolationError` on failure so the consumer routes it to DLQ.
     2. **Deduplication** — checks Redis; silently drops duplicate events.
-    3. **LLM entity extraction** — extracts STIX entities from event text and
+    3. **LLM entity extraction** — extracts generic entities from event text and
        records an :metric:`processor_extraction_confidence` histogram observation.
-    4. **Entity resolution** — resolves extracted STIX entities against the knowledge
+    4. **Entity resolution** — resolves extracted entities against the knowledge
        graph via vector blocking (Qdrant) and structural matching (Neo4j).
-    5. **Graph persistence** — transactionally writes all STIX entities and
+    5. **Graph persistence** — transactionally writes all entities and
        relationships from the extraction result to Neo4j.
     6. **GraphRAG incremental index** — re-runs community detection on the 2-hop
        subgraph around each newly persisted entity and regenerates summaries.
@@ -271,7 +271,7 @@ class ProcessingPipeline:
 
     Returns
     -------
-    :class:`~src.models.stix.ExtractionResult`
+    :class:`~src.models.entities.ExtractionResult`
         When the event was processed successfully.
     ``None``
         When the event was silently dropped as a duplicate.

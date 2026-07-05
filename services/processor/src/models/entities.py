@@ -1,8 +1,8 @@
 """Generic entity model for the Omni-G Knowledge Graph.
 
-Replaces the STIX 2.1 fixed-ontology model with an open-ended, LLM-determined
-entity type system.  The LLM freely assigns entity types (Person, Organization,
-Event, Location, Topic, Concept, …) rather than choosing from a fixed enum.
+Provides an open-ended, LLM-determined entity type system.  The LLM freely
+assigns entity types (Person, Organization, Event, Location, Topic, Concept, …)
+rather than choosing from a fixed ontology.
 
 V2 additions: SourceClassification, ReliabilityRating, CredibilityRating enums
 and CollectedEvidence model for intelligence-cycle evidence tracking.

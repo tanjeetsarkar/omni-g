@@ -14,12 +14,16 @@ dependencies = [
     "redis[hiredis]==5.2.1",
     "neo4j==5.27.0",
     "qdrant-client==1.12.1",
+    "langchain==0.3.10",
+    "instructor>=1.7.0",
     "openai>=1.57.2",
+    "stix2==3.0.1",
     "httpx==0.28.1",
     "pydantic-ai-slim[openai]==1.104.0",
     "prometheus-client>=0.25.0",
     "rapidfuzz>=3.0.0",
     "aioboto3>=15.5.0",
+    "apscheduler>=3.11.2",
     "celery>=5.4.0",
 ]
 

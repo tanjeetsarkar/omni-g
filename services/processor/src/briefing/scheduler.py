@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class BriefingScheduler:
-    """On-demand audio briefing runner per tenant.
+    """Stateless runner for audio briefing generation.
 
-    Call :meth:`on_demand` to trigger a briefing immediately for any tenant.
-    Recurring scheduled execution is handled by Celery Beat
-    (``CELERY_BRIEFING_ENABLED=true``).
+    Scheduled execution is handled externally by Celery Beat.  Call
+    :meth:`on_demand` directly from a Celery task to generate a briefing for a
+    tenant immediately.
     """
 
     def __init__(
@@ -22,12 +22,14 @@ class BriefingScheduler:
         script_generator: BriefingScriptGenerator,
         tts_synthesizer: TTSSynthesizer,
         storage: MinIOStorageService,
-        briefing_hour: int = 8,
     ) -> None:
         self._script_generator = script_generator
         self._tts = tts_synthesizer
         self._storage = storage
-        self._briefing_hour = briefing_hour
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def on_demand(self, tenant_id: str) -> str:
         """Generate, synthesize, upload, and return the object key immediately."""
@@ -39,3 +41,21 @@ class BriefingScheduler:
             extra={"tenant_id": tenant_id, "object_key": object_key},
         )
         return object_key
+
+    # ------------------------------------------------------------------
+    # Internal job handler
+    # ------------------------------------------------------------------
+
+    async def _run_briefing(self, tenant_id: str) -> None:
+        """Generate, synthesize, upload briefing for *tenant_id* and log result."""
+        try:
+            object_key = await self.on_demand(tenant_id)
+            logger.info(
+                "scheduled_briefing_complete",
+                extra={"tenant_id": tenant_id, "object_key": object_key},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "scheduled_briefing_failed",
+                extra={"tenant_id": tenant_id, "error": str(exc)},
+            )
