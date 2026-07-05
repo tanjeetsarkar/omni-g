@@ -3,11 +3,15 @@
 Replaces the STIX 2.1 fixed-ontology model with an open-ended, LLM-determined
 entity type system.  The LLM freely assigns entity types (Person, Organization,
 Event, Location, Topic, Concept, …) rather than choosing from a fixed enum.
+
+V2 additions: SourceClassification, ReliabilityRating, CredibilityRating enums
+and CollectedEvidence model for intelligence-cycle evidence tracking.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -75,3 +79,97 @@ class ExtractionResult(BaseModel):
     # kiq_id carries the Key Intelligence Question reference from the originating
     # RawEvent. None means the event was untasked (general collection).
     kiq_id: str | None = None
+    # V2: collected evidence objects created after grounding validation.
+    collected_evidence: list[CollectedEvidence] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# V2 Evidence scoring models (Step 6)
+# ---------------------------------------------------------------------------
+
+
+class SourceClassification(str, Enum):
+    """Source discipline classification (Admiralty-style)."""
+
+    HUMAN_INTELLIGENCE = "HUMINT"
+    SIGNALS_INTELLIGENCE = "SIGINT"
+    IMAGERY_INTELLIGENCE = "IMINT"
+    OPEN_SOURCE_INTELLIGENCE = "OSINT"
+    MEASUREMENT_INTELLIGENCE = "MASINT"
+    TECHNICAL_INTELLIGENCE = "TECHINT"
+    UNKNOWN = "UNKNOWN"
+
+
+class ReliabilityRating(str, Enum):
+    """Source reliability (A–F Admiralty rating).
+
+    A — always reliable, B — usually reliable, C — fairly reliable,
+    D — unreliable, E — always unreliable, F — reliability unknown.
+    """
+
+    ALWAYS_RELIABLE = "A"
+    USUALLY_RELIABLE = "B"
+    FAIRLY_RELIABLE = "C"
+    UNRELIABLE = "D"
+    ALWAYS_UNRELIABLE = "E"
+    UNKNOWN = "F"
+
+
+class CredibilityRating(str, Enum):
+    """Information credibility (1–6 Admiralty rating).
+
+    1 — confirmed, 2 — probably true, 3 — possibly true,
+    4 — doubtful, 5 — improbable, 6 — cannot be judged.
+    """
+
+    CONFIRMED = "1"
+    PROBABLY_TRUE = "2"
+    POSSIBLY_TRUE = "3"
+    DOUBTFUL = "4"
+    IMPROBABLE = "5"
+    CANNOT_BE_JUDGED = "6"
+
+
+class CollectedEvidence(BaseModel):
+    """Extracted and scored evidence from a raw feed.
+
+    Wraps an extracted Entity or Relationship with KIQ tasking context,
+    Admiralty-style source classification, and reliability/credibility scoring.
+    Created by the Processor after grounding validation; published as
+    ``evidence.created`` Kafka events for downstream Delivery consumption.
+    """
+
+    # Identity
+    id: str  # "evidence--{uuid4}"
+    tenant_id: str  # Multi-tenant isolation (required)
+
+    # Provenance
+    kiq_id: str | None = None  # Which KIQ motivated collection; None = untasked
+    source_event_id: str  # Reference to the originating RawEvent id
+    plugin_id: str | None = None  # MCP plugin or source that provided this
+    plugin_version: str | None = None
+
+    # The claim — exactly one of entity_id or relationship_id should be set
+    entity_id: str | None = None
+    relationship_id: str | None = None
+    assertion: str  # Human-readable: "Person 'Alice' extracted from source"
+
+    # Sourcing details
+    source_text: str = ""  # Verbatim excerpt from source (best-effort)
+    source_url: str | None = None  # URL of originating article/post
+    source_timestamp: datetime  # When the source was published/captured
+
+    # Source classification and reliability (Admiralty scale)
+    source_class: SourceClassification = SourceClassification.UNKNOWN
+    source_reliability: ReliabilityRating = ReliabilityRating.UNKNOWN
+    information_credibility: CredibilityRating = CredibilityRating.CANNOT_BE_JUDGED
+
+    # Confidence in extraction quality (0.0–1.0)
+    extraction_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # Application state
+    status: str = "NEW"  # NEW, CONFIRMED, DISPUTED, SUPERSEDED
+    tags: list[str] = Field(default_factory=list)
+
+    created: datetime
+    modified: datetime

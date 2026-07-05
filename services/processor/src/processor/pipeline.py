@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field, model_validator
@@ -12,9 +14,18 @@ from ..dedup.deduplicator import ContentDeduplicator
 from ..graph.persistence import GraphPersistenceService
 from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
-from ..models.entities import Entity, ExtractionResult
+from ..models.entities import (
+    CollectedEvidence,
+    CredibilityRating,
+    Entity,
+    ExtractionResult,
+    Relationship,
+    ReliabilityRating,
+    SourceClassification,
+)
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
+from .evidence_publisher import EvidencePublisher
 from .stage_publisher import StageEventPublisher
 
 logger = logging.getLogger(__name__)
@@ -52,6 +63,92 @@ GROUNDING_REJECTIONS = Counter(
     "Extracted artifacts rejected by the source-grounding validation gate",
     ["tenant_id", "reason"],
 )
+
+EVIDENCE_CREATED = Counter(
+    "processor_evidence_created_total",
+    "CollectedEvidence objects created from grounded extraction results",
+    ["tenant_id"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Evidence helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_entity_evidence(
+    entity: Entity,
+    *,
+    tenant_id: str,
+    source_event_id: str,
+    plugin_id: str | None,
+    plugin_version: str | None,
+    kiq_id: str | None,
+    source_url: str | None,
+    source_timestamp: datetime,
+) -> CollectedEvidence:
+    """Create a :class:`CollectedEvidence` record for a grounded *entity*.
+
+    Source classification defaults to OSINT (public feeds), reliability and
+    credibility default to unknown/cannot-be-judged.  The pipeline may enrich
+    these later when analyst-grade source metadata is available.
+    """
+    source_text = entity.source_spans[0].text if entity.source_spans else ""
+    assertion = f"{entity.type} '{entity.name}' extracted from source"
+    now = datetime.now(UTC)
+    return CollectedEvidence(
+        id=f"evidence--{uuid4()}",
+        tenant_id=tenant_id,
+        kiq_id=kiq_id,
+        source_event_id=source_event_id,
+        plugin_id=plugin_id,
+        plugin_version=plugin_version,
+        entity_id=entity.id,
+        assertion=assertion,
+        source_text=source_text,
+        source_url=source_url,
+        source_timestamp=source_timestamp,
+        source_class=SourceClassification.OPEN_SOURCE_INTELLIGENCE,
+        source_reliability=ReliabilityRating.UNKNOWN,
+        information_credibility=CredibilityRating.CANNOT_BE_JUDGED,
+        extraction_confidence=entity.confidence,
+        created=now,
+        modified=now,
+    )
+
+
+def _build_relationship_evidence(
+    rel: Relationship,
+    *,
+    tenant_id: str,
+    source_event_id: str,
+    plugin_id: str | None,
+    plugin_version: str | None,
+    kiq_id: str | None,
+    source_url: str | None,
+    source_timestamp: datetime,
+) -> CollectedEvidence:
+    """Create a :class:`CollectedEvidence` record for a grounded *relationship*."""
+    assertion = f"Relationship '{rel.type}' from '{rel.source_ref}' to '{rel.target_ref}' extracted"
+    now = datetime.now(UTC)
+    return CollectedEvidence(
+        id=f"evidence--{uuid4()}",
+        tenant_id=tenant_id,
+        kiq_id=kiq_id,
+        source_event_id=source_event_id,
+        plugin_id=plugin_id,
+        plugin_version=plugin_version,
+        relationship_id=rel.id,
+        assertion=assertion,
+        source_url=source_url,
+        source_timestamp=source_timestamp,
+        source_class=SourceClassification.OPEN_SOURCE_INTELLIGENCE,
+        source_reliability=ReliabilityRating.UNKNOWN,
+        information_credibility=CredibilityRating.CANNOT_BE_JUDGED,
+        extraction_confidence=rel.confidence,
+        created=now,
+        modified=now,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +274,7 @@ class ProcessingPipeline:
         graphrag_indexer: GraphRAGIndexer | None = None,
         alert_publisher: AlertPublisher | None = None,
         stage_publisher: StageEventPublisher | None = None,
+        evidence_publisher: EvidencePublisher | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
@@ -185,6 +283,7 @@ class ProcessingPipeline:
         self._graphrag_indexer = graphrag_indexer
         self._alert_publisher = alert_publisher
         self._stage_publisher = stage_publisher
+        self._evidence_publisher = evidence_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
@@ -376,6 +475,64 @@ class ProcessingPipeline:
                 "rejected_relationships": rejected_rel_count,
             },
         )
+
+        # ── Step 3.6: Evidence creation ────────────────────────────────────
+        # Create CollectedEvidence objects for each grounded entity and
+        # relationship, attaching source classification and provenance metadata.
+        # Evidence is stamped with the KIQ reference (or None for untasked events).
+        source_url: str | None = envelope.payload.get("url") or (
+            envelope.source if envelope.source.startswith("http") else None
+        )
+        raw_ts = envelope.payload.get("published_at") or envelope.payload.get("source_timestamp")
+        try:
+            source_timestamp: datetime = (
+                datetime.fromisoformat(str(raw_ts)) if raw_ts else datetime.now(UTC)
+            )
+        except (ValueError, TypeError):
+            source_timestamp = datetime.now(UTC)
+
+        evidence_list: list[CollectedEvidence] = []
+        for entity in grounded_entities:
+            evidence_list.append(
+                _build_entity_evidence(
+                    entity,
+                    tenant_id=envelope.tenant_id,
+                    source_event_id=envelope.id,
+                    plugin_id=envelope.plugin_name,
+                    plugin_version=envelope.plugin_version,
+                    kiq_id=envelope.kiq_id,
+                    source_url=source_url,
+                    source_timestamp=source_timestamp,
+                )
+            )
+        for rel in grounded_relationships:
+            evidence_list.append(
+                _build_relationship_evidence(
+                    rel,
+                    tenant_id=envelope.tenant_id,
+                    source_event_id=envelope.id,
+                    plugin_id=envelope.plugin_name,
+                    plugin_version=envelope.plugin_version,
+                    kiq_id=envelope.kiq_id,
+                    source_url=source_url,
+                    source_timestamp=source_timestamp,
+                )
+            )
+        extraction = extraction.model_copy(update={"collected_evidence": evidence_list})
+        EVIDENCE_CREATED.labels(tenant_id=envelope.tenant_id).inc(len(evidence_list))
+        logger.info(
+            "pipeline_evidence_created",
+            extra={
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+                "kiq_id": envelope.kiq_id,
+                "evidence_count": len(evidence_list),
+            },
+        )
+
+        if self._evidence_publisher is not None:
+            for ev in evidence_list:
+                await self._evidence_publisher.publish(ev)
 
         # ── Step 4: Entity resolution ──────────────────────────────────────
         if self._resolver is not None:

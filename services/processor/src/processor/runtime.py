@@ -17,6 +17,7 @@ from ..llm.extractor import LLMExtractor
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher
 from .config import Settings
+from .evidence_publisher import EvidencePublisher
 from .pipeline import ProcessingPipeline
 from .stage_publisher import StageEventPublisher
 
@@ -31,6 +32,7 @@ class ProcessorRuntime:
     qdrant_client: AsyncQdrantClient
     alert_publisher: AlertPublisher
     stage_publisher: StageEventPublisher
+    evidence_publisher: EvidencePublisher
 
     @classmethod
     async def create(cls, cfg: Settings, *, worker_id: int) -> ProcessorRuntime:
@@ -41,6 +43,7 @@ class ProcessorRuntime:
                 "kafka_raw_topic": cfg.kafka_raw_topic,
                 "kafka_dlq_topic": cfg.kafka_dlq_topic,
                 "kafka_alerts_topic": cfg.kafka_alerts_topic,
+                "kafka_evidence_topic": cfg.kafka_evidence_topic,
                 "kafka_processor_events_topic": cfg.kafka_processor_events_topic,
                 "redis_url": cfg.redis_url,
                 "neo4j_url": cfg.neo4j_url,
@@ -92,6 +95,10 @@ class ProcessorRuntime:
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_alerts_topic,
         )
+        evidence_publisher = EvidencePublisher(
+            brokers=cfg.kafka_brokers,
+            topic=cfg.kafka_evidence_topic,
+        )
         stage_publisher = StageEventPublisher(
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_processor_events_topic,
@@ -105,6 +112,7 @@ class ProcessorRuntime:
             graphrag_indexer=graphrag_indexer,
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
+            evidence_publisher=evidence_publisher,
         )
 
         logger.info(
@@ -123,6 +131,7 @@ class ProcessorRuntime:
             qdrant_client=qdrant_client,
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
+            evidence_publisher=evidence_publisher,
         )
 
     async def process_event(self, event: dict[str, Any]) -> None:
