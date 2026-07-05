@@ -72,3 +72,6 @@ class ExtractionResult(BaseModel):
     extraction_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     plugin_id: str | None = None
     plugin_version: str | None = None
+    # kiq_id carries the Key Intelligence Question reference from the originating
+    # RawEvent. None means the event was untasked (general collection).
+    kiq_id: str | None = None

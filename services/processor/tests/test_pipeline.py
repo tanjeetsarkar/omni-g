@@ -147,6 +147,16 @@ class TestRawEventEnvelope:
         assert envelope.plugin_name == "twitter-mcp"
         assert envelope.plugin_version == "1.2.3"
 
+    def test_kiq_id_defaults_to_none(self) -> None:
+        envelope = RawEventEnvelope.model_validate({"payload": {"text": "general feed"}})
+        assert envelope.kiq_id is None
+
+    def test_kiq_id_accepted_and_preserved(self) -> None:
+        envelope = RawEventEnvelope.model_validate(
+            {"payload": {"text": "tasked intel"}, "kiq_id": "kiq--abc123"}
+        )
+        assert envelope.kiq_id == "kiq--abc123"
+
 
 # ---------------------------------------------------------------------------
 # ProcessingPipeline tests
@@ -412,3 +422,47 @@ class TestProcessingPipeline:
         # The same event sent again should NOT be detected as a duplicate (was never stored)
         with pytest.raises(SchemaViolationError):
             await pipeline.process(bad_event)
+
+    async def test_kiq_id_propagated_to_extraction_result(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: AsyncMock,
+    ) -> None:
+        """kiq_id from the event envelope is stamped onto the ExtractionResult."""
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-kiq",
+            entities=[],
+            extraction_confidence=0.7,
+        )
+        pl = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            extractor=cast(LLMExtractor, mock_extractor),
+        )
+        event = _make_valid_event(
+            id="evt-kiq",
+            payload={"text": "tasked collection text"},
+            kiq_id="kiq--abc123",
+        )
+        result = await pl.process(event)
+        assert result is not None
+        assert result.kiq_id == "kiq--abc123"
+
+    async def test_untasked_event_has_none_kiq_id_in_result(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: AsyncMock,
+    ) -> None:
+        """When no kiq_id is present in the envelope, ExtractionResult.kiq_id is None."""
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-untasked",
+            entities=[],
+            extraction_confidence=0.6,
+        )
+        pl = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            extractor=cast(LLMExtractor, mock_extractor),
+        )
+        event = _make_valid_event(id="evt-untasked", payload={"text": "untasked general feed"})
+        result = await pl.process(event)
+        assert result is not None
+        assert result.kiq_id is None

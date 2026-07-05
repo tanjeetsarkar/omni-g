@@ -76,6 +76,9 @@ class RawEventEnvelope(BaseModel):
     plugin_name: str | None = None
     plugin_version: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # kiq_id carries the Key Intelligence Question reference that tasked this
+    # collection. None / absent means the event is untasked (general collection).
+    kiq_id: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -289,6 +292,10 @@ class ProcessingPipeline:
         PIPELINE_STAGE_DURATION.labels(stage="llm_extraction").observe(time.monotonic() - t0)
         if self._stage_publisher:
             self._stage_publisher.publish(envelope.id, envelope.tenant_id, "llm_extraction", "done")
+        # Stamp KIQ context from the event envelope onto the extraction result so
+        # all downstream stages (persistence, alerts, assessments) can trace back
+        # to the tasking that motivated collection.
+        extraction = extraction.model_copy(update={"kiq_id": envelope.kiq_id})
         EXTRACTION_CONFIDENCE.observe(extraction.extraction_confidence)
         logger.info(
             "pipeline_stage_done",

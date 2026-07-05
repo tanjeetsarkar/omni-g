@@ -49,11 +49,13 @@ func New(validator SchemaValidator, publisher Publisher, topic string, tenantID 
 // Process validates payload and publishes it as a RawEvent.
 // source identifies the originating MCP plugin URL.
 // pluginName and pluginVersion are stamped into the event envelope for provenance.
+// kiqID is the optional Key Intelligence Question reference that tasked this
+// collection; pass an empty string for untasked (general) collection.
 //
 // If the validation sidecar is unreachable the event is dropped and an error
 // is returned (fail-closed). If the payload is invalid the event is counted as
 // a validation failure and dropped without an error (the rejection is expected).
-func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string) error {
+func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string) error {
 	start := time.Now()
 	logger := log.With().
 		Str("source", source).
@@ -61,6 +63,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		Str("plugin_version", pluginVersion).
 		Str("topic", p.topic).
 		Str("tenant_id", p.tenantID).
+		Str("kiq_id", kiqID).
 		Logger()
 
 	logger.Info().Msg("pipeline processing started")
@@ -100,6 +103,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		PluginVersion:   pluginVersion,
 		IngestLatencyMs: elapsed,
 		TenantID:        p.tenantID,
+		KIQID:           kiqID,
 	}
 
 	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
@@ -121,8 +125,10 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 
 // ProcessBlock parses a ContentBlock's text as a JSON payload and forwards it
 // to Process. Malformed JSON is dropped and logged.
-func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string) error {
-	log.Info().Str("source", source).Str("plugin_name", pluginName).Msg("processing content block")
+// kiqID is the optional Key Intelligence Question reference that tasked this
+// collection; pass an empty string for untasked (general) collection.
+func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string) error {
+	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Msg("processing content block")
 	log.Debug().Str("source", source).Str("content_block_text", text).Msg("received content block text")
 
 	var payload map[string]any
@@ -133,5 +139,5 @@ func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string,
 		return nil // non-fatal
 	}
 	log.Debug().Str("source", source).Interface("payload", payload).Msg("parsed content block JSON payload")
-	return p.Process(ctx, source, payload, pluginName, pluginVersion)
+	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID)
 }

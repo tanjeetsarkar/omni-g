@@ -178,3 +178,13 @@ def test_extraction_result_plugin_fields_optional() -> None:
     result = ExtractionResult(source_event_id="ev-1")
     assert result.plugin_id is None
     assert result.plugin_version is None
+
+
+def test_extraction_result_kiq_id_defaults_to_none() -> None:
+    result = ExtractionResult(source_event_id="ev-kiq")
+    assert result.kiq_id is None
+
+
+def test_extraction_result_kiq_id_accepted() -> None:
+    result = ExtractionResult(source_event_id="ev-kiq", kiq_id="kiq--abc123")
+    assert result.kiq_id == "kiq--abc123"
