@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
 from .script_generator import BriefingScriptGenerator
 from .storage import MinIOStorageService
 from .tts_synthesizer import TTSSynthesizer
@@ -12,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class BriefingScheduler:
-    """Schedule daily audio briefings per tenant.
+    """Stateless runner for audio briefing generation.
 
-    On :meth:`start`, an :class:`AsyncIOScheduler` job is registered for each
-    tenant that runs at ``briefing_hour:00 UTC`` every day.  Call
-    :meth:`on_demand` to trigger a briefing immediately for any tenant.
+    Scheduled execution is handled externally by Celery Beat.  Call
+    :meth:`on_demand` directly from a Celery task to generate a briefing for a
+    tenant immediately.
     """
 
     def __init__(
@@ -24,42 +22,14 @@ class BriefingScheduler:
         script_generator: BriefingScriptGenerator,
         tts_synthesizer: TTSSynthesizer,
         storage: MinIOStorageService,
-        briefing_hour: int = 8,
     ) -> None:
         self._script_generator = script_generator
         self._tts = tts_synthesizer
         self._storage = storage
-        self._briefing_hour = briefing_hour
-        self._scheduler: AsyncIOScheduler | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    async def start(self, tenant_ids: list[str]) -> None:
-        """Start the scheduler with daily jobs for each *tenant_id*."""
-        self._scheduler = AsyncIOScheduler(timezone="UTC")
-        for tenant_id in tenant_ids:
-            self._scheduler.add_job(
-                self._run_briefing,
-                trigger="cron",
-                hour=self._briefing_hour,
-                minute=0,
-                args=[tenant_id],
-                id=f"briefing_{tenant_id}",
-                replace_existing=True,
-            )
-            logger.info(
-                "briefing_job_scheduled",
-                extra={"tenant_id": tenant_id, "hour_utc": self._briefing_hour},
-            )
-        self._scheduler.start()
-
-    async def stop(self) -> None:
-        """Gracefully shut down the scheduler."""
-        if self._scheduler is not None and self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
-            logger.info("briefing_scheduler_stopped")
 
     async def on_demand(self, tenant_id: str) -> str:
         """Generate, synthesize, upload, and return the object key immediately."""

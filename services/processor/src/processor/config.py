@@ -17,11 +17,26 @@ class Settings(BaseSettings):
     kafka_raw_topic: str = Field(default="raw-feed", alias="KAFKA_RAW_TOPIC")
     kafka_entities_topic: str = Field(default="processed-entities", alias="KAFKA_ENTITIES_TOPIC")
     kafka_alerts_topic: str = Field(default="analyst-alerts", alias="KAFKA_ALERTS_TOPIC")
+    kafka_evidence_topic: str = Field(default="evidence-created", alias="KAFKA_EVIDENCE_TOPIC")
+    kafka_assessment_topic: str = Field(
+        default="assessments-produced", alias="KAFKA_ASSESSMENT_TOPIC"
+    )
     kafka_processor_events_topic: str = Field(
         default="processor-events", alias="KAFKA_PROCESSOR_EVENTS_TOPIC"
     )
     kafka_dlq_topic: str = Field(default="raw-feed.dlq", alias="KAFKA_DLQ_TOPIC")
     kafka_num_workers: int = Field(default=1, alias="KAFKA_NUM_WORKERS")
+
+    # Celery (V2 Step 2 scaffolding)
+    celery_enabled: bool = Field(default=False, alias="CELERY_ENABLED")
+    celery_broker_url: str = Field(default="redis://localhost:6379/1", alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND"
+    )
+    celery_task_queue: str = Field(default="processor-process-event", alias="CELERY_TASK_QUEUE")
+    celery_task_always_eager: bool = Field(default=True, alias="CELERY_TASK_ALWAYS_EAGER")
+    celery_task_ignore_result: bool = Field(default=True, alias="CELERY_TASK_IGNORE_RESULT")
+    celery_briefing_enabled: bool = Field(default=False, alias="CELERY_BRIEFING_ENABLED")
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")

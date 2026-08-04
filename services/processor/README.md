@@ -139,6 +139,12 @@ processor/
 | `HTTP_PORT`           | `8001`                     | HTTP server port                       |
 | `KAFKA_BROKERS`       | `localhost:9092`           | Kafka bootstrap servers                |
 | `KAFKA_GROUP_ID`      | `processor-group`          | Consumer group ID                      |
+| `CELERY_ENABLED`      | `false`                    | Dispatch coarse processing tasks through Celery |
+| `CELERY_BROKER_URL`   | `redis://localhost:6379/1` | Celery broker URL                      |
+| `CELERY_RESULT_BACKEND` | `redis://localhost:6379/2` | Celery result backend URL              |
+| `CELERY_TASK_QUEUE`   | `processor-process-event`  | Default queue for `process_event` tasks |
+| `CELERY_TASK_ALWAYS_EAGER` | `true`               | Run tasks eagerly for lightweight local development |
+| `CELERY_TASK_IGNORE_RESULT` | `true`               | Skip storing task results by default   |
 | `REDIS_URL`           | `redis://localhost:6379`   | Redis connection URL                   |
 | `NEO4J_URL`           | `neo4j://localhost:7687`   | Neo4j bolt URL                         |
 | `NEO4J_USER`          | `neo4j`                    | Neo4j username                         |

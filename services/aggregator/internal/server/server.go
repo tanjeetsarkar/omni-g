@@ -87,7 +87,7 @@ func (s *Server) Start(ctx context.Context) error {
 			if version == "" {
 				version = "unknown"
 			}
-			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version)
+			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version, "")
 		})
 	}
 

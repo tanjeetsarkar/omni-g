@@ -7,14 +7,23 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # Host-run services (Path B: Docker infra + host services)
+  # host.docker.internal resolves to the host machine from inside Docker.
+  # The prometheus service must have extra_hosts: host.docker.internal:host-gateway
+  # in docker-compose.yml (required on Linux).
   - job_name: 'aggregator'
     static_configs:
-      - targets: ['localhost:8080']
+      - targets: ['host.docker.internal:8080']
     metrics_path: '/metrics'
 
   - job_name: 'processor'
     static_configs:
-      - targets: ['localhost:8003']
+      - targets: ['host.docker.internal:8003']
+    metrics_path: '/metrics'
+
+  - job_name: 'delivery-gateway'
+    static_configs:
+      - targets: ['host.docker.internal:9464']
     metrics_path: '/metrics'
 
   # Note: Kafka and Redis do not expose Prometheus metrics natively on their
@@ -23,7 +32,7 @@ scrape_configs:
 
   - job_name: 'neo4j'
     static_configs:
-      - targets: ['neo4j:7474']
+      - targets: ['neo4j:2004']
 
   - job_name: 'qdrant'
     static_configs:

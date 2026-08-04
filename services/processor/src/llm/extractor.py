@@ -44,7 +44,7 @@ class _LLMEntity(BaseModel):
     """Generic LLM-extracted entity.
 
     The LLM assigns ``type`` freely from context (Person, Organization, Event, …).
-    STIX IDs and timestamps are generated during normalisation.
+    Entity IDs and timestamps are generated during normalisation.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -158,7 +158,7 @@ def _normalize_llm_entities(raw: _LLMEntities) -> dict[str, list[Any]]:
 
 class LLMExtractor:
     """
-    Extracts STIX entities from raw text using PydanticAI.
+    Extracts generic entities from raw text using PydanticAI.
 
     Config is read from environment variables at construction time:
             LLM_BASE_URL/OLLAMA_URL, LLM_MODEL/OLLAMA_MODEL,
@@ -179,7 +179,7 @@ class LLMExtractor:
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> ExtractionResult:
-        """Extract STIX entities from text, with automatic fallback on LLM errors."""
+        """Extract entities from text, with automatic fallback on LLM errors."""
         source_type: str = (metadata.get("source_type") or "general") if metadata else "general"
         async with self._semaphore:
             entities = await self._try_extract(text, source_type)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field, model_validator
@@ -12,9 +15,22 @@ from ..dedup.deduplicator import ContentDeduplicator
 from ..graph.persistence import GraphPersistenceService
 from ..graphrag.indexer import GraphRAGIndexer
 from ..llm.extractor import LLMExtractor
-from ..models.entities import Entity, ExtractionResult
+from ..models.entities import (
+    CollectedEvidence,
+    CredibilityRating,
+    Entity,
+    ExtractionResult,
+    Hypothesis,
+    Relationship,
+    ReliabilityRating,
+    SourceClassification,
+)
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
+from .assessment import AssessmentService
+from .assessment_publisher import AssessmentPublisher
+from .evidence_publisher import EvidencePublisher
+from .hypothesis import HypothesisService
 from .stage_publisher import StageEventPublisher
 
 logger = logging.getLogger(__name__)
@@ -53,6 +69,104 @@ GROUNDING_REJECTIONS = Counter(
     ["tenant_id", "reason"],
 )
 
+EVIDENCE_CREATED = Counter(
+    "processor_evidence_created_total",
+    "CollectedEvidence objects created from grounded extraction results",
+    ["tenant_id"],
+)
+
+ASSESSMENTS_PRODUCED = Counter(
+    "processor_assessments_produced_total",
+    "V2 Assessment objects produced for KIQ-tagged pipeline runs",
+    ["tenant_id"],
+)
+
+HYPOTHESES_GENERATED = Counter(
+    "processor_hypotheses_generated_total",
+    "Competing Hypothesis objects generated for KIQ-tagged pipeline runs",
+    ["tenant_id"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Evidence helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_entity_evidence(
+    entity: Entity,
+    *,
+    tenant_id: str,
+    source_event_id: str,
+    plugin_id: str | None,
+    plugin_version: str | None,
+    kiq_id: str | None,
+    source_url: str | None,
+    source_timestamp: datetime,
+) -> CollectedEvidence:
+    """Create a :class:`CollectedEvidence` record for a grounded *entity*.
+
+    Source classification defaults to OSINT (public feeds), reliability and
+    credibility default to unknown/cannot-be-judged.  The pipeline may enrich
+    these later when analyst-grade source metadata is available.
+    """
+    source_text = entity.source_spans[0].text if entity.source_spans else ""
+    assertion = f"{entity.type} '{entity.name}' extracted from source"
+    now = datetime.now(UTC)
+    return CollectedEvidence(
+        id=f"evidence--{uuid4()}",
+        tenant_id=tenant_id,
+        kiq_id=kiq_id,
+        source_event_id=source_event_id,
+        plugin_id=plugin_id,
+        plugin_version=plugin_version,
+        entity_id=entity.id,
+        assertion=assertion,
+        source_text=source_text,
+        source_url=source_url,
+        source_timestamp=source_timestamp,
+        source_class=SourceClassification.OPEN_SOURCE_INTELLIGENCE,
+        source_reliability=ReliabilityRating.UNKNOWN,
+        information_credibility=CredibilityRating.CANNOT_BE_JUDGED,
+        extraction_confidence=entity.confidence,
+        created=now,
+        modified=now,
+    )
+
+
+def _build_relationship_evidence(
+    rel: Relationship,
+    *,
+    tenant_id: str,
+    source_event_id: str,
+    plugin_id: str | None,
+    plugin_version: str | None,
+    kiq_id: str | None,
+    source_url: str | None,
+    source_timestamp: datetime,
+) -> CollectedEvidence:
+    """Create a :class:`CollectedEvidence` record for a grounded *relationship*."""
+    assertion = f"Relationship '{rel.type}' from '{rel.source_ref}' to '{rel.target_ref}' extracted"
+    now = datetime.now(UTC)
+    return CollectedEvidence(
+        id=f"evidence--{uuid4()}",
+        tenant_id=tenant_id,
+        kiq_id=kiq_id,
+        source_event_id=source_event_id,
+        plugin_id=plugin_id,
+        plugin_version=plugin_version,
+        relationship_id=rel.id,
+        assertion=assertion,
+        source_url=source_url,
+        source_timestamp=source_timestamp,
+        source_class=SourceClassification.OPEN_SOURCE_INTELLIGENCE,
+        source_reliability=ReliabilityRating.UNKNOWN,
+        information_credibility=CredibilityRating.CANNOT_BE_JUDGED,
+        extraction_confidence=rel.confidence,
+        created=now,
+        modified=now,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Event envelope schema
@@ -76,6 +190,9 @@ class RawEventEnvelope(BaseModel):
     plugin_name: str | None = None
     plugin_version: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # kiq_id carries the Key Intelligence Question reference that tasked this
+    # collection. None / absent means the event is untasked (general collection).
+    kiq_id: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -140,11 +257,11 @@ class ProcessingPipeline:
     1. **Schema validation** — validates the event envelope; raises
        :exc:`SchemaViolationError` on failure so the consumer routes it to DLQ.
     2. **Deduplication** — checks Redis; silently drops duplicate events.
-    3. **LLM entity extraction** — extracts STIX entities from event text and
+    3. **LLM entity extraction** — extracts generic entities from event text and
        records an :metric:`processor_extraction_confidence` histogram observation.
-    4. **Entity resolution** — resolves extracted STIX entities against the knowledge
+    4. **Entity resolution** — resolves extracted entities against the knowledge
        graph via vector blocking (Qdrant) and structural matching (Neo4j).
-    5. **Graph persistence** — transactionally writes all STIX entities and
+    5. **Graph persistence** — transactionally writes all entities and
        relationships from the extraction result to Neo4j.
     6. **GraphRAG incremental index** — re-runs community detection on the 2-hop
        subgraph around each newly persisted entity and regenerates summaries.
@@ -154,7 +271,7 @@ class ProcessingPipeline:
 
     Returns
     -------
-    :class:`~src.models.stix.ExtractionResult`
+    :class:`~src.models.entities.ExtractionResult`
         When the event was processed successfully.
     ``None``
         When the event was silently dropped as a duplicate.
@@ -174,6 +291,11 @@ class ProcessingPipeline:
         graphrag_indexer: GraphRAGIndexer | None = None,
         alert_publisher: AlertPublisher | None = None,
         stage_publisher: StageEventPublisher | None = None,
+        evidence_publisher: EvidencePublisher | None = None,
+        assessment_service: AssessmentService | None = None,
+        assessment_publisher: AssessmentPublisher | None = None,
+        hypothesis_service: HypothesisService | None = None,
+        reanalyze_enqueuer: Callable[..., Any] | None = None,
     ) -> None:
         self._deduplicator = deduplicator
         self._extractor = extractor
@@ -182,6 +304,11 @@ class ProcessingPipeline:
         self._graphrag_indexer = graphrag_indexer
         self._alert_publisher = alert_publisher
         self._stage_publisher = stage_publisher
+        self._evidence_publisher = evidence_publisher
+        self._assessment_service = assessment_service
+        self._assessment_publisher = assessment_publisher
+        self._hypothesis_service = hypothesis_service
+        self._reanalyze_enqueuer = reanalyze_enqueuer
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
         logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
@@ -289,6 +416,10 @@ class ProcessingPipeline:
         PIPELINE_STAGE_DURATION.labels(stage="llm_extraction").observe(time.monotonic() - t0)
         if self._stage_publisher:
             self._stage_publisher.publish(envelope.id, envelope.tenant_id, "llm_extraction", "done")
+        # Stamp KIQ context from the event envelope onto the extraction result so
+        # all downstream stages (persistence, alerts, assessments) can trace back
+        # to the tasking that motivated collection.
+        extraction = extraction.model_copy(update={"kiq_id": envelope.kiq_id})
         EXTRACTION_CONFIDENCE.observe(extraction.extraction_confidence)
         logger.info(
             "pipeline_stage_done",
@@ -369,6 +500,201 @@ class ProcessingPipeline:
                 "rejected_relationships": rejected_rel_count,
             },
         )
+
+        # ── Step 3.6: Evidence creation ────────────────────────────────────
+        # Create CollectedEvidence objects for each grounded entity and
+        # relationship, attaching source classification and provenance metadata.
+        # Evidence is stamped with the KIQ reference (or None for untasked events).
+        source_url: str | None = envelope.payload.get("url") or (
+            envelope.source if envelope.source.startswith("http") else None
+        )
+        raw_ts = envelope.payload.get("published_at") or envelope.payload.get("source_timestamp")
+        try:
+            source_timestamp: datetime = (
+                datetime.fromisoformat(str(raw_ts)) if raw_ts else datetime.now(UTC)
+            )
+        except (ValueError, TypeError):
+            source_timestamp = datetime.now(UTC)
+
+        evidence_list: list[CollectedEvidence] = []
+        for entity in grounded_entities:
+            evidence_list.append(
+                _build_entity_evidence(
+                    entity,
+                    tenant_id=envelope.tenant_id,
+                    source_event_id=envelope.id,
+                    plugin_id=envelope.plugin_name,
+                    plugin_version=envelope.plugin_version,
+                    kiq_id=envelope.kiq_id,
+                    source_url=source_url,
+                    source_timestamp=source_timestamp,
+                )
+            )
+        for rel in grounded_relationships:
+            evidence_list.append(
+                _build_relationship_evidence(
+                    rel,
+                    tenant_id=envelope.tenant_id,
+                    source_event_id=envelope.id,
+                    plugin_id=envelope.plugin_name,
+                    plugin_version=envelope.plugin_version,
+                    kiq_id=envelope.kiq_id,
+                    source_url=source_url,
+                    source_timestamp=source_timestamp,
+                )
+            )
+        extraction = extraction.model_copy(update={"collected_evidence": evidence_list})
+        EVIDENCE_CREATED.labels(tenant_id=envelope.tenant_id).inc(len(evidence_list))
+        logger.info(
+            "pipeline_evidence_created",
+            extra={
+                "event_id": envelope.id,
+                "tenant_id": envelope.tenant_id,
+                "kiq_id": envelope.kiq_id,
+                "evidence_count": len(evidence_list),
+            },
+        )
+
+        if self._evidence_publisher is not None:
+            for ev in evidence_list:
+                await self._evidence_publisher.publish(ev)
+
+        # ── Step 3.7: Hypothesis generation (ACH) ─────────────────────────
+        # For KIQ-tagged events with grounded evidence, generate competing
+        # hypotheses and perform an ACH scoring pass. The leading hypothesis
+        # is retained for the assessment step. A background reanalysis task is
+        # also dispatched so deep ACH scoring runs outside the hot path.
+        hypotheses: list[Hypothesis] = []
+        leading_hypothesis: Hypothesis | None = None
+        if self._hypothesis_service is not None and envelope.kiq_id and evidence_list:
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "hypothesis_generation", "active"
+                )
+            t0 = time.monotonic()
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "hypothesis_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "evidence_count": len(evidence_list),
+                },
+            )
+            hypotheses = await self._hypothesis_service.generate_candidates(
+                kiq_id=envelope.kiq_id,
+                tenant_id=envelope.tenant_id,
+                evidence_list=evidence_list,
+            )
+            leading_hypothesis = hypotheses[0] if hypotheses else None
+            PIPELINE_STAGE_DURATION.labels(stage="hypothesis_generation").observe(
+                time.monotonic() - t0
+            )
+            HYPOTHESES_GENERATED.labels(tenant_id=envelope.tenant_id).inc(len(hypotheses))
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "hypothesis_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "hypotheses_count": len(hypotheses),
+                    "leading_hypothesis": leading_hypothesis.statement[:120]
+                    if leading_hypothesis
+                    else None,
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "hypothesis_generation", "done"
+                )
+            # Dispatch background reanalysis so full ACH scoring runs outside the
+            # hot path without blocking Kafka intake.
+            if self._reanalyze_enqueuer is not None and hypotheses:
+                try:
+                    self._reanalyze_enqueuer(
+                        envelope.kiq_id,
+                        envelope.tenant_id,
+                        [ev.model_dump(mode="json") for ev in evidence_list],
+                    )
+                    logger.debug(
+                        "pipeline_reanalyze_kiq_dispatched",
+                        extra={
+                            "event_id": envelope.id,
+                            "kiq_id": envelope.kiq_id,
+                            "tenant_id": envelope.tenant_id,
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "pipeline_reanalyze_kiq_dispatch_failed",
+                        extra={
+                            "event_id": envelope.id,
+                            "kiq_id": envelope.kiq_id,
+                            "error": str(exc),
+                        },
+                    )
+        extraction = extraction.model_copy(update={"hypotheses": hypotheses})
+
+        # ── Step 3.8: Assessment generation ───────────────────────────────
+        # For KIQ-tagged events with grounded evidence, generate a first-pass
+        # Assessment (BLUF + confidence band + intelligence gaps).
+        # Untasked events (kiq_id=None) are skipped; assessment is optional.
+        if self._assessment_service is not None and envelope.kiq_id and evidence_list:
+            logger.info(
+                "pipeline_stage_start",
+                extra={
+                    "stage": "assessment_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "kiq_id": envelope.kiq_id,
+                    "evidence_count": len(evidence_list),
+                },
+            )
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "assessment_generation", "active"
+                )
+            t0 = time.monotonic()
+            assessment_result = await self._assessment_service.generate(
+                kiq_id=envelope.kiq_id,
+                tenant_id=envelope.tenant_id,
+                evidence_list=evidence_list,
+                leading_hypothesis=leading_hypothesis,
+            )
+            PIPELINE_STAGE_DURATION.labels(stage="assessment_generation").observe(
+                time.monotonic() - t0
+            )
+            if assessment_result is not None:
+                assessment_obj, _gaps = assessment_result
+                extraction = extraction.model_copy(update={"assessment": assessment_obj})
+                ASSESSMENTS_PRODUCED.labels(tenant_id=envelope.tenant_id).inc()
+                logger.info(
+                    "pipeline_assessment_produced",
+                    extra={
+                        "event_id": envelope.id,
+                        "tenant_id": envelope.tenant_id,
+                        "kiq_id": envelope.kiq_id,
+                        "assessment_id": assessment_obj.id,
+                        "gaps": len(_gaps),
+                        "conclusion_preview": assessment_obj.conclusion[:120],
+                    },
+                )
+                if self._assessment_publisher is not None:
+                    await self._assessment_publisher.publish(assessment_obj)
+            if self._stage_publisher:
+                self._stage_publisher.publish(
+                    envelope.id, envelope.tenant_id, "assessment_generation", "done"
+                )
+            logger.info(
+                "pipeline_stage_done",
+                extra={
+                    "stage": "assessment_generation",
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                },
+            )
 
         # ── Step 4: Entity resolution ──────────────────────────────────────
         if self._resolver is not None:

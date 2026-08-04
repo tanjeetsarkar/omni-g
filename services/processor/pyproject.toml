@@ -24,6 +24,7 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "aioboto3>=15.5.0",
     "apscheduler>=3.11.2",
+    "celery>=5.4.0",
 ]
 
 [build-system]

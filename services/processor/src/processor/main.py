@@ -112,35 +112,9 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     inside the same consumer group so Kafka rebalances partition ownership
     automatically.
     """
-    from neo4j import AsyncGraphDatabase
-    from qdrant_client import AsyncQdrantClient
-
-    from ..dedup.deduplicator import ContentDeduplicator
-    from ..graph.persistence import GraphPersistenceService
-    from ..graph.schema import GraphSchemaManager
-    from ..graphrag.community import CommunityDetector
-    from ..graphrag.indexer import GraphRAGIndexer
-    from ..graphrag.summarizer import CommunitySummarizer
     from ..kafka.consumer import RawEventConsumer
-    from ..llm.extractor import LLMExtractor
-    from ..resolution.resolver import EntityResolver
-    from .alert_publisher import AlertPublisher
-    from .pipeline import ProcessingPipeline
-    from .stage_publisher import StageEventPublisher
-
-    logger.info(
-        "Initialising processor worker dependencies",
-        extra={
-            "worker_id": worker_id,
-            "kafka_raw_topic": cfg.kafka_raw_topic,
-            "kafka_dlq_topic": cfg.kafka_dlq_topic,
-            "kafka_alerts_topic": cfg.kafka_alerts_topic,
-            "kafka_processor_events_topic": cfg.kafka_processor_events_topic,
-            "redis_url": cfg.redis_url,
-            "neo4j_url": cfg.neo4j_url,
-            "qdrant_url": cfg.qdrant_url,
-        },
-    )
+    from .runtime import ProcessorRuntime
+    from .tasks import enqueue_process_event
 
     consumer = RawEventConsumer(
         brokers=cfg.kafka_brokers,
@@ -149,82 +123,21 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         dlq_topic=cfg.kafka_dlq_topic,
     )
     logger.info("RawEventConsumer initialised", extra={"worker_id": worker_id})
-    deduplicator = ContentDeduplicator(ttl_seconds=cfg.dedup_ttl_seconds)
-    await deduplicator.connect(cfg.redis_url)
-    logger.info("Deduplicator connected", extra={"worker_id": worker_id})
-    extractor = LLMExtractor()
-    logger.info("LLM extractor initialised", extra={"worker_id": worker_id})
+    runtime: ProcessorRuntime | None = None
+    if not cfg.celery_enabled:
+        runtime = await ProcessorRuntime.create(cfg, worker_id=worker_id)
 
-    neo4j_driver = AsyncGraphDatabase.driver(
-        cfg.neo4j_url,
-        auth=(cfg.neo4j_user, cfg.neo4j_password),
-    )
-    qdrant_client = AsyncQdrantClient(
-        url=cfg.qdrant_url,
-        api_key=cfg.qdrant_api_key,
-    )
-    resolver = EntityResolver(neo4j_driver=neo4j_driver, qdrant_client=qdrant_client)
-    logger.info("EntityResolver initialised", extra={"worker_id": worker_id})
-
-    # M4.2: Neo4j schema + persistence
-    schema_manager = GraphSchemaManager(neo4j_driver)
-    try:
-        await schema_manager.initialize()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Graph schema initialization failed (continuing)",
-            extra={"error": str(exc), "worker_id": worker_id},
-        )
-    graph_persistence = GraphPersistenceService(neo4j_driver)
-    logger.info("GraphPersistenceService initialised", extra={"worker_id": worker_id})
-
-    # M4.3: GraphRAG indexing
-    community_detector = CommunityDetector(neo4j_driver)
-    summarizer = CommunitySummarizer(
-        neo4j_driver,
-        ollama_url=cfg.ollama_url,
-        model=cfg.ollama_model,
-        openai_api_key=cfg.openai_api_key,
-    )
-    graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
-    logger.info("GraphRAG indexer initialised", extra={"worker_id": worker_id})
-
-    alert_publisher = AlertPublisher(
-        brokers=cfg.kafka_brokers,
-        topic=cfg.kafka_alerts_topic,
-    )
-    logger.info("AlertPublisher initialised", extra={"worker_id": worker_id})
-
-    stage_publisher = StageEventPublisher(
-        brokers=cfg.kafka_brokers,
-        topic=cfg.kafka_processor_events_topic,
-    )
-    logger.info("StageEventPublisher initialised", extra={"worker_id": worker_id})
-
-    pipeline = ProcessingPipeline(
-        deduplicator=deduplicator,
-        extractor=extractor,
-        resolver=resolver,
-        graph_persistence=graph_persistence,
-        graphrag_indexer=graphrag_indexer,
-        alert_publisher=alert_publisher,
-        stage_publisher=stage_publisher,
-    )
-    logger.info("ProcessingPipeline initialised", extra={"worker_id": worker_id})
     consumer.start()
 
     logger.info(
-        "Entity resolver initialised",
+        "Kafka consumer worker started",
         extra={
             "worker_id": worker_id,
-            "neo4j_url": cfg.neo4j_url,
-            "qdrant_url": cfg.qdrant_url,
+            "topic": cfg.kafka_raw_topic,
+            "celery_enabled": cfg.celery_enabled,
+            "celery_task_queue": cfg.celery_task_queue,
+            "celery_task_always_eager": cfg.celery_task_always_eager,
         },
-    )
-
-    logger.info(
-        "Kafka consumer worker started",
-        extra={"worker_id": worker_id, "topic": cfg.kafka_raw_topic},
     )
 
     async def _handle(event: dict[str, Any]) -> None:
@@ -232,15 +145,24 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
             "Kafka event payload received by worker",
             extra={"worker_id": worker_id, "event_payload": event},
         )
-        await pipeline.process(event)
+        if cfg.celery_enabled:
+            task_id = enqueue_process_event(event)
+            logger.info(
+                "Dispatched coarse process_event Celery task",
+                extra={"worker_id": worker_id, "task_id": task_id, "event_id": event.get("id")},
+            )
+            return
+
+        if runtime is None:
+            raise RuntimeError("Processor runtime not initialised")
+
+        await runtime.process_event(event)
 
     try:
         await consumer.process_messages(_handle)
     finally:
-        await neo4j_driver.close()
-        await qdrant_client.close()
-        alert_publisher.close()
-        stage_publisher.close()
+        if runtime is not None:
+            await runtime.close()
         logger.info(
             "Kafka consumer worker shut down; connections closed",
             extra={"worker_id": worker_id},
@@ -260,6 +182,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "kafka_brokers": settings.kafka_brokers,
             "kafka_raw_topic": settings.kafka_raw_topic,
             "kafka_num_workers": settings.kafka_num_workers,
+            "celery_enabled": settings.celery_enabled,
+            "celery_broker_url": settings.celery_broker_url,
+            "celery_result_backend": settings.celery_result_backend,
+            "celery_task_queue": settings.celery_task_queue,
+            "celery_task_always_eager": settings.celery_task_always_eager,
+            "celery_task_ignore_result": settings.celery_task_ignore_result,
             "neo4j_url": settings.neo4j_url,
             "qdrant_url": settings.qdrant_url,
             "ollama_url": settings.ollama_url,

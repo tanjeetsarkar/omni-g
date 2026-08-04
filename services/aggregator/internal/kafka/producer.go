@@ -22,6 +22,10 @@ type RawEvent struct {
 	IngestLatencyMs int64          `json:"ingest_latency_ms"`
 	SchemaVersion   string         `json:"schema_version"`
 	TenantID        string         `json:"tenant_id,omitempty"`
+	// KIQID is the optional Key Intelligence Question reference that tasked
+	// this collection. Empty string means the event is untasked (general
+	// collection not bound to a specific KIQ).
+	KIQID string `json:"kiq_id,omitempty"`
 }
 
 // Producer wraps confluent-kafka-go and exposes a high-level Publish method.

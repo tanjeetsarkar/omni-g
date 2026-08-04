@@ -1,5 +1,7 @@
 # Omni-G UML Architecture (Code-Derived)
 
+> Legacy V1 architecture view. The archived copy is in `docs/V1/architecture-c4-from-code.md`. The active overhaul target architecture is `docs/V2/ARCHITECTURE.md`.
+
 This document replaces the C4 views with UML-style Mermaid diagrams derived from implementation code in services/aggregator, services/processor, and services/delivery.
 
 ## 1) UML Class Diagram (System-Level Architecture)

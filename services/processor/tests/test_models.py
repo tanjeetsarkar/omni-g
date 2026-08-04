@@ -5,7 +5,15 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from src.models.entities import Entity, ExtractionResult, Relationship
+from src.models.entities import (
+    CollectedEvidence,
+    CredibilityRating,
+    Entity,
+    ExtractionResult,
+    Relationship,
+    ReliabilityRating,
+    SourceClassification,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -178,3 +186,158 @@ def test_extraction_result_plugin_fields_optional() -> None:
     result = ExtractionResult(source_event_id="ev-1")
     assert result.plugin_id is None
     assert result.plugin_version is None
+
+
+def test_extraction_result_kiq_id_defaults_to_none() -> None:
+    result = ExtractionResult(source_event_id="ev-kiq")
+    assert result.kiq_id is None
+
+
+def test_extraction_result_kiq_id_accepted() -> None:
+    result = ExtractionResult(source_event_id="ev-kiq", kiq_id="kiq--abc123")
+    assert result.kiq_id == "kiq--abc123"
+
+
+def test_extraction_result_collected_evidence_defaults_empty() -> None:
+    result = ExtractionResult(source_event_id="ev-1")
+    assert result.collected_evidence == []
+
+
+# ---------------------------------------------------------------------------
+# SourceClassification tests
+# ---------------------------------------------------------------------------
+
+
+def test_source_classification_values() -> None:
+    assert SourceClassification.OPEN_SOURCE_INTELLIGENCE == "OSINT"
+    assert SourceClassification.HUMAN_INTELLIGENCE == "HUMINT"
+    assert SourceClassification.UNKNOWN == "UNKNOWN"
+
+
+def test_source_classification_is_str_enum() -> None:
+    assert isinstance(SourceClassification.OPEN_SOURCE_INTELLIGENCE, str)
+
+
+# ---------------------------------------------------------------------------
+# ReliabilityRating tests
+# ---------------------------------------------------------------------------
+
+
+def test_reliability_rating_values() -> None:
+    assert ReliabilityRating.ALWAYS_RELIABLE == "A"
+    assert ReliabilityRating.UNKNOWN == "F"
+
+
+def test_reliability_rating_all_grades() -> None:
+    grades = [r.value for r in ReliabilityRating]
+    assert set(grades) == {"A", "B", "C", "D", "E", "F"}
+
+
+# ---------------------------------------------------------------------------
+# CredibilityRating tests
+# ---------------------------------------------------------------------------
+
+
+def test_credibility_rating_values() -> None:
+    assert CredibilityRating.CONFIRMED == "1"
+    assert CredibilityRating.CANNOT_BE_JUDGED == "6"
+
+
+def test_credibility_rating_all_grades() -> None:
+    grades = [r.value for r in CredibilityRating]
+    assert set(grades) == {"1", "2", "3", "4", "5", "6"}
+
+
+# ---------------------------------------------------------------------------
+# CollectedEvidence tests
+# ---------------------------------------------------------------------------
+
+
+def _make_evidence(**overrides) -> CollectedEvidence:
+    defaults = dict(
+        id="evidence--12345678-1234-5678-1234-567812345678",
+        tenant_id="acme",
+        source_event_id="evt-001",
+        entity_id="entity--aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        assertion="Person 'Alice' extracted from source",
+        source_timestamp=_now(),
+        created=_now(),
+        modified=_now(),
+    )
+    defaults.update(overrides)
+    return CollectedEvidence.model_validate(defaults)
+
+
+def test_collected_evidence_defaults() -> None:
+    ev = _make_evidence()
+    assert ev.kiq_id is None
+    assert ev.source_class == SourceClassification.UNKNOWN
+    assert ev.source_reliability == ReliabilityRating.UNKNOWN
+    assert ev.information_credibility == CredibilityRating.CANNOT_BE_JUDGED
+    assert ev.extraction_confidence == 0.5
+    assert ev.status == "NEW"
+    assert ev.tags == []
+
+
+def test_collected_evidence_with_kiq() -> None:
+    ev = _make_evidence(kiq_id="kiq--abc123")
+    assert ev.kiq_id == "kiq--abc123"
+
+
+def test_collected_evidence_source_class_osint() -> None:
+    ev = _make_evidence(source_class="OSINT")
+    assert ev.source_class == SourceClassification.OPEN_SOURCE_INTELLIGENCE
+
+
+def test_collected_evidence_reliability_rating() -> None:
+    ev = _make_evidence(source_reliability="B")
+    assert ev.source_reliability == ReliabilityRating.USUALLY_RELIABLE
+
+
+def test_collected_evidence_credibility_rating() -> None:
+    ev = _make_evidence(information_credibility="2")
+    assert ev.information_credibility == CredibilityRating.PROBABLY_TRUE
+
+
+def test_collected_evidence_extraction_confidence_bounds() -> None:
+    ev = _make_evidence(extraction_confidence=0.9)
+    assert ev.extraction_confidence == 0.9
+    with pytest.raises(ValidationError):
+        _make_evidence(extraction_confidence=1.5)
+    with pytest.raises(ValidationError):
+        _make_evidence(extraction_confidence=-0.1)
+
+
+def test_collected_evidence_relationship_id() -> None:
+    ev = _make_evidence(
+        entity_id=None,
+        relationship_id="relationship--aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        assertion="Relationship 'KNOWS' extracted",
+    )
+    assert ev.entity_id is None
+    assert ev.relationship_id == "relationship--aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+
+def test_collected_evidence_tenant_id_required() -> None:
+    with pytest.raises(ValidationError):
+        CollectedEvidence.model_validate(
+            dict(
+                id="evidence--12345678-1234-5678-1234-567812345678",
+                source_event_id="evt-001",
+                assertion="test",
+                source_timestamp=_now(),
+                created=_now(),
+                modified=_now(),
+                # tenant_id intentionally omitted
+            )
+        )
+
+
+def test_extraction_result_stores_collected_evidence() -> None:
+    ev = _make_evidence()
+    result = ExtractionResult(
+        source_event_id="evt-001",
+        collected_evidence=[ev],
+    )
+    assert len(result.collected_evidence) == 1
+    assert result.collected_evidence[0].assertion == "Person 'Alice' extracted from source"

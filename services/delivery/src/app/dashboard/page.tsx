@@ -23,8 +23,13 @@ import ActivityDrawer from "@/components/graph/ActivityDrawer";
 import PipelineProgressToast, {
   type ToastState,
 } from "@/components/graph/PipelineProgressToast";
+import {
+  AssessmentPanel,
+  AssessmentEmptyState,
+} from "@/components/assessment/AssessmentPanel";
 import { getSocket, joinTenant } from "@/lib/socket";
 import { useRealtimeNodes } from "@/hooks/useRealtimeNodes";
+import { useAssessmentEvents } from "@/hooks/useAssessmentEvents";
 import type { SearchResponse } from "@/types/entities";
 
 // KnowledgeGraph uses React Flow — must be client-only, no SSR
@@ -68,6 +73,15 @@ function DashboardContent() {
   const lastQueryRef = useRef("");
 
   const { newEntities } = useRealtimeNodes({ tenantId });
+  const { latestAssessment } = useAssessmentEvents({ socket });
+  const [assessmentVisible, setAssessmentVisible] = useState(false);
+
+  // Show the assessment panel automatically when the first assessment arrives
+  useEffect(() => {
+    if (latestAssessment) {
+      setAssessmentVisible(true);
+    }
+  }, [latestAssessment]);
 
   // Join tenant room on mount
   useEffect(() => {
@@ -259,21 +273,55 @@ function DashboardContent() {
             {searchResult.entities.length} entities
           </span>
         )}
+
+        {/* Assessment toggle */}
+        <button
+          onClick={() => setAssessmentVisible((v) => !v)}
+          className={`shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-1.5
+            ${
+              latestAssessment
+                ? "bg-indigo-900/60 border-indigo-600 text-indigo-300 hover:bg-indigo-800/60"
+                : "bg-slate-800 border-slate-600 text-slate-500 hover:text-slate-300"
+            }`}
+          aria-label={assessmentVisible ? "Hide assessment" : "Show assessment"}
+        >
+          {latestAssessment && (
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+          )}
+          Assessment
+        </button>
       </header>
 
-      {/* ── Graph Canvas ─────────────────────────────────────────────────────── */}
-      <main className="flex-1 relative min-h-0">
-        {searchError && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-900/80 border border-red-700 text-red-200 text-xs px-4 py-2 rounded-lg">
-            {searchError}
+      {/* ── Graph Canvas + Assessment Panel ──────────────────────────────── */}
+      <main className="flex-1 flex min-h-0 relative">
+        {/* Graph (fills remaining space) */}
+        <div className="flex-1 relative min-w-0">
+          {searchError && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-red-900/80 border border-red-700 text-red-200 text-xs px-4 py-2 rounded-lg">
+              {searchError}
+            </div>
+          )}
+
+          <KnowledgeGraph
+            entities={searchResult.entities}
+            relationships={searchResult.relationships}
+            newEntities={newEntities}
+          />
+        </div>
+
+        {/* Assessment side panel (collapsible) */}
+        {assessmentVisible && (
+          <div className="w-80 shrink-0 border-l border-slate-700 overflow-y-auto p-3 bg-slate-950">
+            {latestAssessment ? (
+              <AssessmentPanel
+                assessment={latestAssessment}
+                onDismiss={() => setAssessmentVisible(false)}
+              />
+            ) : (
+              <AssessmentEmptyState />
+            )}
           </div>
         )}
-
-        <KnowledgeGraph
-          entities={searchResult.entities}
-          relationships={searchResult.relationships}
-          newEntities={newEntities}
-        />
       </main>
 
       {/* ── Pipeline Activity Drawer ─────────────────────────────────────────── */}

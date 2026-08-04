@@ -15,10 +15,10 @@ from src.resolution.resolver import (
     SAME_AS_MERGES,
     EntityResolver,
     _embed,
+    _entity_id_to_qdrant_id,
     _get_entity_aliases,
     _get_entity_name,
     _safe_label,
-    _stix_id_to_qdrant_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -557,14 +557,14 @@ class TestHelpers:
     def test_safe_label_prepends_prefix_for_digit_start(self) -> None:
         assert _safe_label("123abc").startswith("L_")
 
-    def test_stix_id_to_qdrant_id_extracts_uuid(self) -> None:
+    def test_entity_id_to_qdrant_id_extracts_uuid(self) -> None:
         uid = str(uuid.uuid4())
-        stix_id = f"entity--{uid}"
-        assert _stix_id_to_qdrant_id(stix_id) == uid
+        entity_id = f"entity--{uid}"
+        assert _entity_id_to_qdrant_id(entity_id) == uid
 
-    def test_stix_id_to_qdrant_id_passthrough_on_no_dashes(self) -> None:
+    def test_entity_id_to_qdrant_id_passthrough_on_no_dashes(self) -> None:
         plain = "no-double-dash-here"
-        result = _stix_id_to_qdrant_id(plain)
+        result = _entity_id_to_qdrant_id(plain)
         assert isinstance(result, str)
 
     def test_get_entity_name_returns_name(self) -> None:
