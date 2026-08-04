@@ -185,6 +185,8 @@ services:
   prometheus:
     image: prom/prometheus:v3.11.3
     container_name: omni-g-prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "9090:9090"
     volumes:
