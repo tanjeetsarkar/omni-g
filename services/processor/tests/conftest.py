@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncGenerator
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,11 +81,13 @@ async def fake_deduplicator() -> AsyncGenerator[object]:
 
 
 @pytest.fixture()
-def mock_llm_extractor() -> AsyncMock:
-    """Mock LLM extractor that returns an empty result."""
+def mock_llm_extractor() -> MagicMock:
+    """Mock ZeroMemExtractor that returns an empty result."""
+    from unittest.mock import MagicMock
+
     from src.models.entities import ExtractionResult
 
-    mock = AsyncMock()
+    mock = MagicMock()
     mock.extract.return_value = ExtractionResult(
         source_event_id="test-id",
         extraction_confidence=0.9,

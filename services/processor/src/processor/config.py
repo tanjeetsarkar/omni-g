@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     briefing_preflight_enabled: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_ENABLED")
     briefing_preflight_strict: bool = Field(default=False, alias="BRIEFING_PREFLIGHT_STRICT")
 
+    # PostgreSQL (temporal hierarchy store)
+    postgres_url: str = Field(
+        default="postgresql://omni-g:omni-g-local-dev@localhost:5432/omni_g",
+        alias="POSTGRES_URL",
+    )
+
     # Aggregator (for processor → aggregator enrichment callbacks)
     aggregator_url: str = Field(default="http://localhost:8000", alias="AGGREGATOR_URL")
 

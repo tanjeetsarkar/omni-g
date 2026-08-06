@@ -12,9 +12,10 @@
     "gateway": "ts-node --project gateway/tsconfig.json gateway/server.ts"
   },
   "dependencies": {
-    "@xyflow/react": "^12.3.6",
     "clsx": "2.1.1",
     "dagre": "^0.8.5",
+    "echarts": "^5.6.0",
+    "echarts-for-react": "^3.0.2",
     "elkjs": "^0.9.3",
     "kafkajs": "^2.2.4",
     "lucide-react": "0.468.0",

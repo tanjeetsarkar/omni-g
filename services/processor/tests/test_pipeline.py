@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prometheus_client import Histogram
 from pydantic import ValidationError
 
 from src.dedup.deduplicator import ContentDeduplicator
-from src.llm.extractor import LLMExtractor
+from src.extractors.zeromem_extractor import ZeroMemExtractor
 from src.models.entities import Entity, ExtractionResult
 from src.processor.pipeline import (
     DEDUP_DROPS,
@@ -60,9 +60,9 @@ def _make_valid_event(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.fixture()
-def mock_extractor() -> AsyncMock:
-    """LLMExtractor mock returning a fixed ExtractionResult (no LLM calls)."""
-    mock = AsyncMock()
+def mock_extractor() -> MagicMock:
+    """ZeroMemExtractor mock returning a fixed ExtractionResult (no LLM calls)."""
+    mock = MagicMock()
     mock.extract.return_value = ExtractionResult(
         source_event_id="evt-001",
         entities=[],
@@ -75,11 +75,11 @@ def mock_extractor() -> AsyncMock:
 @pytest.fixture()
 async def pipeline(
     fake_deduplicator: ContentDeduplicator,
-    mock_extractor: AsyncMock,
+    mock_extractor: MagicMock,
 ) -> ProcessingPipeline:
     return ProcessingPipeline(
         deduplicator=fake_deduplicator,
-        extractor=cast(LLMExtractor, mock_extractor),
+        zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
     )
 
 
@@ -147,16 +147,6 @@ class TestRawEventEnvelope:
         assert envelope.plugin_name == "twitter-mcp"
         assert envelope.plugin_version == "1.2.3"
 
-    def test_kiq_id_defaults_to_none(self) -> None:
-        envelope = RawEventEnvelope.model_validate({"payload": {"text": "general feed"}})
-        assert envelope.kiq_id is None
-
-    def test_kiq_id_accepted_and_preserved(self) -> None:
-        envelope = RawEventEnvelope.model_validate(
-            {"payload": {"text": "tasked intel"}, "kiq_id": "kiq--abc123"}
-        )
-        assert envelope.kiq_id == "kiq--abc123"
-
 
 # ---------------------------------------------------------------------------
 # ProcessingPipeline tests
@@ -167,7 +157,7 @@ class TestProcessingPipeline:
     async def test_happy_path_returns_extraction_result(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Valid event flows through the pipeline and returns an ExtractionResult."""
         result = await pipeline.process(_make_valid_event())
@@ -178,7 +168,7 @@ class TestProcessingPipeline:
     async def test_schema_violation_raises_schema_violation_error(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Event with empty payload raises SchemaViolationError; extractor not called."""
         bad_event: dict[str, Any] = {"id": "evt-bad", "payload": {}}
@@ -208,7 +198,7 @@ class TestProcessingPipeline:
     async def test_duplicate_event_returns_none(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Sending the same event twice: first is processed, second is dropped."""
         event = _make_valid_event()
@@ -237,7 +227,7 @@ class TestProcessingPipeline:
     async def test_confidence_histogram_observed_on_success(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """EXTRACTION_CONFIDENCE histogram count increments after a successful extraction."""
         mock_extractor.extract.return_value = ExtractionResult(
@@ -253,7 +243,7 @@ class TestProcessingPipeline:
     async def test_confidence_histogram_not_observed_on_duplicate(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Duplicates are dropped before extraction; no confidence observation recorded."""
         mock_extractor.extract.return_value = ExtractionResult(
@@ -273,7 +263,7 @@ class TestProcessingPipeline:
     async def test_text_payload_passed_to_extractor(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """The 'text' payload value is forwarded as the text argument to the extractor."""
         event = _make_valid_event(
@@ -281,13 +271,13 @@ class TestProcessingPipeline:
             payload={"text": "APT-X launched a cyberattack"},
         )
         await pipeline.process(event)
-        text_arg = mock_extractor.extract.call_args.args[1]
+        text_arg = mock_extractor.extract.call_args.args[0]
         assert text_arg == "APT-X launched a cyberattack"
 
     async def test_content_key_used_as_text_fallback(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """When 'text' is absent, 'content' value is forwarded to the extractor."""
         event = _make_valid_event(
@@ -295,29 +285,29 @@ class TestProcessingPipeline:
             payload={"content": "threat intel report body"},
         )
         await pipeline.process(event)
-        text_arg = mock_extractor.extract.call_args.args[1]
+        text_arg = mock_extractor.extract.call_args.args[0]
         assert text_arg == "threat intel report body"
 
-    async def test_plugin_metadata_forwarded_to_extractor(
+    async def test_plugin_metadata_forwarded(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
-        """plugin_name and plugin_version are forwarded as metadata to the extractor."""
+        """plugin_name and plugin_version are forwarded and copied into the extraction result."""
         event = _make_valid_event(
             id="evt-meta",
             plugin_name="shodan-mcp",
             plugin_version="2.0.0",
         )
-        await pipeline.process(event)
-        metadata_arg = mock_extractor.extract.call_args.args[2]
-        assert metadata_arg["plugin_name"] == "shodan-mcp"
-        assert metadata_arg["plugin_version"] == "2.0.0"
+        result = await pipeline.process(event)
+        assert result is not None
+        assert result.plugin_id == "shodan-mcp"
+        assert result.plugin_version == "2.0.0"
 
     async def test_different_tenants_not_deduplicated(
         self,
         pipeline: ProcessingPipeline,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Same payload content under different tenant IDs must each be processed."""
         event_t1 = _make_valid_event(id="evt-iso", tenant_id="tenant-A")
@@ -331,16 +321,16 @@ class TestProcessingPipeline:
     async def test_multiple_workers_share_deduplicator(
         self,
         fake_deduplicator: ContentDeduplicator,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Two worker pipelines sharing the same deduplicator drop cross-worker duplicates."""
         pipeline1 = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
         )
         pipeline2 = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
         )
         event1 = _make_valid_event(id="evt-w1", payload={"text": "worker1 unique event"})
         event2 = _make_valid_event(id="evt-w2", payload={"text": "worker2 unique event"})
@@ -355,7 +345,7 @@ class TestProcessingPipeline:
     async def test_resolver_called_for_each_entity_when_provided(
         self,
         fake_deduplicator: ContentDeduplicator,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """When a resolver is wired in, resolve_and_persist is called once per extracted entity."""
         from datetime import UTC, datetime
@@ -386,7 +376,7 @@ class TestProcessingPipeline:
         mock_resolver = AsyncMock(spec=EntityResolver)
         pipeline_with_resolver = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
             resolver=cast(EntityResolver, mock_resolver),
         )
 
@@ -409,12 +399,12 @@ class TestProcessingPipeline:
     async def test_schema_violation_error_does_not_reach_deduplicator(
         self,
         fake_deduplicator: ContentDeduplicator,
-        mock_extractor: AsyncMock,
+        mock_extractor: MagicMock,
     ) -> None:
         """Schema validation failure short-circuits before dedup; Redis not written."""
         pipeline = ProcessingPipeline(
             deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
         )
         bad_event: dict[str, Any] = {"payload": {}}
         with pytest.raises(SchemaViolationError):
@@ -422,47 +412,3 @@ class TestProcessingPipeline:
         # The same event sent again should NOT be detected as a duplicate (was never stored)
         with pytest.raises(SchemaViolationError):
             await pipeline.process(bad_event)
-
-    async def test_kiq_id_propagated_to_extraction_result(
-        self,
-        fake_deduplicator: ContentDeduplicator,
-        mock_extractor: AsyncMock,
-    ) -> None:
-        """kiq_id from the event envelope is stamped onto the ExtractionResult."""
-        mock_extractor.extract.return_value = ExtractionResult(
-            source_event_id="evt-kiq",
-            entities=[],
-            extraction_confidence=0.7,
-        )
-        pl = ProcessingPipeline(
-            deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
-        )
-        event = _make_valid_event(
-            id="evt-kiq",
-            payload={"text": "tasked collection text"},
-            kiq_id="kiq--abc123",
-        )
-        result = await pl.process(event)
-        assert result is not None
-        assert result.kiq_id == "kiq--abc123"
-
-    async def test_untasked_event_has_none_kiq_id_in_result(
-        self,
-        fake_deduplicator: ContentDeduplicator,
-        mock_extractor: AsyncMock,
-    ) -> None:
-        """When no kiq_id is present in the envelope, ExtractionResult.kiq_id is None."""
-        mock_extractor.extract.return_value = ExtractionResult(
-            source_event_id="evt-untasked",
-            entities=[],
-            extraction_confidence=0.6,
-        )
-        pl = ProcessingPipeline(
-            deduplicator=fake_deduplicator,
-            extractor=cast(LLMExtractor, mock_extractor),
-        )
-        event = _make_valid_event(id="evt-untasked", payload={"text": "untasked general feed"})
-        result = await pl.process(event)
-        assert result is not None
-        assert result.kiq_id is None

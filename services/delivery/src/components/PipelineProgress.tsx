@@ -11,15 +11,6 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle, Circle, Loader, AlertCircle } from "lucide-react";
 import { getSocket, joinTenant } from "@/lib/socket";
 
-interface AlertPayload {
-  alert_id?: string;
-  tenant_id?: string;
-  entity_ids?: string[];
-  summary?: string;
-  confidence?: number;
-  [key: string]: unknown;
-}
-
 interface Stage {
   id: number;
   label: string;
@@ -125,10 +116,9 @@ export default function PipelineProgress({ query, progress, onReady }: Props) {
     const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
     joinTenant(tenantId);
 
-    function handleAlert(alert: AlertPayload) {
+    function handleAlert() {
       if (doneRef.current) return;
       // Any alert after the search started means the pipeline produced output.
-      const _ = alert; // alert data available if needed
       doneRef.current = true;
       setStatuses(STAGES.map(() => "done"));
       setDone(true);

@@ -26,8 +26,9 @@ class GraphSchemaManager:
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Run all constraint and index creation queries for the :Entity label."""
+        """Run all constraint and index creation queries."""
         async with self._driver.session() as session:
+            # Entity indexes (kept from V2)
             await self._create_unique_constraint(session)
             await self._create_type_index(session)
             await self._create_tenant_id_index(session)
@@ -35,8 +36,14 @@ class GraphSchemaManager:
             await self._create_timestamp_index(session)
             await self._create_name_index(session)
             await self._create_aliases_index(session)
+            # ContextUnit indexes (V3 Zero-Mem)
+            await self._create_context_unit_constraint(session)
+            await self._create_context_unit_tenant_index(session)
+            await self._create_context_unit_source_index(session)
+            await self._create_context_unit_created_index(session)
+            await self._create_context_unit_composite_index(session)
 
-        logger.info("graph_schema_initialized", extra={"label": "Entity"})
+        logger.info("graph_schema_initialized", extra={"labels": ["Entity", "ContextUnit"]})
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -98,11 +105,57 @@ class GraphSchemaManager:
 
     @staticmethod
     async def _create_aliases_index(session: AsyncSession) -> None:
-        """Create an index on the aliases list property for :Entity.
-
-        Required for efficient list-membership queries such as
-        ``$name IN e.aliases`` used by the structural resolver.
-        """
+        """Create an index on the aliases list property for :Entity."""
         cypher = "CREATE INDEX entity_aliases IF NOT EXISTS " "FOR (n:Entity) ON (n.aliases)"
         await session.run(cypher)
         logger.debug("index_created", extra={"index": "entity_aliases", "label": "Entity"})
+
+    # ------------------------------------------------------------------
+    # ContextUnit schema (V3 Zero-Mem)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _create_context_unit_constraint(session: AsyncSession) -> None:
+        """Unique constraint on :ContextUnit id."""
+        cypher = (
+            "CREATE CONSTRAINT context_unit_id IF NOT EXISTS "
+            "FOR (n:ContextUnit) REQUIRE n.id IS UNIQUE"
+        )
+        await session.run(cypher)
+        logger.debug("constraint_created", extra={"constraint": "context_unit_id"})
+
+    @staticmethod
+    async def _create_context_unit_tenant_index(session: AsyncSession) -> None:
+        cypher = (
+            "CREATE INDEX context_unit_tenant_id IF NOT EXISTS "
+            "FOR (n:ContextUnit) ON (n.tenant_id)"
+        )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "context_unit_tenant_id"})
+
+    @staticmethod
+    async def _create_context_unit_source_index(session: AsyncSession) -> None:
+        cypher = (
+            "CREATE INDEX context_unit_source_id IF NOT EXISTS "
+            "FOR (n:ContextUnit) ON (n.source_id)"
+        )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "context_unit_source_id"})
+
+    @staticmethod
+    async def _create_context_unit_created_index(session: AsyncSession) -> None:
+        cypher = (
+            "CREATE INDEX context_unit_created IF NOT EXISTS " "FOR (n:ContextUnit) ON (n.created)"
+        )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "context_unit_created"})
+
+    @staticmethod
+    async def _create_context_unit_composite_index(session: AsyncSession) -> None:
+        """Composite index for temporal hierarchy queries: tenant + episode + created."""
+        cypher = (
+            "CREATE INDEX context_unit_tenant_episode_created IF NOT EXISTS "
+            "FOR (n:ContextUnit) ON (n.tenant_id, n.episode_id, n.created)"
+        )
+        await session.run(cypher)
+        logger.debug("index_created", extra={"index": "context_unit_tenant_episode_created"})
