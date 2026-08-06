@@ -486,7 +486,7 @@ class GraphPersistenceService:
                 result = await session.run(
                     """
                     MATCH (e:Entity)
-                    WHERE e.tenant_id = $tenant_id OR (e.tenant_id = '' AND $tenant_id <> '')
+                    WHERE e.tenant_id = $tenant_id
                     RETURN e
                     ORDER BY e.modified DESC
                     LIMIT $limit
@@ -582,6 +582,7 @@ class GraphPersistenceService:
     async def fetch_neighbor_entities(
         self,
         entity_ids: list[str],
+        tenant_id: str,
     ) -> list[Entity]:
         """Return 1-hop outgoing neighbours of *entity_ids* not already in that set.
 
@@ -597,10 +598,12 @@ class GraphPersistenceService:
                     """
                     MATCH (src:Entity)-[]->(tgt:Entity)
                     WHERE src.id IN $entity_ids AND NOT tgt.id IN $entity_ids
+                      AND tgt.tenant_id = $tenant_id
                     RETURN DISTINCT tgt AS e
                     LIMIT 100
                     """,
                     entity_ids=entity_ids,
+                    tenant_id=tenant_id,
                 )
                 rows = await result.data()
         except Exception:

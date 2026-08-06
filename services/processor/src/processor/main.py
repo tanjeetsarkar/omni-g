@@ -417,7 +417,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     logger.exception("Failed to parse entity from Neo4j row")
             if entities:
                 entity_ids = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids)
+                neighbors = await graph_persistence.fetch_neighbor_entities(
+                    entity_ids, body.tenant_id
+                )
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:
@@ -567,7 +569,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             if entities:
                 entity_ids_final = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids_final)
+                neighbors = await graph_persistence.fetch_neighbor_entities(
+                    entity_ids_final, body.tenant_id
+                )
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:

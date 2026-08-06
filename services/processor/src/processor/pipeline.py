@@ -18,10 +18,12 @@ Stages
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from prometheus_client import Counter, Histogram
@@ -37,6 +39,25 @@ from ..models.entities import ContextUnit, Entity, ExtractionResult
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
 from .stage_publisher import StageEventPublisher
+
+
+def _assign_temporal_ids(
+    tenant_id: str,
+    source: str | None,
+    now: datetime,
+    event_id: str,
+) -> tuple[str, str, str, str]:
+    # Deterministic bucket IDs derived from ingest metadata, no external state needed
+    def _h(key: str) -> str:
+        return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+    ts = int(now.timestamp())
+    domain = urlparse(source or "").netloc or "unknown"
+    session_id = _h(f"{tenant_id}:{now.date().isoformat()}")
+    episode_id = _h(f"{tenant_id}:{domain}:{ts // 3600}")
+    window_id = _h(f"{tenant_id}:{ts // 900}")
+    return session_id, episode_id, window_id, event_id
+
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +213,19 @@ class ProcessingPipeline:
         now = datetime.now(UTC)
         context_id = f"context--{uuid4()}"
 
+        session_id, episode_id, window_id, turn_id = _assign_temporal_ids(
+            envelope.tenant_id, envelope.source, now, envelope.id
+        )
+
         context_unit = ContextUnit(
             id=context_id,
             text=text,
             source_id=envelope.source or None,
             tenant_id=envelope.tenant_id,
+            session_id=session_id,
+            episode_id=episode_id,
+            window_id=window_id,
+            turn_id=turn_id,
             created=now,
             metadata={
                 "plugin_name": envelope.plugin_name,
@@ -259,6 +288,7 @@ class ProcessingPipeline:
         if self._temporal_store is not None:
             try:
                 await self._temporal_store.insert_context_unit_temporal(context_unit)
+                await self._temporal_store.upsert_episode(episode_id, envelope.tenant_id, now)
             except Exception:
                 logger.exception(
                     "temporal_insert_failed",

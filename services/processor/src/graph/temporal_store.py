@@ -76,8 +76,8 @@ class TemporalStore:
                 await conn.execute(
                     """
                     INSERT INTO context_units_temporal
-                        (id, tenant_id, session_id, episode_id, window_id, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                        (id, tenant_id, session_id, episode_id, window_id, turn_id, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     unit.id,
@@ -85,11 +85,33 @@ class TemporalStore:
                     unit.session_id,
                     unit.episode_id,
                     unit.window_id,
+                    unit.turn_id,
                     unit.created,
                 )
         except Exception:
             logger.exception(
                 "temporal_insert_failed", extra={"context_id": unit.id, "tenant_id": unit.tenant_id}
+            )
+
+    async def upsert_episode(self, episode_id: str, tenant_id: str, started_at: Any) -> None:
+        """Open a temporal episode row; no-op if the episode already exists."""
+        if self._pool is None:
+            return
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO temporal_episodes (id, tenant_id, started_at)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    episode_id,
+                    tenant_id,
+                    started_at,
+                )
+        except Exception:
+            logger.exception(
+                "upsert_episode_failed", extra={"episode_id": episode_id, "tenant_id": tenant_id}
             )
 
     async def query_episode_neighbors(

@@ -69,6 +69,7 @@ class ContextUnit(BaseModel):
     session_id: str | None = None
     episode_id: str | None = None
     window_id: str | None = None
+    turn_id: str | None = None
     created: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
 

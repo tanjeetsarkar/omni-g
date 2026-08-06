@@ -9,8 +9,12 @@ Algorithm (per V3 architecture):
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from .profiler import QueryProfile
 from .scored_context import ScoredContext
@@ -19,6 +23,64 @@ if TYPE_CHECKING:
     from ..indexers.vector import ContextUnitIndexer
 
 logger = logging.getLogger(__name__)
+
+# Module-level config for query embedding (aligned with Entities collection dim=768)
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
+EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
+
+
+def _deterministic_hash_embed(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
+    """Generate a deterministic hash-based float vector for *text*.
+
+    Each byte of successive SHA-256 blocks is mapped linearly to
+    the range ``[-1.0, 1.0]`` to fill a vector of length *dim*.
+    """
+    seed = hashlib.sha256(text.encode()).digest()
+    floats: list[float] = []
+    block_idx = 0
+    while len(floats) < dim:
+        block = hashlib.sha256(seed + block_idx.to_bytes(4, "big")).digest()
+        for byte in block:
+            floats.append((byte - 127.5) / 127.5)
+            if len(floats) >= dim:
+                break
+        block_idx += 1
+    return floats[:dim]
+
+
+async def _embed_query(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
+    """Generate semantic embedding using local nomic-embed-text model on Ollama.
+
+    Falls back on deterministic hash-based generator if Ollama is unreachable.
+    """
+    base_url = OLLAMA_URL.rstrip("/")
+    url = f"{base_url}/api/embeddings"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                url,
+                json={
+                    "model": EMBEDDING_MODEL,
+                    "prompt": text,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            embedding = data.get("embedding")
+            if embedding and isinstance(embedding, list):
+                vector = [float(v) for v in embedding if isinstance(v, int | float)]
+                if len(vector) < dim:
+                    return vector + [0.0] * (dim - len(vector))
+                return vector[:dim]
+            logger.warning("invalid_ollama_embedding_response_structure", extra={"response": data})
+    except Exception as exc:
+        logger.warning(
+            "ollama_embedding_failed_using_fallback_hash",
+            extra={"error": str(exc), "url": url, "model": EMBEDDING_MODEL},
+        )
+
+    return _deterministic_hash_embed(text, dim)
 
 
 class RelationalRetriever:
@@ -87,8 +149,7 @@ class RelationalRetriever:
                 )
                 return []
 
-            embeddings = self._indexer.encode([anchor_texts[0]])
-            vector: list[float] = embeddings[0].tolist()
+            vector = await _embed_query(anchor_texts[0])
             hits = await self._qdrant.search(
                 collection_name=collection_name,
                 query_vector=vector,

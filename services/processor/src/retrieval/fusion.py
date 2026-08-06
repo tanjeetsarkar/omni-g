@@ -70,6 +70,8 @@ class DualViewFusion:
             )
 
         fused.sort(key=lambda x: x.score, reverse=True)
+        # Drop near-zero-score entries that exist only due to temporal recency nomination
+        fused = [c for c in fused if c.score >= 0.05]
         logger.debug(
             "dual_view_fusion_done",
             extra={

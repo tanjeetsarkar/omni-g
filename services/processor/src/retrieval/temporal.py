@@ -5,7 +5,9 @@ Search order: episode → window → turn → local_span (most recent fallback).
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from .profiler import QueryProfile
@@ -15,6 +17,27 @@ if TYPE_CHECKING:
     from ..graph.temporal_store import TemporalStore
 
 logger = logging.getLogger(__name__)
+
+
+def _cue_to_episode_ids(cues: list[str], tenant_id: str) -> list[str]:
+    """Map spaCy temporal cue strings to deterministic episode ID candidates."""
+    import dateparser  # soft dep — falls back gracefully if unavailable
+
+    episode_ids: list[str] = []
+    for cue in cues:
+        try:
+            parsed = dateparser.parse(cue, settings={"RETURN_AS_TIMEZONE_AWARE": True})
+        except Exception:
+            parsed = None
+        if parsed is None:
+            # Try treating the cue as an approximate "now" offset
+            parsed = datetime.now(UTC)
+        ts = int(parsed.timestamp())
+        # Match the same hash strategy used during ingest (_assign_temporal_ids)
+        eid = hashlib.sha256(f"{tenant_id}:unknown:{ts // 3600}".encode()).hexdigest()[:12]
+        if eid not in episode_ids:
+            episode_ids.append(eid)
+    return episode_ids
 
 
 class TemporalRetriever:
@@ -31,9 +54,23 @@ class TemporalRetriever:
         top_k: int = 20,
     ) -> list[ScoredContext]:
         """Return *top_k* ContextUnits from the temporal hierarchy for *tenant_id*."""
-        # Try episode/window/turn IDs extracted from temporal cues (future work: parse cues)
-        # Fall back to recency ordering from Neo4j
-        candidate_ids = await self._store.query_recent(tenant_id, limit=top_k * 2)
+        # Skip recency fallback for pure entity queries — avoid polluting relational fusion
+        if not profile.temporal_cues and profile.route == "relational":
+            return []
+
+        # D1: resolve temporal cues to episode IDs and query hierarchy first
+        candidate_ids: list[str] = []
+        if profile.temporal_cues:
+            episode_ids = _cue_to_episode_ids(profile.temporal_cues, tenant_id)
+            for eid in episode_ids:
+                ids = await self._store.query_episode_neighbors(eid, tenant_id, limit=top_k)
+                for cid in ids:
+                    if cid not in candidate_ids:
+                        candidate_ids.append(cid)
+
+        # D2: fall back to recency only when cue lookup found nothing
+        if not candidate_ids:
+            candidate_ids = await self._store.query_recent(tenant_id, limit=top_k * 2)
 
         if not candidate_ids:
             return await self._neo4j_recent(tenant_id, top_k)

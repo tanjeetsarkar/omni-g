@@ -23,6 +23,7 @@
 | **Phase 7 — Search Endpoint** | Rewrote `POST /search` in `main.py` with full dual-view pipeline: `QueryProfiler` → parallel `RelationalRetriever` + `TemporalRetriever` → `DualViewFusion` → `EvidenceCalibrator` → R(q); updated `SearchResponse` to include `context_units: list[dict]`; fallback to `search_entities` recency when retrieval returns no entities; updated `/briefings/generate` to use new `BriefingScriptGenerator` interface | ✅ Complete |
 | **Phase 8 — Frontend Apache ECharts Canvas** | Replaced React Flow with high-performance Apache ECharts force-directed graph canvas; created `useEChartsGraphAdapter` to transform response nodes & edges based on depth layout; created `SourceTracePane` showing verbatim raw context, scores, timestamps and references; uninstalled `@xyflow/react` and pruned all obsolete React Flow files | ✅ Complete |
 | **Phase 9 — Interactive Drill-Downs & E2E Verification** | Implemented dynamic localized multi-hop expansion endpoints; integrated double-click nodes with dynamic graph state merging on canvas; created comprehensive unit & end-to-end regression tests validating memory/LLM zero-token operations and latency constraint compliance (<120ms) | ✅ Complete |
+| **Phase 10 — Temporal Hierarchy Population & Search Quality** | Added `turn_id` to `ContextUnit` model; added `_assign_temporal_ids()` to pipeline (deterministic bucketing: session=daily, episode=source-domain+hour, window=15-min, turn=event_id); fixed concat bug in pipeline Step 3f; `insert_context_unit_temporal` now writes all four hierarchy fields; `upsert_episode` added to `TemporalStore` and called each ingest; `fetch_neighbor_entities` scoped to `tenant_id`; `search_entities` tenant-leak clause removed; `TemporalRetriever` gates on `temporal_cues` (returns `[]` for pure relational queries); `_cue_to_episode_ids()` maps spaCy cue text → episode hashes via `dateparser`; `DualViewFusion` drops candidates with score < 0.05 | ✅ Complete |
 
 ### Open V3 Gaps
 
@@ -31,7 +32,7 @@
 | **Briefing content source** | `BriefingScriptGenerator` uses placeholder script when no context provided; natural replacement is calibrated R(q) context arrays — follow-on work | Medium |
 | **Entity resolver embeddings** | `EntityResolver` still uses Ollama `nomic-embed-text` (falls back to hash); should migrate to BGE-M3 for consistency with V3 indexing | Medium |
 | **LLM extractor module** | `src/llm/extractor.py` still exists with stale pydantic-ai/instructor imports; not imported by any V3 path but will fail if imported. | Low |
-| **Temporal cue parsing** | `TemporalRetriever` falls back to recency ordering; actual episode/window/turn ID lookup from temporal cues not yet implemented | Low |
+| **Temporal cue parsing** | `TemporalRetriever` now resolves cues via `dateparser` → episode hash lookup before recency fallback; requires `dateparser` in `pyproject.toml` | Low |
 | **APOC PPR testing** | `RelationalRetriever._ppr_retrieve` requires APOC on Neo4j; local dev may need `NEO4J_PLUGINS=["apoc"]` verified working | Medium |
 
 ### V2 Intelligence Cycle: Deprecated
