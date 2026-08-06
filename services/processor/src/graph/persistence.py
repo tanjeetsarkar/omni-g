@@ -8,7 +8,7 @@ from typing import Any
 from neo4j import AsyncDriver, AsyncSession
 from prometheus_client import Counter, Histogram
 
-from ..models.entities import Entity, ExtractionResult, Relationship
+from ..models.entities import ContextUnit, Entity, ExtractionResult, Relationship
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,132 @@ class GraphPersistenceService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def upsert_context_unit(self, unit: ContextUnit) -> None:
+        """MERGE a ContextUnit node and set all properties."""
+        import json
+
+        t0 = time.perf_counter()
+        cypher = (
+            "MERGE (n:ContextUnit {id: $id}) "
+            "ON CREATE SET n.text = $text, n.source_id = $source_id, "
+            "              n.tenant_id = $tenant_id, n.session_id = $session_id, "
+            "              n.episode_id = $episode_id, n.window_id = $window_id, "
+            "              n.created = $created, n.metadata = $metadata "
+            "ON MATCH SET  n.modified = $created"
+        )
+        try:
+            async with self._driver.session() as session:
+                await session.run(
+                    cypher,
+                    id=unit.id,
+                    text=unit.text,
+                    source_id=unit.source_id,
+                    tenant_id=unit.tenant_id,
+                    session_id=unit.session_id,
+                    episode_id=unit.episode_id,
+                    window_id=unit.window_id,
+                    created=unit.created.isoformat(),
+                    metadata=json.dumps(unit.metadata, default=str),
+                )
+            GRAPH_WRITE_LATENCY.labels(operation="upsert_context_unit").observe(
+                time.perf_counter() - t0
+            )
+        except Exception:
+            GRAPH_WRITE_ERRORS.labels(operation="upsert_context_unit").inc()
+            logger.exception("context_unit_persist_failed", extra={"context_id": unit.id})
+            raise
+
+    async def link_entity_to_context(
+        self,
+        entity_id: str,
+        context_id: str,
+        tenant_id: str,
+        weight: float = 1.0,
+    ) -> None:
+        """MERGE a CO_OCCURRED_IN edge from Entity to ContextUnit with co-occurrence weight."""
+        t0 = time.perf_counter()
+        cypher = (
+            "MATCH (e:Entity {id: $entity_id}), (ctx:ContextUnit {id: $context_id}) "
+            "WHERE e.tenant_id = $tenant_id AND ctx.tenant_id = $tenant_id "
+            "MERGE (e)-[r:CO_OCCURRED_IN]->(ctx) "
+            "SET r.weight = $weight, r.tenant_id = $tenant_id"
+        )
+        try:
+            async with self._driver.session() as session:
+                await session.run(
+                    cypher,
+                    entity_id=entity_id,
+                    context_id=context_id,
+                    tenant_id=tenant_id,
+                    weight=weight,
+                )
+            GRAPH_WRITE_LATENCY.labels(operation="link_entity_to_context").observe(
+                time.perf_counter() - t0
+            )
+        except Exception:
+            GRAPH_WRITE_ERRORS.labels(operation="link_entity_to_context").inc()
+            logger.exception(
+                "link_entity_to_context_failed",
+                extra={"entity_id": entity_id, "context_id": context_id},
+            )
+            raise
+
+    async def link_adjacent_contexts(
+        self,
+        prev_context_id: str,
+        curr_context_id: str,
+        tenant_id: str,
+    ) -> None:
+        """MERGE a NEXT_CONTEXT edge linking sequential ContextUnits."""
+        t0 = time.perf_counter()
+        cypher = (
+            "MATCH (prev:ContextUnit {id: $prev_id}), (curr:ContextUnit {id: $curr_id}) "
+            "WHERE prev.tenant_id = $tenant_id AND curr.tenant_id = $tenant_id "
+            "MERGE (prev)-[r:NEXT_CONTEXT]->(curr) "
+            "SET r.tenant_id = $tenant_id"
+        )
+        try:
+            async with self._driver.session() as session:
+                await session.run(
+                    cypher,
+                    prev_id=prev_context_id,
+                    curr_id=curr_context_id,
+                    tenant_id=tenant_id,
+                )
+            GRAPH_WRITE_LATENCY.labels(operation="link_adjacent_contexts").observe(
+                time.perf_counter() - t0
+            )
+        except Exception:
+            GRAPH_WRITE_ERRORS.labels(operation="link_adjacent_contexts").inc()
+            logger.exception(
+                "link_adjacent_contexts_failed",
+                extra={"prev_id": prev_context_id, "curr_id": curr_context_id},
+            )
+            raise
+
+    async def get_latest_context_for_source(self, source_id: str, tenant_id: str) -> str | None:
+        """Return the id of the most recent ContextUnit for a given source + tenant."""
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (ctx:ContextUnit)
+                    WHERE ctx.source_id = $source_id AND ctx.tenant_id = $tenant_id
+                    RETURN ctx.id AS context_id
+                    ORDER BY ctx.created DESC LIMIT 1
+                    """,
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                )
+                row = await result.single()
+                return row["context_id"] if row else None
+        except Exception:
+            logger.exception(
+                "get_latest_context_failed",
+                extra={"source_id": source_id, "tenant_id": tenant_id},
+            )
+            return None
 
     async def upsert_entity(
         self,
@@ -360,7 +486,7 @@ class GraphPersistenceService:
                 result = await session.run(
                     """
                     MATCH (e:Entity)
-                    WHERE e.tenant_id = $tenant_id OR (e.tenant_id = '' AND $tenant_id <> '')
+                    WHERE e.tenant_id = $tenant_id
                     RETURN e
                     ORDER BY e.modified DESC
                     LIMIT $limit
@@ -456,6 +582,7 @@ class GraphPersistenceService:
     async def fetch_neighbor_entities(
         self,
         entity_ids: list[str],
+        tenant_id: str,
     ) -> list[Entity]:
         """Return 1-hop outgoing neighbours of *entity_ids* not already in that set.
 
@@ -471,10 +598,12 @@ class GraphPersistenceService:
                     """
                     MATCH (src:Entity)-[]->(tgt:Entity)
                     WHERE src.id IN $entity_ids AND NOT tgt.id IN $entity_ids
+                      AND tgt.tenant_id = $tenant_id
                     RETURN DISTINCT tgt AS e
                     LIMIT 100
                     """,
                     entity_ids=entity_ids,
+                    tenant_id=tenant_id,
                 )
                 rows = await result.data()
         except Exception:

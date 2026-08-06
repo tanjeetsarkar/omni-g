@@ -1,3 +1,5 @@
+"""ProcessorRuntime — initialises all service connections for a worker process."""
+
 from __future__ import annotations
 
 import logging
@@ -8,19 +10,14 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 from qdrant_client import AsyncQdrantClient
 
 from ..dedup.deduplicator import ContentDeduplicator
+from ..extractors.zeromem_extractor import ZeroMemExtractor
 from ..graph.persistence import GraphPersistenceService
 from ..graph.schema import GraphSchemaManager
-from ..graphrag.community import CommunityDetector
-from ..graphrag.indexer import GraphRAGIndexer
-from ..graphrag.summarizer import CommunitySummarizer
-from ..llm.extractor import LLMExtractor
+from ..graph.temporal_store import TemporalStore
+from ..indexers.vector import ContextUnitIndexer
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher
-from .assessment import AssessmentService
-from .assessment_publisher import AssessmentPublisher
 from .config import Settings
-from .evidence_publisher import EvidencePublisher
-from .hypothesis import HypothesisService
 from .pipeline import ProcessingPipeline
 from .stage_publisher import StageEventPublisher
 
@@ -33,34 +30,26 @@ class ProcessorRuntime:
     deduplicator: ContentDeduplicator
     neo4j_driver: AsyncDriver
     qdrant_client: AsyncQdrantClient
+    vector_indexer: ContextUnitIndexer
+    temporal_store: TemporalStore
     alert_publisher: AlertPublisher
     stage_publisher: StageEventPublisher
-    evidence_publisher: EvidencePublisher
-    assessment_publisher: AssessmentPublisher
 
     @classmethod
     async def create(cls, cfg: Settings, *, worker_id: int) -> ProcessorRuntime:
         logger.info(
             "Initialising processor worker dependencies",
-            extra={
-                "worker_id": worker_id,
-                "kafka_raw_topic": cfg.kafka_raw_topic,
-                "kafka_dlq_topic": cfg.kafka_dlq_topic,
-                "kafka_alerts_topic": cfg.kafka_alerts_topic,
-                "kafka_evidence_topic": cfg.kafka_evidence_topic,
-                "kafka_processor_events_topic": cfg.kafka_processor_events_topic,
-                "redis_url": cfg.redis_url,
-                "neo4j_url": cfg.neo4j_url,
-                "qdrant_url": cfg.qdrant_url,
-            },
+            extra={"worker_id": worker_id},
         )
 
         deduplicator = ContentDeduplicator(ttl_seconds=cfg.dedup_ttl_seconds)
         await deduplicator.connect(cfg.redis_url)
         logger.info("Deduplicator connected", extra={"worker_id": worker_id})
 
-        extractor = LLMExtractor()
-        logger.info("LLM extractor initialised", extra={"worker_id": worker_id})
+        zeromem_extractor = ZeroMemExtractor()
+        logger.info(
+            "ZeroMemExtractor initialised (lazy model load)", extra={"worker_id": worker_id}
+        )
 
         neo4j_driver = AsyncGraphDatabase.driver(
             cfg.neo4j_url,
@@ -85,60 +74,47 @@ class ProcessorRuntime:
         graph_persistence = GraphPersistenceService(neo4j_driver)
         logger.info("GraphPersistenceService initialised", extra={"worker_id": worker_id})
 
-        community_detector = CommunityDetector(neo4j_driver)
-        summarizer = CommunitySummarizer(
-            neo4j_driver,
-            ollama_url=cfg.ollama_url,
-            model=cfg.ollama_model,
-            openai_api_key=cfg.openai_api_key,
+        vector_indexer = ContextUnitIndexer(
+            qdrant_url=cfg.qdrant_url,
+            api_key=cfg.qdrant_api_key,
         )
-        graphrag_indexer = GraphRAGIndexer(community_detector, summarizer)
-        logger.info("GraphRAG indexer initialised", extra={"worker_id": worker_id})
+        logger.info(
+            "ContextUnitIndexer initialised (lazy BGE-M3 load)", extra={"worker_id": worker_id}
+        )
+
+        temporal_store = TemporalStore(postgres_url=cfg.postgres_url)
+        try:
+            await temporal_store.connect()
+            logger.info("TemporalStore connected", extra={"worker_id": worker_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "TemporalStore connection failed (continuing without temporal hierarchy)",
+                extra={"error": str(exc), "worker_id": worker_id},
+            )
 
         alert_publisher = AlertPublisher(
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_alerts_topic,
         )
-        evidence_publisher = EvidencePublisher(
-            brokers=cfg.kafka_brokers,
-            topic=cfg.kafka_evidence_topic,
-        )
-        assessment_service = AssessmentService()
-        assessment_publisher = AssessmentPublisher(
-            brokers=cfg.kafka_brokers,
-            topic=cfg.kafka_assessment_topic,
-        )
-        hypothesis_service = HypothesisService()
         stage_publisher = StageEventPublisher(
             brokers=cfg.kafka_brokers,
             topic=cfg.kafka_processor_events_topic,
         )
 
-        # Late import to avoid circular dependency: tasks → runtime → pipeline
-        from .tasks import enqueue_reanalyze_kiq  # noqa: PLC0415
-
         pipeline = ProcessingPipeline(
             deduplicator=deduplicator,
-            extractor=extractor,
+            zeromem_extractor=zeromem_extractor,
+            vector_indexer=vector_indexer,
+            temporal_store=temporal_store,
             resolver=resolver,
             graph_persistence=graph_persistence,
-            graphrag_indexer=graphrag_indexer,
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
-            evidence_publisher=evidence_publisher,
-            assessment_service=assessment_service,
-            assessment_publisher=assessment_publisher,
-            hypothesis_service=hypothesis_service,
-            reanalyze_enqueuer=enqueue_reanalyze_kiq,
         )
 
         logger.info(
             "Processor runtime initialised",
-            extra={
-                "worker_id": worker_id,
-                "neo4j_url": cfg.neo4j_url,
-                "qdrant_url": cfg.qdrant_url,
-            },
+            extra={"worker_id": worker_id, "neo4j_url": cfg.neo4j_url},
         )
 
         return cls(
@@ -146,10 +122,10 @@ class ProcessorRuntime:
             deduplicator=deduplicator,
             neo4j_driver=neo4j_driver,
             qdrant_client=qdrant_client,
+            vector_indexer=vector_indexer,
+            temporal_store=temporal_store,
             alert_publisher=alert_publisher,
             stage_publisher=stage_publisher,
-            evidence_publisher=evidence_publisher,
-            assessment_publisher=assessment_publisher,
         )
 
     async def process_event(self, event: dict[str, Any]) -> None:
@@ -159,6 +135,7 @@ class ProcessorRuntime:
         await self.deduplicator.close()
         await self.neo4j_driver.close()
         await self.qdrant_client.close()
+        await self.vector_indexer.close()
+        await self.temporal_store.close()
         self.alert_publisher.close()
         self.stage_publisher.close()
-        self.assessment_publisher.close()

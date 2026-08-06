@@ -80,6 +80,28 @@ services:
     networks:
       - omni-g
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: omni-g-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-omni_g}
+      POSTGRES_USER: ${POSTGRES_USER:-omni-g}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omni-g-local-dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omni-g} -d ${POSTGRES_DB:-omni_g}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - core
+      - all
+    networks:
+      - omni-g
+
   neo4j:
     image: neo4j:5.26.26-community
     container_name: omni-g-neo4j
@@ -607,6 +629,7 @@ services:
 
 volumes:
   redis_data:
+  postgres_data:
   neo4j_data:
   qdrant_data:
   ollama_data:

@@ -13,7 +13,6 @@ import { useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import {
   Activity,
-  AlertCircle,
   CheckCircle,
   ChevronDown,
   ChevronUp,

@@ -233,8 +233,8 @@ async def test_schema_initialize() -> None:
     schema = GraphSchemaManager(driver)
     await schema.initialize()
 
-    # 1 constraint + 4 indexes = 5 calls
-    assert session_mock.run.call_count == 7
+    # 2 constraint + 10 indexes = 12 calls
+    assert session_mock.run.call_count == 12
 
     calls_text = " ".join(str(c) for c in session_mock.run.call_args_list)
     assert "CREATE CONSTRAINT" in calls_text

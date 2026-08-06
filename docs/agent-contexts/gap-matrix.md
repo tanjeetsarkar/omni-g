@@ -2,7 +2,55 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** July 5, 2026 — V2 Step 9 complete: Competing Hypotheses and Background Reanalysis implemented. `HypothesisService` added to `src/processor/hypothesis.py`: generates 2–4 competing hypotheses from evidence via LLM structured output; `score_hypotheses()` applies ACH likelihood-ratio scoring — `(supporting+1)/(contradicting+1)` normalised across all candidates — and ranks by confidence (LEADING > PROBABLE > PLAUSIBLE > CANDIDATE). Pipeline step 3.7 added before assessment: generates candidates, scores them, binds the leading hypothesis ID to the produced Assessment (`assessment.hypothesis_id`), and dispatches `reanalyze_kiq_task` as a background Celery job so deep ACH runs outside the Kafka hot path. `reanalyze_kiq_task` (`processor.reanalyze_kiq`) added to `tasks.py`: accepts serialised `CollectedEvidence` payload, runs a full hypothesis-generation + ACH + assessment-production pass, retries up to 2× on failure. `ExtractionResult.hypotheses` field added to carry all generated hypotheses per pipeline run. `AssessmentService.generate()` updated to accept `leading_hypothesis` parameter and stamp `hypothesis_id` on the produced Assessment. `HypothesisService` wired into `ProcessorRuntime`; `enqueue_reanalyze_kiq` late-imported to avoid circular dependency. `HYPOTHESES_GENERATED` Prometheus counter added. 22 new tests; 282 total pass.
+**Last Updated:** August 6, 2026 — V3 Zero-Mem integration, Phase 8 and 9 complete.
+
+---
+
+## V3 Zero-Mem Integration (August 2026)
+
+**Philosophy shift:** V3 replaces the V2 intelligence-cycle (KIQ/Evidence/Hypothesis/Assessment) and LLM-driven entity extraction with a **Zero-Token Memory Paradigm**. NER-based extraction (spaCy + GLiNER) handles entity detection. LLM calls are reserved solely for Delivery final synthesis and optional briefing generation.
+
+### Completed (Phases 1–9)
+
+| Phase | What Changed | Status |
+|-------|-------------|--------|
+| **Phase 1 — Infrastructure** | Added `postgres:16-alpine` service to `docker-compose.yml` (core profile); Neo4j APOC already configured (`NEO4J_PLUGINS: '["apoc"]'`); removed `stix2`, `langchain`, `instructor`, `pydantic-ai-slim`, `openai` from `pyproject.toml`; added `spacy>=3.8`, `gliner>=0.2`, `FlagEmbedding>=1.3`, `asyncpg>=0.30`; updated Dockerfile to drop `uv.lock --frozen` and add `python -m spacy download en_core_web_trf`; added `postgres_url` to `config.py` | ✅ Complete |
+| **Phase 2 — V2 Model Deprecation** | Deleted `assessment.py`, `assessment_publisher.py`, `hypothesis.py`, `evidence_publisher.py` from `src/processor/`; deleted entire `src/graphrag/` directory; rewrote `entities.py` to remove V2 intelligence-cycle models (`SourceClassification`, `ReliabilityRating`, `CredibilityRating`, `CollectedEvidence`, `ConfidenceBand`, `Hypothesis`, `Assessment`, `CollectionGap`); added `ContextUnit` model; updated `ExtractionResult` (removed `kiq_id`, `collected_evidence`, `hypotheses`, `assessment`; added `context_unit_id`, `entity_context_weights`); rewrote `pipeline.py` removing LLM extraction + grounding + evidence + hypothesis + assessment steps; rewrote `runtime.py` removing V2 deps; rewrote `tasks.py` removing `reanalyze_kiq` task; updated `BriefingScriptGenerator` to remove GraphRAG dep; updated `models/__init__.py` | ✅ Complete |
+| **Phase 3 — ContextUnit-First Graph Schema** | Added ContextUnit unique constraint + 4 indexes to `schema.py`; added `upsert_context_unit()`, `link_entity_to_context()` (CO_OCCURRED_IN edge), `link_adjacent_contexts()` (NEXT_CONTEXT edge), `get_latest_context_for_source()` to `persistence.py`; created `src/graph/temporal_store.py` (asyncpg-backed, tables: `context_units_temporal`, `temporal_episodes`) | ✅ Complete |
+| **Phase 4 — Zero-Token Extractor** | Created `src/extractors/zeromem_extractor.py` (spaCy `en_core_web_trf` + GLiNER `urchade/gliner_small-v2.1`, zero LLM calls, co-occurrence weights `w(d,e) = c(e,d)/Σc(e',d)`); created `src/indexers/vector.py` (`ContextUnitIndexer` with BGE-M3, Qdrant collection `context_units_{tenant_id}`); updated pipeline Step 3 to: create ContextUnit → ZeroMemExtractor.extract() → persist ContextUnit + CO_OCCURRED_IN edges + NEXT_CONTEXT link → Qdrant BGE-M3 index → temporal store | ✅ Complete |
+| **Phase 5 — Dual-View Retrieval Engine** | Created `src/retrieval/profiler.py` (`QueryProfiler` → `QueryProfile` with route, d_max, keywords, temporal_cues, anchor_texts); `src/retrieval/scored_context.py` (`ScoredContext` dataclass); `src/retrieval/relational.py` (`RelationalRetriever`: Qdrant entity alignment → APOC PPR γ=0.6 → Python BFS fallback); `src/retrieval/temporal.py` (`TemporalRetriever`: Postgres temporal hierarchy → Neo4j recency fallback); `src/retrieval/fusion.py` (`DualViewFusion`: per-view normalization → route-biased weighted blend) | ✅ Complete |
+| **Phase 6 — Evidence Calibration** | Created `src/calibration/calibrator.py` (`EvidenceCalibrator`: empty-filter → dedup by 100-char fingerprint → token-budget cutoff at `l_max * 4 chars`) | ✅ Complete |
+| **Phase 7 — Search Endpoint** | Rewrote `POST /search` in `main.py` with full dual-view pipeline: `QueryProfiler` → parallel `RelationalRetriever` + `TemporalRetriever` → `DualViewFusion` → `EvidenceCalibrator` → R(q); updated `SearchResponse` to include `context_units: list[dict]`; fallback to `search_entities` recency when retrieval returns no entities; updated `/briefings/generate` to use new `BriefingScriptGenerator` interface | ✅ Complete |
+| **Phase 8 — Frontend Apache ECharts Canvas** | Replaced React Flow with high-performance Apache ECharts force-directed graph canvas; created `useEChartsGraphAdapter` to transform response nodes & edges based on depth layout; created `SourceTracePane` showing verbatim raw context, scores, timestamps and references; uninstalled `@xyflow/react` and pruned all obsolete React Flow files | ✅ Complete |
+| **Phase 9 — Interactive Drill-Downs & E2E Verification** | Implemented dynamic localized multi-hop expansion endpoints; integrated double-click nodes with dynamic graph state merging on canvas; created comprehensive unit & end-to-end regression tests validating memory/LLM zero-token operations and latency constraint compliance (<120ms) | ✅ Complete |
+| **Phase 10 — Temporal Hierarchy Population & Search Quality** | Added `turn_id` to `ContextUnit` model; added `_assign_temporal_ids()` to pipeline (deterministic bucketing: session=daily, episode=source-domain+hour, window=15-min, turn=event_id); fixed concat bug in pipeline Step 3f; `insert_context_unit_temporal` now writes all four hierarchy fields; `upsert_episode` added to `TemporalStore` and called each ingest; `fetch_neighbor_entities` scoped to `tenant_id`; `search_entities` tenant-leak clause removed; `TemporalRetriever` gates on `temporal_cues` (returns `[]` for pure relational queries); `_cue_to_episode_ids()` maps spaCy cue text → episode hashes via `dateparser`; `DualViewFusion` drops candidates with score < 0.05 | ✅ Complete |
+
+### Open V3 Gaps
+
+| Area | Gap | Priority |
+|------|-----|----------|
+| **Briefing content source** | `BriefingScriptGenerator` uses placeholder script when no context provided; natural replacement is calibrated R(q) context arrays — follow-on work | Medium |
+| **Entity resolver embeddings** | `EntityResolver` still uses Ollama `nomic-embed-text` (falls back to hash); should migrate to BGE-M3 for consistency with V3 indexing | Medium |
+| **LLM extractor module** | `src/llm/extractor.py` still exists with stale pydantic-ai/instructor imports; not imported by any V3 path but will fail if imported. | Low |
+| **Temporal cue parsing** | `TemporalRetriever` now resolves cues via `dateparser` → episode hash lookup before recency fallback; requires `dateparser` in `pyproject.toml` | Low |
+| **APOC PPR testing** | `RelationalRetriever._ppr_retrieve` requires APOC on Neo4j; local dev may need `NEO4J_PLUGINS=["apoc"]` verified working | Medium |
+
+### V2 Intelligence Cycle: Deprecated
+
+The following V2 features have been **intentionally removed** as part of the V3 Zero-Mem transition:
+
+| Removed | Reason |
+|---------|--------|
+| `KIQ`, `CollectedEvidence`, `Hypothesis`, `Assessment`, `CollectionGap` models | Replaced by ContextUnit-first paradigm; intelligence cycle re-emerges at Delivery synthesis level |
+| `LLMExtractor` (pipeline stage) | Replaced by `ZeroMemExtractor` (NER-based, zero LLM calls on ingest path) |
+| `GraphRAGIndexer`, `CommunityDetector`, `CommunitySummarizer` | Replaced by dual-view PPR retrieval; community summaries replaced by calibrated R(q) |
+| `EvidencePublisher`, `AssessmentPublisher` | No longer needed; intelligence cycle outputs produced at Delivery |
+| `HypothesisService`, `AssessmentService` | Deprecated; ACH at Delivery synthesis layer (future) |
+| `langchain`, `instructor`, `pydantic-ai-slim`, `openai`, `stix2` Python packages | Removed from `pyproject.toml` |
+
+---
+
+ `HypothesisService` added to `src/processor/hypothesis.py`: generates 2–4 competing hypotheses from evidence via LLM structured output; `score_hypotheses()` applies ACH likelihood-ratio scoring — `(supporting+1)/(contradicting+1)` normalised across all candidates — and ranks by confidence (LEADING > PROBABLE > PLAUSIBLE > CANDIDATE). Pipeline step 3.7 added before assessment: generates candidates, scores them, binds the leading hypothesis ID to the produced Assessment (`assessment.hypothesis_id`), and dispatches `reanalyze_kiq_task` as a background Celery job so deep ACH runs outside the Kafka hot path. `reanalyze_kiq_task` (`processor.reanalyze_kiq`) added to `tasks.py`: accepts serialised `CollectedEvidence` payload, runs a full hypothesis-generation + ACH + assessment-production pass, retries up to 2× on failure. `ExtractionResult.hypotheses` field added to carry all generated hypotheses per pipeline run. `AssessmentService.generate()` updated to accept `leading_hypothesis` parameter and stamp `hypothesis_id` on the produced Assessment. `HypothesisService` wired into `ProcessorRuntime`; `enqueue_reanalyze_kiq` late-imported to avoid circular dependency. `HYPOTHESES_GENERATED` Prometheus counter added. 22 new tests; 282 total pass.
 
 ## Scope Change (Intentional, June 2026)
 

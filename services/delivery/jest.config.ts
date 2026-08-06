@@ -9,10 +9,6 @@ const config: Config = {
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
-    // Stub CSS imports from React Flow
-    "^@xyflow/react/dist/style\\.css$": "<rootDir>/src/__mocks__/styleMock.ts",
-    // Stub @xyflow/react (not installed until pnpm install runs)
-    "^@xyflow/react$": "<rootDir>/src/__mocks__/@xyflow/react.tsx",
     // Stub dagre (not installed until pnpm install runs)
     "^dagre$": "<rootDir>/src/__mocks__/dagre.ts",
   },

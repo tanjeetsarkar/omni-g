@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import type { Entity } from "../types/entities";
+import type { Entity, Relationship } from "../types/entities";
 import { getSocket } from "../lib/socket";
 
 interface AlertPayload {
@@ -18,6 +18,7 @@ export function useRealtimeNodes({
   enabled = true,
 }: UseRealtimeNodesOptions) {
   const [newEntities, setNewEntities] = useState<Entity[]>([]);
+  const [newRelationships, setNewRelationships] = useState<Relationship[]>([]);
 
   const fetchEntities = useCallback(
     async (entityIds: string[]) => {
@@ -34,12 +35,22 @@ export function useRealtimeNodes({
           }),
         });
         if (!res.ok) return;
-        const data: { entities?: Entity[] } = await res.json();
+        const data: { entities?: Entity[]; relationships?: Relationship[] } =
+          await res.json();
         if (data.entities && data.entities.length > 0) {
           setNewEntities((prev) => {
             const existingIds = new Set(prev.map((e) => e.id));
             const incoming = data.entities!.filter(
               (e) => !existingIds.has(e.id),
+            );
+            return incoming.length > 0 ? [...prev, ...incoming] : prev;
+          });
+        }
+        if (data.relationships && data.relationships.length > 0) {
+          setNewRelationships((prev) => {
+            const existingIds = new Set(prev.map((r) => r.id));
+            const incoming = data.relationships!.filter(
+              (r) => !existingIds.has(r.id),
             );
             return incoming.length > 0 ? [...prev, ...incoming] : prev;
           });
@@ -72,7 +83,10 @@ export function useRealtimeNodes({
     };
   }, [enabled, fetchEntities]);
 
-  const clearNewEntities = useCallback(() => setNewEntities([]), []);
+  const clearNewEntities = useCallback(() => {
+    setNewEntities([]);
+    setNewRelationships([]);
+  }, []);
 
-  return { newEntities, clearNewEntities };
+  return { newEntities, newRelationships, clearNewEntities };
 }

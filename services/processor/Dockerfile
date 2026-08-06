@@ -8,8 +8,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_NO_CACHE=1
 
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --no-dev --frozen
+COPY pyproject.toml README.md ./
+RUN uv sync --no-dev
 
 # ============================================================
 # Runtime stage
@@ -21,6 +21,9 @@ WORKDIR /app
 # Copy installed environment from builder.
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Download spaCy model used by ZeroMemExtractor and QueryProfiler
+RUN python -m spacy download en_core_web_trf
 
 # Run as non-root.
 RUN useradd --uid 1001 --create-home appuser

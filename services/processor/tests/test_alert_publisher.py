@@ -139,7 +139,7 @@ class TestPipelineStep7:
     ) -> None:
         """Pipeline Step 7 does NOT call publisher when confidence <= 0.5."""
         from src.dedup.deduplicator import ContentDeduplicator
-        from src.llm.extractor import LLMExtractor
+        from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
@@ -150,7 +150,7 @@ class TestPipelineStep7:
         mock_publisher = AsyncMock(spec=AlertPublisher)
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            extractor=cast(LLMExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
             alert_publisher=cast(AlertPublisher, mock_publisher),
         )
         await pipeline.process({"id": "evt-low", "payload": {"text": "no entities here"}})
@@ -163,7 +163,7 @@ class TestPipelineStep7:
     ) -> None:
         """Pipeline Step 7 calls publisher when confidence > 0.5."""
         from src.dedup.deduplicator import ContentDeduplicator
-        from src.llm.extractor import LLMExtractor
+        from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
@@ -174,7 +174,7 @@ class TestPipelineStep7:
         mock_publisher = AsyncMock(spec=AlertPublisher)
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            extractor=cast(LLMExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
             alert_publisher=cast(AlertPublisher, mock_publisher),
         )
         await pipeline.process(
@@ -193,7 +193,7 @@ class TestPipelineStep7:
     ) -> None:
         """Pipeline works normally when no AlertPublisher is provided."""
         from src.dedup.deduplicator import ContentDeduplicator
-        from src.llm.extractor import LLMExtractor
+        from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
         mock_llm_extractor.extract.return_value = ExtractionResult(
@@ -203,7 +203,7 @@ class TestPipelineStep7:
         )
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            extractor=cast(LLMExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
         )
         result = await pipeline.process({"id": "evt-nopub", "payload": {"text": "test"}})
         assert result is not None
