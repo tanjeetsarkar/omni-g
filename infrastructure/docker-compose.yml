@@ -389,6 +389,8 @@ services:
     profiles:
       - services
       - all
+    networks:
+      - omni-g
 
   processor-worker:
     build:
@@ -442,7 +444,8 @@ services:
       dockerfile: Dockerfile
     container_name: omni-g-processor-beat
     command: ["celery", "-A", "src.processor.celery_app", "beat",
-              "--loglevel=${CELERY_LOG_LEVEL:-info}"]
+              "--loglevel=${CELERY_LOG_LEVEL:-info}",
+              "-s", "/tmp/celerybeat-schedule"]
     environment:
       LOG_LEVEL: ${PROCESSOR_LOG_LEVEL:-info}
       KAFKA_ENABLED: "false"
@@ -464,11 +467,12 @@ services:
       context: ../services/delivery
       dockerfile: Dockerfile
       target: runtime
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:3001}
+        NEXT_PUBLIC_TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
     container_name: omni-g-delivery
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
-      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-http://localhost:3001}
-      NEXT_PUBLIC_TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
       PROCESSOR_URL: ${PROCESSOR_URL:-http://processor:8001}
       AGGREGATOR_URL: ${AGGREGATOR_URL:-http://aggregator:8080}
       NEO4J_URL: ${NEO4J_URL:-bolt://neo4j:7687}
