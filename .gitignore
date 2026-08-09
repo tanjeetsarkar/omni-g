@@ -87,3 +87,4 @@ minio-data/
 postgres_data/
 kafka-logs/
 redis-dump.rdb
+*.env*
