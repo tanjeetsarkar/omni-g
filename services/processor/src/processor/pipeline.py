@@ -18,12 +18,11 @@ Stages
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 from uuid import uuid4
 
 from prometheus_client import Counter, Histogram
@@ -33,31 +32,13 @@ from pydantic import ValidationError as PydanticValidationError
 from ..dedup.deduplicator import ContentDeduplicator
 from ..extractors.zeromem_extractor import ZeroMemExtractor
 from ..graph.persistence import GraphPersistenceService
+from ..graph.temporal_hashes import assign_temporal_ids
 from ..graph.temporal_store import TemporalStore
 from ..indexers.vector import ContextUnitIndexer
 from ..models.entities import ContextUnit, Entity, ExtractionResult
 from ..resolution.resolver import EntityResolver
 from .alert_publisher import AlertPublisher, AnalystAlert
 from .stage_publisher import StageEventPublisher
-
-
-def _assign_temporal_ids(
-    tenant_id: str,
-    source: str | None,
-    now: datetime,
-    event_id: str,
-) -> tuple[str, str, str, str]:
-    # Deterministic bucket IDs derived from ingest metadata, no external state needed
-    def _h(key: str) -> str:
-        return hashlib.sha256(key.encode()).hexdigest()[:12]
-
-    ts = int(now.timestamp())
-    domain = urlparse(source or "").netloc or "unknown"
-    session_id = _h(f"{tenant_id}:{now.date().isoformat()}")
-    episode_id = _h(f"{tenant_id}:{domain}:{ts // 3600}")
-    window_id = _h(f"{tenant_id}:{ts // 900}")
-    return session_id, episode_id, window_id, event_id
-
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +74,27 @@ CONTEXT_UNITS_CREATED = Counter(
     "processor_context_units_created_total",
     "ContextUnit nodes created and persisted",
     ["tenant_id"],
+)
+
+# Fail-open failure counters (C3 challenge remediation)
+GLINER_FAILURES_TOTAL = Counter(
+    "processor_gliner_failures_total",
+    "GLiNER extraction failures (fail-open — extraction continues with spaCy only)",
+)
+
+TEMPORAL_INSERT_FAILURES_TOTAL = Counter(
+    "processor_temporal_insert_failures_total",
+    "Temporal store insert failures (fail-open — pipeline continues without temporal record)",
+)
+
+VECTOR_INDEX_FAILURES_TOTAL = Counter(
+    "processor_vector_index_failures_total",
+    "Vector index (Qdrant) upsert failures (fail-open — pipeline continues without vector index)",
+)
+
+CONTEXT_UNIT_PERSIST_FAILURES_TOTAL = Counter(
+    "processor_context_unit_persist_failures_total",
+    "ContextUnit graph persistence failures (fail-open — pipeline continues without context node)",
 )
 
 
@@ -213,7 +215,7 @@ class ProcessingPipeline:
         now = datetime.now(UTC)
         context_id = f"context--{uuid4()}"
 
-        session_id, episode_id, window_id, turn_id = _assign_temporal_ids(
+        session_id, episode_id, window_id, turn_id = assign_temporal_ids(
             envelope.tenant_id, envelope.source, now, envelope.id
         )
 
@@ -234,7 +236,12 @@ class ProcessingPipeline:
             },
         )
 
-        extraction = self._zeromem_extractor.extract(text, context_id, envelope.tenant_id)
+        # Offload blocking spaCy + GLiNER calls to a thread pool so they
+        # don't block the asyncio event loop (C2 challenge remediation).
+        loop = asyncio.get_event_loop()
+        extraction = await loop.run_in_executor(
+            None, self._zeromem_extractor.extract, text, context_id, envelope.tenant_id
+        )
         extraction = extraction.model_copy(
             update={
                 "source_event_id": envelope.id,
@@ -261,6 +268,7 @@ class ProcessingPipeline:
                             prev_ctx_id, context_id, envelope.tenant_id
                         )
             except Exception:
+                CONTEXT_UNIT_PERSIST_FAILURES_TOTAL.inc()
                 logger.exception(
                     "context_unit_persist_failed",
                     extra={"event_id": envelope.id, "context_id": context_id},
@@ -279,6 +287,7 @@ class ProcessingPipeline:
                     envelope.tenant_id,
                 )
             except Exception:
+                VECTOR_INDEX_FAILURES_TOTAL.inc()
                 logger.exception(
                     "vector_index_failed",
                     extra={"event_id": envelope.id, "context_id": context_id},
@@ -290,6 +299,7 @@ class ProcessingPipeline:
                 await self._temporal_store.insert_context_unit_temporal(context_unit)
                 await self._temporal_store.upsert_episode(episode_id, envelope.tenant_id, now)
             except Exception:
+                TEMPORAL_INSERT_FAILURES_TOTAL.inc()
                 logger.exception(
                     "temporal_insert_failed",
                     extra={"event_id": envelope.id, "context_id": context_id},

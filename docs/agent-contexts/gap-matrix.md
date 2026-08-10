@@ -2,7 +2,7 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 6, 2026 — V3 Zero-Mem integration, Phase 8 and 9 complete.
+**Last Updated:** August 10, 2026 — Workstream C challenge remediation complete.
 
 ---
 
@@ -133,6 +133,25 @@ The following Delivery UX enhancements from roadmapv3.md have been implemented:
 - `services/delivery/src/components/graph/PipelineProgressToast.tsx` — B7 notification log integration
 - `services/delivery/src/app/explorer/page.tsx` — integrated all UX components
 - `services/delivery/src/app/layout.tsx` — wrapped with `NotificationProvider`
+
+### Workstream C: Challenge Remediation (August 10, 2026)
+
+The following challenge remediation items from roadmapv3.md have been implemented:
+
+| Challenge | What Changed | Status |
+|-----------|-------------|--------|
+| **C1: PPR Result Caching** | `RelationalRetriever._ppr_retrieve` now checks Redis cache before calling APOC PPR; results cached with 60s TTL keyed on `ppr:{tenant_id}:{hash(anchor_ids)}:{d_max}`; Prometheus counters `processor_ppr_cache_hits_total` and `processor_ppr_cache_misses_total` added | ✅ Complete |
+| **C2: Async NER Extraction** | Blocking spaCy + GLiNER calls in `ProcessingPipeline.process()` wrapped in `loop.run_in_executor()` to offload from the asyncio event loop | ✅ Complete |
+| **C3: Fail-Open Metrics** | Distinct Prometheus counters added for each fail-open branch: `processor_gliner_failures_total`, `processor_temporal_insert_failures_total`, `processor_vector_index_failures_total`, `processor_context_unit_persist_failures_total`; wired into all `except` blocks in the pipeline | ✅ Complete |
+| **C4: Shared Temporal Hash Module** | Extracted `assign_temporal_ids()` and `episode_id_for_cue()` into shared `src/graph/temporal_hashes.py`; `pipeline.py` imports from the shared module; `temporal.py` uses shared `episode_id_for_cue()` instead of re-implementing the hash with hard-coded `"unknown"` domain; added logging when temporal cue parsing fails | ✅ Complete |
+
+**New files created:**
+- `services/processor/src/graph/temporal_hashes.py` — shared temporal hash functions
+
+**Modified files:**
+- `services/processor/src/processor/pipeline.py` — C2 async NER, C3 fail-open metrics, C4 shared hashes
+- `services/processor/src/retrieval/relational.py` — C1 PPR caching, unified LLMClient for embeddings
+- `services/processor/src/retrieval/temporal.py` — C4 shared hashes + logging
 
 ---
 
