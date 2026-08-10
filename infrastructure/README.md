@@ -23,7 +23,7 @@ Omni-G uses **Docker Compose profiles** to let you start only the services you n
 | `core` | Kafka, Redis, Neo4j | ~2.5 GB | Backend development, pipeline testing |
 | `kafka-ui` | Redpanda Console | ~256 MB | Visual topic/message inspection and Kafka admin |
 | `vector` | Qdrant | ~512 MB | Entity resolution development |
-| `ai` | Ollama, Kokoro TTS | ~3 GB (+ model weights) | LLM extraction, audio briefings |
+| `ai` | Kokoro TTS | ~512 MB | Audio briefings (TTS). Ollama is optional — when `LLM_PROVIDER=openrouter`, no local LLM container is needed. |
 | `observability` | Prometheus, Grafana, Loki | ~512 MB | Monitoring and dashboards |
 | `storage` | MinIO | ~256 MB | Audio file storage, exports |
 | `services` | Aggregator, Processor, Delivery | ~512 MB | Running built application services |
@@ -133,9 +133,18 @@ curl http://localhost:6333/health
 
 ---
 
-### `ai` — Ollama + Kokoro TTS
+### `ai` — Kokoro TTS (+ optional Ollama)
 
-**Ollama** serves local LLMs on port `11434`. **Models are not pre-pulled** — pull them manually after the container starts:
+By default, Omni-G uses **OpenRouter** as the LLM backend (cloud-hosted, no local container needed).
+Set `LLM_PROVIDER=openrouter` + `OPENROUTER_API_KEY` in `.env.docker.local` to use it.
+
+**Kokoro TTS** serves a FastAPI text-to-speech endpoint on port `8000`.
+
+```bash
+curl http://localhost:8000/health
+```
+
+**Ollama (optional)** — If you prefer a local LLM, uncomment the `ollama` service block in `docker-compose.yml` and set `LLM_PROVIDER=ollama`. The ollama container serves LLMs on port `11434`. Models are **not pre-pulled** — pull them manually after the container starts:
 
 ```bash
 # Pull required models (first run only — ~2–4 GB download)
@@ -144,12 +153,6 @@ docker exec omni-g-ollama ollama pull nomic-embed-text
 
 # Verify
 curl http://localhost:11434/api/tags
-```
-
-**Kokoro TTS** serves a FastAPI text-to-speech endpoint on port `8000`.
-
-```bash
-curl http://localhost:8000/health
 ```
 
 ---
@@ -216,13 +219,13 @@ Omni-G is tuned for an **8 GB RAM development machine**:
 | Service | Memory Limit | Notes |
 |---------|-------------|-------|
 | Neo4j | 2.5 GB (heap 2G + pagecache 512M) | Tune down if needed |
-| Ollama | ~2–3 GB | Depends on model loaded |
+| Ollama (optional) | ~2–3 GB | Only when using local LLM; not needed w/ OpenRouter |
 | Kafka + ZooKeeper | ~512 MB | KRaft mode, no ZooKeeper |
 | Redis Stack | ~256 MB | RediSearch indexes add overhead |
 | Qdrant | ~256 MB | Grows with vector index size |
 | Observability stack | ~512 MB | Prometheus + Grafana + Loki |
 
-**Tip:** Start with `core` only during early development. Only add `ai` when working on LLM extraction.
+**Tip:** Start with `core` only during early development. LLM is cloud-hosted (OpenRouter) by default — no local GPU/RAM needed. Only add `ai` when working with Kokoro TTS or local Ollama.
 
 ---
 

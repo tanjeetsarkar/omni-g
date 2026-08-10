@@ -10,9 +10,15 @@
  * - On Play: fetches signed URL → plays in <audio> element
  * - Loading: skeleton placeholders
  * - Error: "Briefings unavailable" message
+ *
+ * B6: Reconnect BriefingPanel to graph flow.
+ * - Fetches transcript and extracts entity names
+ * - Entity names render as clickable chips below the audio player
+ * - Clicking a chip navigates to /explorer?q=entityName
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface Briefing {
   id: string;
@@ -25,15 +31,43 @@ interface BriefingsResponse {
   error?: string;
 }
 
+interface TranscriptResponse {
+  id: string;
+  text: string;
+  entities: string[];
+  date: string;
+}
+
 interface BriefingPanelProps {
   tenantId: string;
 }
 
+// Simple client-side entity extraction regex — matches title-cased names
+// and known entity patterns from the transcript text.
+const ENTITY_PATTERN = /\b([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,}){0,3})\b/g;
+
+function extractEntitiesFromText(text: string): string[] {
+  const matches = text.match(ENTITY_PATTERN) ?? [];
+  // De-duplicate, filter obvious non-entities, limit to 10
+  const unique = Array.from(new Set(matches))
+    .filter(
+      (m) =>
+        m.length > 2 &&
+        !/^(The|All|We|They|That|This|There|These|Those|And|But|For|From|With|When|While|During|Would|Could|Should|About|After|Before|Then|Just|Much|Many)$/.test(
+          m,
+        ),
+    )
+    .slice(0, 10);
+  return unique;
+}
+
 export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
+  const router = useRouter();
   const [briefings, setBriefings] = useState<Briefing[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [transcriptEntities, setTranscriptEntities] = useState<string[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const fetchBriefings = useCallback(async () => {
@@ -63,6 +97,7 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
 
   async function handlePlay(briefingId: string) {
     setPlayingId(briefingId);
+    setTranscriptEntities([]);
     try {
       const res = await fetch(
         `/api/briefings/${encodeURIComponent(briefingId)}?tenant_id=${encodeURIComponent(tenantId)}`,
@@ -73,9 +108,30 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
         audioRef.current.src = signed_url;
         audioRef.current.play();
       }
+
+      // ── B6: Fetch transcript for entity extraction ──
+      try {
+        const transcriptRes = await fetch(
+          `/api/briefings/${encodeURIComponent(briefingId)}/transcript?tenant_id=${encodeURIComponent(tenantId)}`,
+        );
+        if (transcriptRes.ok) {
+          const transcript: TranscriptResponse = await transcriptRes.json();
+          setTranscriptEntities(
+            transcript.entities && transcript.entities.length > 0
+              ? transcript.entities
+              : extractEntitiesFromText(transcript.text || ""),
+          );
+        }
+      } catch {
+        // Transcript unavailable — silently skip entity chips
+      }
     } catch {
       setPlayingId(null);
     }
+  }
+
+  function handleEntityClick(entityName: string) {
+    router.push(`/explorer?q=${encodeURIComponent(entityName)}`);
   }
 
   function formatDate(dateStr: string): string {
@@ -135,6 +191,29 @@ export default function BriefingPanel({ tenantId }: BriefingPanelProps) {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* ── B6: Entity chips from transcript ── */}
+      {transcriptEntities.length > 0 && (
+        <div className="space-y-2 border-t border-slate-700 pt-3">
+          <h3 className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
+            Related Entities
+          </h3>
+          <div className="flex flex-wrap gap-1.5">
+            {transcriptEntities.map((entity) => (
+              <button
+                key={entity}
+                onClick={() => handleEntityClick(entity)}
+                className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-indigo-900/50 hover:text-indigo-300 text-slate-400 border border-slate-700 transition-colors"
+              >
+                {entity}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-slate-600">
+            Click an entity to explore it in the graph
+          </p>
+        </div>
       )}
     </div>
   );

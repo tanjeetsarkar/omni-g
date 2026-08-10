@@ -119,6 +119,72 @@ class MinIOStorageService:
         contents = response.get("Contents", [])
         return sorted(obj["Key"] for obj in contents)
 
+    async def upload_text(
+        self,
+        tenant_id: str,
+        text: str,
+        date_str: str | None = None,
+    ) -> str:
+        """Upload *text* to MinIO and return the object key.
+
+        Key format: ``omni-g-briefings/{tenant_id}/{date_str or today}/{uuid4}.txt``
+        """
+        date_part = date_str or datetime.now(UTC).strftime("%Y-%m-%d")
+        object_key = f"{_S3_PREFIX}/{tenant_id}/{date_part}/{uuid4()}.txt"
+
+        s3_client = cast(
+            Any,
+            self._session.client(
+                "s3",
+                endpoint_url=self._endpoint_url,
+                region_name="us-east-1",
+            ),
+        )
+        async with s3_client as s3:
+            await self._ensure_bucket(s3)
+            await s3.put_object(
+                Bucket=self._bucket,
+                Key=object_key,
+                Body=text.encode("utf-8"),
+                ContentType="text/plain",
+            )
+
+        logger.info(
+            "briefing_text_uploaded",
+            extra={"bucket": self._bucket, "key": object_key, "bytes": len(text.encode("utf-8"))},
+        )
+        return object_key
+
+    async def get_text(self, object_key: str) -> str | None:
+        """Retrieve text content from MinIO by object key.  Returns None if not found."""
+        s3_client = cast(
+            Any,
+            self._session.client(
+                "s3",
+                endpoint_url=self._endpoint_url,
+                region_name="us-east-1",
+            ),
+        )
+        try:
+            async with s3_client as s3:
+                response = await s3.get_object(Bucket=self._bucket, Key=object_key)
+                body = await response["Body"].read()
+                return body.decode("utf-8")
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "NoSuchKey":
+                return None
+            logger.warning(
+                "briefing_text_get_failed",
+                extra={"bucket": self._bucket, "key": object_key, "error": str(exc)},
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "briefing_text_get_failed",
+                extra={"bucket": self._bucket, "key": object_key, "error": str(exc)},
+            )
+            return None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

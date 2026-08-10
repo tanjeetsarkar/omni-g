@@ -5,11 +5,11 @@ Search order: episode → window → turn → local_span (most recent fallback).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from ..graph.temporal_hashes import episode_id_for_cue
 from .profiler import QueryProfile
 from .scored_context import ScoredContext
 
@@ -20,7 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def _cue_to_episode_ids(cues: list[str], tenant_id: str) -> list[str]:
-    """Map spaCy temporal cue strings to deterministic episode ID candidates."""
+    """Map spaCy temporal cue strings to deterministic episode ID candidates.
+
+    Uses the shared :func:`episode_id_for_cue` from the temporal hashes module
+    so that lookups match the same bucket strategy used during ingestion.
+    Falls back to recency (``"unknown"`` domain, current hour) when date parser
+    cannot parse the cue.
+    """
     import dateparser  # soft dep — falls back gracefully if unavailable
 
     episode_ids: list[str] = []
@@ -30,11 +36,16 @@ def _cue_to_episode_ids(cues: list[str], tenant_id: str) -> list[str]:
         except Exception:
             parsed = None
         if parsed is None:
-            # Try treating the cue as an approximate "now" offset
+            logger.warning(
+                "temporal_cue_parse_failed_using_epoch_fallback",
+                extra={"cue": cue, "tenant_id": tenant_id},
+            )
+            # When the cue cannot be parsed, fall back to the current hour
+            # with an "unknown" domain so we at least hit the most recent
+            # episode bucket.
             parsed = datetime.now(UTC)
         ts = int(parsed.timestamp())
-        # Match the same hash strategy used during ingest (_assign_temporal_ids)
-        eid = hashlib.sha256(f"{tenant_id}:unknown:{ts // 3600}".encode()).hexdigest()[:12]
+        eid = episode_id_for_cue(tenant_id, "unknown", ts)
         if eid not in episode_ids:
             episode_ids.append(eid)
     return episode_ids

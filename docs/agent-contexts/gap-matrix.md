@@ -2,7 +2,7 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 6, 2026 — V3 Zero-Mem integration, Phase 8 and 9 complete.
+**Last Updated:** August 10, 2026 — Bug fixes: canonical-ID propagation, extractor label filtering, static canvas layout, pipeline activity stage alignment.
 
 ---
 
@@ -30,10 +30,12 @@
 | Area | Gap | Priority |
 |------|-----|----------|
 | **Briefing content source** | `BriefingScriptGenerator` uses placeholder script when no context provided; natural replacement is calibrated R(q) context arrays — follow-on work | Medium |
-| **Entity resolver embeddings** | `EntityResolver` still uses Ollama `nomic-embed-text` (falls back to hash); should migrate to BGE-M3 for consistency with V3 indexing | Medium |
+| **Entity resolver embeddings** | `EntityResolver` still uses Ollama `nomic-embed-text` (falls back to hash); should migrate to BGE-M3 for consistency with V3 indexing. `ContextUnitIndexer` now accepts configurable `EMBEDDING_MODEL_NAME`/`EMBEDDING_DIM`/`EMBEDDING_USE_FP16` settings (Aug 2026); resolver migration is follow-on. | Medium |
 | **LLM extractor module** | `src/llm/extractor.py` still exists with stale pydantic-ai/instructor imports; not imported by any V3 path but will fail if imported. | Low |
 | **Temporal cue parsing** | `TemporalRetriever` now resolves cues via `dateparser` → episode hash lookup before recency fallback; requires `dateparser` in `pyproject.toml` | Low |
 | **APOC PPR testing** | `RelationalRetriever._ppr_retrieve` requires APOC on Neo4j; local dev may need `NEO4J_PLUGINS=["apoc"]` verified working | Medium |
+| **OpenRouter config bugs** | Fixed Aug 2026: `openrouter_base_url` corrected from `https://openrouter.ai/api/v1/chat/completions` → `https://openrouter.ai/api/v1` (double-path bug); `OPENROUTATOR_EMBEDDING_MODEL` typo fixed → `OPENROUTER_EMBEDDING_MODEL`; `LLMClient._embed_openrouter()` properly uses `AsyncOpenAI.embeddings.create()` → `POST /api/v1/embeddings` (OpenRouter does support embeddings per https://openrouter.ai/docs/api-reference/embeddings). | ✅ Fixed |
+| **ContextUnitIndexer provider-aware embeddings** | Fixed Aug 2026: `ContextUnitIndexer` (`src/indexers/vector.py`) previously always loaded local BGE-M3 via `FlagEmbedding` regardless of `LLM_PROVIDER`, causing "BGE-M3 model loaded" logs even when OpenRouter was configured. Indexer now branches on `LLM_PROVIDER`: `openrouter` → uses unified `LLMClient.embed()` (remote, model = `OPENROUTER_EMBEDDING_MODEL`); otherwise → local BGE-M3. `encode()` is now async. Remote embedding dimension is auto-detected from the first response and used for Qdrant collection creation (overrides `EMBEDDING_DIM` for the remote path). `runtime.py` log updated from "lazy BGE-M3 load" to "lazy embedding load" with `llm_provider` context. Note: existing `context_units_{tenant_id}` Qdrant collections created with 1024-dim BGE-M3 are incompatible with remote models of different dimension (e.g. `text-embedding-3-small` = 1536-dim) and must be recreated. | ✅ Fixed |
 
 ### V2 Intelligence Cycle: Deprecated
 
@@ -41,11 +43,7 @@ The following V2 features have been **intentionally removed** as part of the V3 
 
 | Removed | Reason |
 |---------|--------|
-| `KIQ`, `CollectedEvidence`, `Hypothesis`, `Assessment`, `CollectionGap` models | Replaced by ContextUnit-first paradigm; intelligence cycle re-emerges at Delivery synthesis level |
-| `LLMExtractor` (pipeline stage) | Replaced by `ZeroMemExtractor` (NER-based, zero LLM calls on ingest path) |
 | `GraphRAGIndexer`, `CommunityDetector`, `CommunitySummarizer` | Replaced by dual-view PPR retrieval; community summaries replaced by calibrated R(q) |
-| `EvidencePublisher`, `AssessmentPublisher` | No longer needed; intelligence cycle outputs produced at Delivery |
-| `HypothesisService`, `AssessmentService` | Deprecated; ACH at Delivery synthesis layer (future) |
 | `langchain`, `instructor`, `pydantic-ai-slim`, `openai`, `stix2` Python packages | Removed from `pyproject.toml` |
 
 ---
@@ -64,7 +62,8 @@ The following features were **intentionally removed** as part of the platform ge
 | `stix2` Python library (`stix2==3.0.1`) | Removed from dependencies |
 | Neo4j label pattern `:STIXEntity:{PascalCase}` | Replaced by `:Entity:{TypeLabel}:{tenant_label}` |
 | Sigma.js + Graphology graph visualization | Replaced by React Flow (`@xyflow/react`) + dagre/elkjs |
-| Semantic zoom, FocusPanel, FilterToolbar, ActivityDrawer, AlertBadge (Delivery components) | Replaced by search-first UX with inline node components |
+| Semantic zoom, FocusPanel, FilterToolbar, AlertBadge (Delivery components) | Replaced by search-first UX with inline node components |
+| ActivityDrawer (re-added Aug 2026) | Pipeline activity drawer remounted after stage-name alignment fix |
 | `/api/graph` polling route | Replaced by `/api/search` (semantic search → Neo4j neighbors) |
 | `useSemanticZoom`, `useGraphFilter`, `buildClusterGraph`, `useAlertHighlight`, `useGraphData` | Replaced by `useGraphSearch` and `useRealtimeNodes` hooks |
 | M6.3 STIX Compliance & Audit Trail milestone | Removed from roadmap |
@@ -100,6 +99,64 @@ This document should be updated after every implementation change. Capture only 
 | BLUF dissemination | Delivery should present conclusion, confidence band, intelligence gaps, and next action before deep graph exploration; Assessment and CollectionGap models defined with BLUF, ConfidenceBand, reasoning, assumptions, supporting/contradicting evidence, and gaps | **V2 Steps 7 + 8 complete:** `ConfidenceBand`, `Assessment`, `CollectionGap` models added; `AssessmentService` generates first-pass assessments; `AssessmentPublisher` publishes `assessment.produced` events; pipeline step 3.7 integrated. **Delivery (Step 8):** `AssessmentPanel` component, `useAssessmentEvents` hook, `/api/assessments` route, and gateway `assessment_event` broadcast all implemented; dashboard shows collapsible right-side panel with BLUF-first view. Graph UX intact. Competing hypotheses (ACH), analyst feedback loop, and persistent storage of assessments in Neo4j/Postgres remain as future work. | ✅ First V2 dissemination surface complete (Steps 7 + 8) | High |
 | Scheduled analytical jobs | Recurring briefings, re-analysis, and background maintenance should run through Celery Beat | **V2 Step 4 complete:** `generate_briefing_task` registered in Celery Beat schedule when `CELERY_BRIEFING_ENABLED=true`; one daily crontab entry per tenant from `BRIEFING_TENANTS`; APScheduler path deprecated. **V2 Step 9:** `reanalyze_kiq_task` dispatched as a background Celery job per pipeline run that carries a KIQ; runs hypothesis generation + ACH scoring + assessment production outside the hot path. Periodic background re-assessment on a fixed cadence (e.g., re-score all active KIQs on a schedule) remains future work. | Partially closed (briefings + on-demand reanalysis) | Medium |
 | V1 carryover cleanup | Non-KIQ-driven "interesting things" paths should be demoted or removed where they conflict with V2 workflow | Current pipeline still optimizes for general discovery and synthesis outputs | Product simplification gap | Medium |
+
+### Workstream B: Delivery UX Enhancements (August 10, 2026)
+
+The following Delivery UX enhancements from roadmapv3.md have been implemented:
+
+| Feature | What Changed | Status |
+|---------|-------------|--------|
+| **B1: BLUF/Synthesis Strip** | Created `BlufStrip.tsx` — collapsible summary panel above the graph canvas showing top-3 context units by score with optional LLM-synthesized BLUF summary via `POST /synthesize` endpoint on Processor and Delivery API route | ✅ Complete |
+| **B2: Legend-as-filter with counts** | `EChartsGraphCanvas.tsx` updated with `selectedMode: 'multiple'`, per-category count display in legend text, and legend selection state that filters visible nodes/links | ✅ Complete |
+| **B3: Confidence-driven visual encoding** | `useEChartsGraphAdapter.ts` updated: opacity = 0.4 + (confidence * 0.6), high-confidence entities (>0.8) get border, labels hidden for confidence < 0.3, tooltip shows visual confidence bar | ✅ Complete |
+| **B4: Search history** | Created `useSearchHistory.ts` hook — persists last 10 searches in `sessionStorage`, clickable recent-search chips in empty state | ✅ Complete |
+| **B5: Layout switcher** | `EChartsGraphCanvas.tsx` updated with 3-button floating toggle (Force/Circular/Static), persisted in `sessionStorage` | ✅ Complete |
+| **B6: Briefing reconnection** | `BriefingPanel.tsx` updated with transcript fetch + entity chips; `GET /briefings/{id}/transcript` endpoint on Processor + Delivery API route; `MinIOStorageService.upload_text()` and `get_text()` methods added; `BriefingScheduler.on_demand()` stores script text alongside audio | ✅ Complete |
+| **B7: Persistent notification log** | Created `NotificationProvider` + `useNotificationLog` context in `useNotificationLog.tsx`; `NotificationBell.tsx` component with bell icon, unread badge, and dropdown; `PipelineProgressToast` pushes errors/successes to notification log; `NotificationProvider` wrapped in root layout | ✅ Complete |
+| **B8: Trending empty state** | `GET /trending` endpoint on Processor queries Neo4j for recently-added high-confidence entities; Delivery API route + empty state shows trending entity chips as clickable suggestions | ✅ Complete |
+
+**New files created:**
+- `services/delivery/src/components/synthesis/BlufStrip.tsx` — BLUF summary panel
+- `services/delivery/src/components/synthesis/AssessmentCard.tsx` — BLUF assessment card with evidence/gaps
+- `services/delivery/src/components/notifications/NotificationBell.tsx` — notification bell with dropdown
+- `services/delivery/src/hooks/useSearchHistory.ts` — search persistence hook
+- `services/delivery/src/hooks/useNotificationLog.tsx` — notification context provider
+- `services/delivery/src/app/api/synthesize/route.ts` — proxy to Processor `/synthesize`
+- `services/delivery/src/app/api/trending/route.ts` — proxy to Processor `/trending`
+- `services/delivery/src/app/api/briefings/[id]/transcript/route.ts` — proxy to Processor `/briefings/{id}/transcript`
+
+**Modified files:**
+- `services/processor/src/processor/main.py` — added `/synthesize`, `/trending`, `/briefings/{id}/transcript` endpoints
+- `services/processor/src/briefing/storage.py` — added `upload_text()` and `get_text()` methods
+- `services/processor/src/briefing/scheduler.py` — stores script text alongside audio
+- `services/delivery/src/types/entities.ts` — added `ContextUnit`, `Assessment`, `CollectionGap`, `TrendingEntity`, `BriefingTranscript` types
+- `services/delivery/src/components/canvas/EChartsGraphCanvas.tsx` — B2 legend-as-filter, B5 layout switcher
+- `services/delivery/src/components/canvas/useEChartsGraphAdapter.ts` — B3 confidence encoding
+- `services/delivery/src/components/briefing/BriefingPanel.tsx` — B6 transcript + entity chips
+- `services/delivery/src/components/graph/PipelineProgressToast.tsx` — B7 notification log integration
+- `services/delivery/src/app/explorer/page.tsx` — integrated all UX components
+- `services/delivery/src/app/layout.tsx` — wrapped with `NotificationProvider`
+
+### Workstream C: Challenge Remediation (August 10, 2026)
+
+The following challenge remediation items from roadmapv3.md have been implemented:
+
+| Challenge | What Changed | Status |
+|-----------|-------------|--------|
+| **C1: PPR Result Caching** | `RelationalRetriever._ppr_retrieve` now checks Redis cache before calling APOC PPR; results cached with 60s TTL keyed on `ppr:{tenant_id}:{hash(anchor_ids)}:{d_max}`; Prometheus counters `processor_ppr_cache_hits_total` and `processor_ppr_cache_misses_total` added | ✅ Complete |
+| **C2: Async NER Extraction** | Blocking spaCy + GLiNER calls in `ProcessingPipeline.process()` wrapped in `loop.run_in_executor()` to offload from the asyncio event loop | ✅ Complete |
+| **C3: Fail-Open Metrics** | Distinct Prometheus counters added for each fail-open branch: `processor_gliner_failures_total`, `processor_temporal_insert_failures_total`, `processor_vector_index_failures_total`, `processor_context_unit_persist_failures_total`; wired into all `except` blocks in the pipeline | ✅ Complete |
+| **C4: Shared Temporal Hash Module** | Extracted `assign_temporal_ids()` and `episode_id_for_cue()` into shared `src/graph/temporal_hashes.py`; `pipeline.py` imports from the shared module; `temporal.py` uses shared `episode_id_for_cue()` instead of re-implementing the hash with hard-coded `"unknown"` domain; added logging when temporal cue parsing fails | ✅ Complete |
+
+**New files created:**
+- `services/processor/src/graph/temporal_hashes.py` — shared temporal hash functions
+
+**Modified files:**
+- `services/processor/src/processor/pipeline.py` — C2 async NER, C3 fail-open metrics, C4 shared hashes
+- `services/processor/src/retrieval/relational.py` — C1 PPR caching, unified LLMClient for embeddings
+- `services/processor/src/retrieval/temporal.py` — C4 shared hashes + logging
+
+---
 
 ## Current Snapshot
 
@@ -161,6 +218,15 @@ Runtime note: Docker containers can resolve `host.docker.internal`, but the host
 - **Kafka UI availability hardening (no roadmap scope change):** added optional `redpanda-console` service to `infrastructure/docker-compose.yml` under new `kafka-ui` profile (also enabled in `all`) with host port `8088` to avoid collision with Aggregator `:8080`. Console points to in-network broker `kafka:9092`, includes healthcheck on `/admin/health`, and is documented in `infrastructure/README.md` with explicit startup command and URL for topic/message inspection.
 
  in `infrastructure/docker-compose.yml` by replacing Kafka probe with a lightweight TCP socket readiness check (`bash -c 'echo > /dev/tcp/localhost/9092'`) instead of unavailable/slow CLI probes, and aligned Kokoro probe/port mapping to the actual service bind port (`8880`) with host mapping `8000:8880`.
+
+### Bug Fixes (August 10, 2026)
+
+| Bug | Root Cause | Fix | Status |
+|-----|-----------|-----|--------|
+| Duplicate same-named disconnected nodes on graph UI | Pipeline discarded resolver's canonical IDs — `resolve_and_persist` wrote AUTO_MERGE/AMBIGUOUS nodes under a different ID than `persist_extraction` MERGE'd by original NER-generated `entity.id`, creating two disconnected nodes with same name | `pipeline.py` Step 4 now captures `ResolutionResult`, builds `id_map` (orig→canonical), rewrites `extraction.entities`, `extraction.relationships`, and `entity_context_weights` through `id_map`, and dedups entities by canonical ID keeping highest-confidence replica. `Relationship` added to imports. | ✅ Fixed |
+| Irrelevant numeric entities ("50,000", "1") as graph nodes | `ZeroMemExtractor.extract` accepted **all** spaCy NER labels with zero filtering — `CARDINAL`, `ORDINAL`, `PERCENT`, `MONEY`, `QUANTITY`, `TIME`, `DATE` became entity nodes | Added `_SPACY_ALLOWED_LABELS` frozenset (PERSON, ORG, GPE, LOC, FAC, PRODUCT, WORK_OF_ART, NORP, LAW, EVENT, LANGUAGE), min-length guard (`len(name) >= 2`), non-alphabetic regex guard (`^[^A-Za-z]+$`); `config.py` gained `EXTRACTOR_SPACY_ALLOWED_LABELS` and `EXTRACTOR_MIN_ENTITY_LENGTH` env vars; `runtime.py` passes settings to `ZeroMemExtractor` constructor; 9 new extractor tests | ✅ Fixed |
+| Static (layout: "none") view shows nothing | ECharts `graph` series with `layout: "none"` requires pre-set `x`/`y` per node, but `transformToEChartsData` never emitted them | Added deterministic circular-distribution `x`/`y` coordinates in `transformToEChartsData` (force/circular layouts override them); 2 new adapter tests verify coordinates | ✅ Fixed |
+| Pipeline activity never updates mid-pipeline | (a) Processor publishes `ner_extraction` but UI listened for `llm_extraction`; (b) UI listed `grounding_validation` + `graphrag_index` that V3 never publishes; (c) Toast only completed on `alert_publishing` (skipped for low-confidence); (d) `ActivityDrawer` never mounted | Aligned `PIPELINE_STAGES` in `usePipelineEvents`, `PipelineProgressToast`, `ActivityDrawer` to V3: `ner_extraction`, dropped `grounding_validation`/`graphrag_index`, added `pipeline_complete`; toast gating now watches `pipeline_complete` too; `ActivityDrawer` imported and rendered in `explorer/page.tsx`; legacy `PipelineProgress.tsx` deleted; 5 new `usePipelineEvents` tests | ✅ Fixed |
 - **Kafka listener binding correction:** Kafka listener bind address was updated to `0.0.0.0` (`KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093`) while keeping `KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092`, so in-container localhost health checks and inter-container DNS-based client routing both succeed.
 - **Kafka host/client routing hardening (no roadmap scope change):** Kafka now exposes dual listeners in `infrastructure/docker-compose.yml`: internal Docker listener `PLAINTEXT://kafka:9092` and host listener `EXTERNAL://localhost:19092` (`KAFKA_LISTENERS` and `KAFKA_ADVERTISED_LISTENERS` updated accordingly, with host port `19092:19092`). This resolves host-run Aggregator/Processor/Delivery clients failing after bootstrap with `Failed to resolve 'kafka:9092'`. Host-service env templates were aligned to `KAFKA_BROKERS=localhost:19092`.
 - **E2E Real Data Test — M5 v2 (closed):** Full OSINT pipeline from search bar to live graph. (1) `src/llm/prompts.py`: `PromptRegistry` with biographical/news/general/fallback prompts; `extractor.py` reads `source_type` from metadata, selects prompt dynamically, boosts confidence +0.1 for wikidata/biographical sources. (2) Four OSINT MCP plugins in Go: `mcp-wikipedia` (port 8091, Wikipedia REST API), `mcp-wikidata` (port 8092, SPARQL endpoint, structured facts), `mcp-newsrss` (port 8093, Google News RSS), `mcp-reuters` (port 8094, Reuters/AP News RSS filter). (3) Aggregator `POST /search`: `SearchHandler` fans out goroutines per source plugin, calls `client.CallTool`, passes blocks through `pipeline.ProcessBlock`; 4 plugin URL config fields added. (4) Delivery search-first UX: `page.tsx` redesigned with query form; `PipelineProgress.tsx` shows time-based 5-stage animation, listens for socket alert to show "Knowledge Graph ready" CTA; `dashboard/page.tsx` pre-fills FilterToolbar from `?q=` param. (5) Real Neo4j `/api/graph`: `lib/neo4j.ts` module-level driver singleton; Cypher queries `STIXEntity` nodes with tenant filter; `bolt://` URL default. (6) Docker Compose updated: 4 new plugin services (`mcp-wikipedia/wikidata/newsrss/reuters`); aggregator env includes 4 plugin URLs + `MCP_PLUGIN_URLS`; delivery env includes `AGGREGATOR_URL`; `.env.docker.example` updated. All Go builds pass; TypeScript type-checks clean.

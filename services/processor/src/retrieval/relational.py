@@ -10,12 +10,15 @@ Algorithm (per V3 architecture):
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import redis.asyncio as aioredis
+from prometheus_client import Counter
 
+from ..llm.client import LLMClient
 from .profiler import QueryProfile
 from .scored_context import ScoredContext
 
@@ -28,6 +31,21 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
 EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "768"))
+
+# PPR cache config
+PPR_CACHE_TTL: int = int(os.getenv("PPR_CACHE_TTL", "60"))
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# Prometheus counters for PPR cache
+PPR_CACHE_HITS = Counter(
+    "processor_ppr_cache_hits_total",
+    "APOC PPR results served from Redis cache",
+)
+
+PPR_CACHE_MISSES = Counter(
+    "processor_ppr_cache_misses_total",
+    "APOC PPR results computed from scratch (cache miss)",
+)
 
 
 def _deterministic_hash_embed(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
@@ -50,37 +68,49 @@ def _deterministic_hash_embed(text: str, dim: int = EMBEDDING_DIM) -> list[float
 
 
 async def _embed_query(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
-    """Generate semantic embedding using local nomic-embed-text model on Ollama.
+    """Generate semantic embedding using the configured LLM provider.
 
-    Falls back on deterministic hash-based generator if Ollama is unreachable.
+    Uses the unified :class:`LLMClient` (OpenRouter or Ollama). Falls back on
+    deterministic hash-based generator if the LLM is unreachable.
     """
-    base_url = OLLAMA_URL.rstrip("/")
-    url = f"{base_url}/api/embeddings"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                url,
-                json={
-                    "model": EMBEDDING_MODEL,
-                    "prompt": text,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            embedding = data.get("embedding")
-            if embedding and isinstance(embedding, list):
-                vector = [float(v) for v in embedding if isinstance(v, int | float)]
-                if len(vector) < dim:
-                    return vector + [0.0] * (dim - len(vector))
-                return vector[:dim]
-            logger.warning("invalid_ollama_embedding_response_structure", extra={"response": data})
+        vector = await LLMClient().embed(text)
+        if isinstance(vector, list):
+            if len(vector) < dim:
+                return vector + [0.0] * (dim - len(vector))
+            return vector[:dim]
+        logger.warning("invalid_embedding_response_structure", extra={"response": vector})
     except Exception as exc:
         logger.warning(
-            "ollama_embedding_failed_using_fallback_hash",
-            extra={"error": str(exc), "url": url, "model": EMBEDDING_MODEL},
+            "embedding_failed_using_fallback_hash",
+            extra={"error": str(exc)},
         )
 
     return _deterministic_hash_embed(text, dim)
+
+
+async def _get_redis_client() -> aioredis.Redis | None:
+    """Return a shared Redis client, or ``None`` if Redis is unreachable."""
+    try:
+        client: aioredis.Redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        await client.ping()
+        return client
+    except Exception as exc:
+        logger.warning(
+            "ppr_cache_redis_unavailable",
+            extra={"error": str(exc), "redis_url": REDIS_URL},
+        )
+        return None
+
+
+def _cache_key_anchor_hash(anchor_ids: list[str]) -> str:
+    """Return a deterministic short hash of a sorted list of anchor entity IDs.
+
+    Used to build a PPR cache key that is stable for the same set of anchors
+    regardless of their order in the list.
+    """
+    sorted_ids = sorted(anchor_ids)
+    return hashlib.sha256("|".join(sorted_ids).encode()).hexdigest()[:16]
 
 
 class RelationalRetriever:
@@ -175,7 +205,48 @@ class RelationalRetriever:
         d_max: int,
         top_k: int,
     ) -> list[ScoredContext]:
-        """Localised PPR via APOC: k-hop subgraph around anchors → PageRank."""
+        """Localised PPR via APOC: k-hop subgraph around anchors → PageRank.
+
+        Results are cached in Redis with a short TTL (default 60 s) keyed on
+        ``ppr:{tenant_id}:{hash(sorted(anchor_ids))}:{d_max}`` so that repeated
+        queries for the same anchor set within the cache window avoid redundant
+        APOC computation.
+        """
+        # ── Check Redis cache first ────────────────────────────────────────
+        cache_key = f"ppr:{tenant_id}:{_cache_key_anchor_hash(anchor_ids)}:{d_max}"
+        redis_client = await _get_redis_client()
+        if redis_client is not None:
+            try:
+                cached = await redis_client.get(cache_key)
+                if cached is not None:
+                    PPR_CACHE_HITS.inc()
+                    logger.debug(
+                        "ppr_cache_hit",
+                        extra={"cache_key": cache_key, "tenant_id": tenant_id},
+                    )
+                    cached_data = json.loads(cached)
+                    await redis_client.aclose()
+                    return [
+                        ScoredContext(
+                            context_id=item["context_id"],
+                            score=float(item["score"]),
+                            text=item.get("text") or "",
+                        )
+                        for item in cached_data
+                    ]
+            except Exception as exc:
+                logger.warning(
+                    "ppr_cache_read_failed_proceeding_with_computation",
+                    extra={"error": str(exc), "cache_key": cache_key},
+                )
+
+        PPR_CACHE_MISSES.inc()
+        logger.debug(
+            "ppr_cache_miss",
+            extra={"cache_key": cache_key, "tenant_id": tenant_id},
+        )
+
+        # ── Compute PPR via APOC ───────────────────────────────────────────
         cypher = """
         MATCH (anchor:Entity)
         WHERE anchor.id IN $anchor_ids AND anchor.tenant_id = $tenant_id
@@ -206,7 +277,7 @@ class RelationalRetriever:
             )
             rows = await result.data()
 
-        return [
+        results = [
             ScoredContext(
                 context_id=row["context_id"],
                 score=float(row["score"]),
@@ -214,6 +285,39 @@ class RelationalRetriever:
             )
             for row in rows
         ]
+
+        # ── Store in Redis cache ───────────────────────────────────────────
+        if redis_client is not None and results:
+            try:
+                serialised = json.dumps(
+                    [
+                        {
+                            "context_id": r.context_id,
+                            "score": r.score,
+                            "text": r.text,
+                        }
+                        for r in results
+                    ],
+                    default=str,
+                )
+                await redis_client.setex(cache_key, PPR_CACHE_TTL, serialised)
+                logger.debug(
+                    "ppr_cache_stored",
+                    extra={
+                        "cache_key": cache_key,
+                        "ttl": PPR_CACHE_TTL,
+                        "result_count": len(results),
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ppr_cache_write_failed",
+                    extra={"error": str(exc), "cache_key": cache_key},
+                )
+            finally:
+                await redis_client.aclose()
+
+        return results
 
     # ------------------------------------------------------------------
     # Step 3 fallback: Python BFS via Cypher

@@ -247,6 +247,12 @@ class ExpandRequest(BaseModel):
     tenant_id: str = "default"
 
 
+class SynthesisRequest(BaseModel):
+    query: str
+    tenant_id: str = "default"
+    context_units: list[dict[str, Any]] = []
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
@@ -347,7 +353,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cfg: Settings = app.state.settings
         tenant_id = body.get("tenant_id", "default")
         logger.info("On-demand briefing requested", extra={"tenant_id": tenant_id})
-        script_gen = BriefingScriptGenerator(ollama_url=cfg.ollama_url, model=cfg.ollama_model)
+        script_gen = BriefingScriptGenerator()
         tts = TTSSynthesizer(kokoro_url=cfg.kokoro_url, elevenlabs_api_key=cfg.elevenlabs_api_key)
         storage = MinIOStorageService(
             endpoint_url=cfg.minio_url,
@@ -378,14 +384,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..models.entities import Entity
 
         if not body.entity_ids:
-            return JSONResponse(
-                {"entities": [], "relationships": [], "context_units": [], "total": 0}
-            )
+            return JSONResponse({"entities": [], "relationships": [], "context_units": [], "total": 0})
 
         cfg: Settings = app.state.settings
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         graph_persistence = GraphPersistenceService(neo4j_driver)
         entities: list[Entity] = []
         relationships: list[dict[str, Any]] = []
@@ -417,9 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     logger.exception("Failed to parse entity from Neo4j row")
             if entities:
                 entity_ids = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(
-                    entity_ids, body.tenant_id
-                )
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids, body.tenant_id)
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:
@@ -466,13 +466,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..retrieval.temporal import TemporalRetriever
 
         cfg: Settings = app.state.settings
-        logger.info(
-            "Search request received", extra={"tenant_id": body.tenant_id, "query": body.query}
-        )
+        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query})
 
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
         graph_persistence = GraphPersistenceService(neo4j_driver)
 
@@ -482,9 +478,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             profile = profiler.profile(body.query)
 
             # Lazy-loaded indexer (BGE-M3)
-            vector_indexer = ContextUnitIndexer(
-                qdrant_url=cfg.qdrant_url, api_key=cfg.qdrant_api_key
-            )
+            vector_indexer = ContextUnitIndexer(qdrant_url=cfg.qdrant_url, api_key=cfg.qdrant_api_key, settings=cfg)
 
             # Temporal store (fail-open)
             temporal_store = TemporalStore(postgres_url=cfg.postgres_url)
@@ -497,13 +491,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             temporal_retriever = TemporalRetriever(temporal_store, neo4j_driver)
 
             # Parallel retrieval
-            rel_task = relational_retriever.retrieve(
-                profile, body.tenant_id, profile.d_max, body.limit
-            )
+            rel_task = relational_retriever.retrieve(profile, body.tenant_id, profile.d_max, body.limit)
             temp_task = temporal_retriever.retrieve(profile, body.tenant_id, body.limit)
-            relational_results, temporal_results = await _asyncio.gather(
-                rel_task, temp_task, return_exceptions=True
-            )
+            relational_results, temporal_results = await _asyncio.gather(rel_task, temp_task, return_exceptions=True)
             if isinstance(relational_results, Exception):
                 logger.warning("Relational retrieval failed: %s", relational_results)
                 relational_results = []
@@ -569,17 +559,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             if entities:
                 entity_ids_final = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(
-                    entity_ids_final, body.tenant_id
-                )
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids_final, body.tenant_id)
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:
                         entities.append(n)
                 entity_ids_final = [e.id for e in entities]
-                relationships = await graph_persistence.fetch_relationships_for_entities(
-                    entity_ids_final
-                )
+                relationships = await graph_persistence.fetch_relationships_for_entities(entity_ids_final)
 
             await temporal_store.close()
         finally:
@@ -625,9 +611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         graph_persistence = GraphPersistenceService(neo4j_driver)
 
         context_units_payload = []
@@ -723,8 +707,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if all_entity_ids:
                     async with neo4j_driver.session() as session:
                         result = await session.run(
-                            "MATCH (e:Entity) WHERE e.id IN $ids "
-                            "AND e.tenant_id = $tenant_id RETURN e",
+                            "MATCH (e:Entity) WHERE e.id IN $ids " "AND e.tenant_id = $tenant_id RETURN e",
                             ids=all_entity_ids,
                             tenant_id=body.tenant_id,
                         )
@@ -748,9 +731,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         except Exception:
                             logger.exception("Failed to parse node in expand")
 
-                    relationships = await graph_persistence.fetch_relationships_for_entities(
-                        all_entity_ids
-                    )
+                    relationships = await graph_persistence.fetch_relationships_for_entities(all_entity_ids)
 
         finally:
             await neo4j_driver.close()
@@ -764,6 +745,198 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "total": len(ent_payload),
             }
         )
+
+    # ── B1: Synthesis endpoint ────────────────────────────────────────────
+
+    @app.post("/synthesize", tags=["synthesis"])
+    async def synthesize(body: SynthesisRequest) -> JSONResponse:
+        """Generate a BLUF summary from calibrated context units.
+
+        Takes context_units + query → LLMClient.generate() → BLUF summary.
+        Falls back to extractive summary if LLM unavailable.
+        """
+        from ..llm.client import LLMClient
+
+        cfg: Settings = app.state.settings
+        logger.info(
+            "Synthesis request received",
+            extra={
+                "tenant_id": body.tenant_id,
+                "query": body.query,
+                "context_count": len(body.context_units),
+            },
+        )
+
+        # Extractive fallback: top-3 context units concatenated
+        sorted_units = sorted(body.context_units, key=lambda x: x.get("score", 0), reverse=True)
+        top_texts = [u.get("text", "") for u in sorted_units[:3] if u.get("text")]
+        extractive_summary = " | ".join(top_texts) if top_texts else "No context available."
+
+        # Try LLM-synthesized summary
+        try:
+            llm = LLMClient(cfg)
+            context_text = "\n".join(f"[{i + 1}] {u.get('text', '')}" for i, u in enumerate(sorted_units[:10]))
+            prompt = (
+                "You are an intelligence analyst. Provide a 2-3 sentence BLUF "
+                "(Bottom Line Up Front) summary of the following intelligence findings. "
+                "Be concise and factual.\n\n"
+                f"Query: {body.query}\n\n"
+                f"Findings:\n{context_text}"
+            )
+            summary = await llm.generate(prompt)
+            if summary.strip():
+                return JSONResponse({"summary": summary, "mode": "llm"})
+        except Exception as exc:
+            logger.warning("LLM synthesis failed, using extractive fallback: %s", exc)
+
+        return JSONResponse({"summary": extractive_summary, "mode": "extractive"})
+
+    # ── B8: Trending entities endpoint ────────────────────────────────────
+
+    @app.get("/trending", tags=["search"])
+    async def trending(tenant_id: str = "default", limit: int = 5) -> JSONResponse:
+        """Return recently-added high-confidence entities for the empty state."""
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from neo4j import AsyncGraphDatabase
+
+        cfg: Settings = app.state.settings
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
+
+        entities: list[dict[str, Any]] = []
+        try:
+            now = _dt.now(UTC)
+            async with neo4j_driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE e.tenant_id = $tenant_id AND e.confidence >= 0.5
+                    RETURN e
+                    ORDER BY e.created DESC
+                    LIMIT $limit
+                    """,
+                    tenant_id=tenant_id,
+                    limit=limit,
+                )
+                rows = await result.data()
+            for row in rows:
+                node = row.get("e", {})
+                try:
+                    entities.append(
+                        {
+                            "id": node.get("id", ""),
+                            "name": node.get("name", "Unknown"),
+                            "type": node.get("type", "Unknown"),
+                            "confidence": float(node.get("confidence", 0.5)),
+                            "created": str(node.get("created", now)),
+                        }
+                    )
+                except Exception:
+                    logger.exception("Failed to parse trending entity")
+        finally:
+            await neo4j_driver.close()
+
+        return JSONResponse({"entities": entities, "total": len(entities)})
+
+    # ── B6: Briefing transcript endpoint ──────────────────────────────────
+
+    @app.get("/briefings/{briefing_id}/transcript", tags=["briefings"])
+    async def get_briefing_transcript(briefing_id: str, tenant_id: str = "default") -> JSONResponse:
+        """Return the briefing script text + extracted entity names."""
+        from ..briefing.storage import MinIOStorageService
+
+        cfg: Settings = app.state.settings
+        storage = MinIOStorageService(
+            endpoint_url=cfg.minio_url,
+            access_key=cfg.minio_access_key,
+            secret_key=cfg.minio_secret_key,
+            bucket=cfg.minio_bucket,
+        )
+
+        try:
+            # Find the text file matching this briefing ID
+            prefix = f"omni-g-briefings/{tenant_id}/"
+            text_keys = await storage.list_objects(prefix)
+            text_keys = [k for k in text_keys if k.endswith(".txt")]
+
+            # Find the most recent text file (briefing_id may be a UUID or date-based)
+            text = None
+            matched_key = None
+            for key in text_keys:
+                if briefing_id in key:
+                    text = await storage.get_text(key)
+                    matched_key = key
+                    break
+
+            if text is None and text_keys:
+                # Fall back to the most recent text file
+                latest_key = text_keys[-1]
+                text = await storage.get_text(latest_key)
+                matched_key = latest_key
+
+            if text is None:
+                return JSONResponse({"error": "Transcript not found"}, status_code=404)
+
+            # Simple entity extraction from the transcript text
+            import re
+
+            entity_pattern = re.compile(r"\b([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]{2,}){0,3})\b")
+            matches = entity_pattern.findall(text)
+            # Filter out common non-entities
+            stop_words = {
+                "The",
+                "All",
+                "We",
+                "They",
+                "That",
+                "This",
+                "There",
+                "These",
+                "Those",
+                "And",
+                "But",
+                "For",
+                "From",
+                "With",
+                "When",
+                "While",
+                "During",
+                "Would",
+                "Could",
+                "Should",
+                "About",
+                "After",
+                "Before",
+                "Then",
+                "Just",
+                "Much",
+                "Many",
+                "Good",
+                "Here",
+                "Your",
+                "Most",
+                "Section",
+                "Please",
+                "First",
+                "Second",
+                "Third",
+                "Next",
+                "Last",
+            }
+            entities_list = list(dict.fromkeys(m for m in matches if m not in stop_words and len(m) > 2))[:10]
+
+            return JSONResponse(
+                {
+                    "id": briefing_id,
+                    "text": text,
+                    "entities": entities_list,
+                    "date": matched_key or "",
+                }
+            )
+        except Exception as exc:
+            logger.error("Failed to fetch briefing transcript: %s", exc)
+            return JSONResponse({"error": "Transcript unavailable"}, status_code=502)
 
     return app
 

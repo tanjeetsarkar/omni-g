@@ -2,14 +2,24 @@ FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
+# Install build dependencies required to compile C/C++ extensions (like curated-tokenizers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv for fast dependency resolution.
 COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
 
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_NO_CACHE=1
+ENV UV_COMPILE_BYTECODE=1
 
-COPY pyproject.toml README.md ./
-RUN uv sync --no-dev
+ARG UV_HTTP_TIMEOUT=600
+
+COPY pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --frozen
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv run python -m spacy download en_core_web_trf
 
 # ============================================================
 # Runtime stage
@@ -22,8 +32,8 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Download spaCy model used by ZeroMemExtractor and QueryProfiler
-RUN python -m spacy download en_core_web_trf
+# # Download spaCy model used by ZeroMemExtractor and QueryProfiler
+# RUN python -m spacy download en_core_web_trf
 
 # Run as non-root.
 RUN useradd --uid 1001 --create-home appuser

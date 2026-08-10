@@ -24,6 +24,7 @@ dependencies = [
     "aioboto3>=15.5.0",
     "apscheduler>=3.11.2",
     "celery>=5.4.0",
+    "openai>=2.53.0",
 ]
 
 [build-system]
@@ -34,7 +35,7 @@ build-backend = "hatchling.build"
 packages = ["src"]
 
 [tool.ruff]
-line-length = 100
+line-length = 200
 target-version = "py313"
 
 [tool.ruff.lint]

@@ -135,14 +135,14 @@ class TestPipelineStep7:
     async def test_skips_alert_below_threshold(
         self,
         fake_deduplicator: Any,
-        mock_llm_extractor: AsyncMock,
+        mock_zeromem_extractor: AsyncMock,
     ) -> None:
         """Pipeline Step 7 does NOT call publisher when confidence <= 0.5."""
         from src.dedup.deduplicator import ContentDeduplicator
         from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
-        mock_llm_extractor.extract.return_value = ExtractionResult(
+        mock_zeromem_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-low",
             entities=[],
             extraction_confidence=0.3,
@@ -150,7 +150,7 @@ class TestPipelineStep7:
         mock_publisher = AsyncMock(spec=AlertPublisher)
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_zeromem_extractor),
             alert_publisher=cast(AlertPublisher, mock_publisher),
         )
         await pipeline.process({"id": "evt-low", "payload": {"text": "no entities here"}})
@@ -159,14 +159,14 @@ class TestPipelineStep7:
     async def test_publishes_alert_above_threshold(
         self,
         fake_deduplicator: Any,
-        mock_llm_extractor: AsyncMock,
+        mock_zeromem_extractor: AsyncMock,
     ) -> None:
         """Pipeline Step 7 calls publisher when confidence > 0.5."""
         from src.dedup.deduplicator import ContentDeduplicator
         from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
-        mock_llm_extractor.extract.return_value = ExtractionResult(
+        mock_zeromem_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-high",
             entities=[],
             extraction_confidence=0.9,
@@ -174,7 +174,7 @@ class TestPipelineStep7:
         mock_publisher = AsyncMock(spec=AlertPublisher)
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_zeromem_extractor),
             alert_publisher=cast(AlertPublisher, mock_publisher),
         )
         await pipeline.process(
@@ -189,21 +189,21 @@ class TestPipelineStep7:
     async def test_no_publisher_wired_does_not_raise(
         self,
         fake_deduplicator: Any,
-        mock_llm_extractor: AsyncMock,
+        mock_zeromem_extractor: AsyncMock,
     ) -> None:
         """Pipeline works normally when no AlertPublisher is provided."""
         from src.dedup.deduplicator import ContentDeduplicator
         from src.extractors.zeromem_extractor import ZeroMemExtractor
         from src.processor.pipeline import ProcessingPipeline
 
-        mock_llm_extractor.extract.return_value = ExtractionResult(
+        mock_zeromem_extractor.extract.return_value = ExtractionResult(
             source_event_id="evt-nopub",
             entities=[],
             extraction_confidence=0.9,
         )
         pipeline = ProcessingPipeline(
             deduplicator=cast(ContentDeduplicator, fake_deduplicator),
-            zeromem_extractor=cast(ZeroMemExtractor, mock_llm_extractor),
+            zeromem_extractor=cast(ZeroMemExtractor, mock_zeromem_extractor),
         )
         result = await pipeline.process({"id": "evt-nopub", "payload": {"text": "test"}})
         assert result is not None

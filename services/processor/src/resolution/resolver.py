@@ -9,13 +9,13 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 from neo4j import AsyncDriver
 from prometheus_client import Counter, Histogram
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from rapidfuzz import fuzz
 
+from ..llm.client import LLMClient
 from ..models.entities import Entity
 from .models import CandidateMatch, ResolutionDecision, ResolutionResult
 
@@ -167,6 +167,7 @@ class EntityResolver:
         self._neo4j = neo4j_driver
         self._qdrant = qdrant_client
         self._embedding_dim = embedding_dim
+        self._llm_client = LLMClient()
 
     # ------------------------------------------------------------------
     # Public API
@@ -635,40 +636,25 @@ class EntityResolver:
             )
 
     # ------------------------------------------------------------------
-    # Embedding (Ollama nomic-embed-text)
+    # Embedding (Unified LLM Client)
     # ------------------------------------------------------------------
 
     async def _embed(self, text: str) -> list[float]:
-        """Generate semantic embedding using local nomic-embed-text model on Ollama.
+        """Generate semantic embedding using the configured LLM provider.
 
-        Falls back on deterministic hash-based generator if Ollama is unreachable.
+        Falls back on deterministic hash-based generator if LLM is unreachable.
         """
-        base_url = OLLAMA_URL.rstrip("/")
-        url = f"{base_url}/api/embeddings"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(
-                    url,
-                    json={
-                        "model": EMBEDDING_MODEL,
-                        "prompt": text,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                embedding = data.get("embedding")
-                if embedding and isinstance(embedding, list):
-                    vector = [float(v) for v in embedding if isinstance(v, int | float)]
-                    if len(vector) < self._embedding_dim:
-                        return vector + [0.0] * (self._embedding_dim - len(vector))
-                    return vector[: self._embedding_dim]
-                logger.warning(
-                    "invalid_ollama_embedding_response_structure", extra={"response": data}
-                )
+            vector = await self._llm_client.embed(text)
+            if isinstance(vector, list):
+                if len(vector) < self._embedding_dim:
+                    return vector + [0.0] * (self._embedding_dim - len(vector))
+                return vector[: self._embedding_dim]
+            logger.warning("invalid_llm_embedding_response_structure", extra={"response": vector})
         except Exception as exc:
             logger.warning(
-                "ollama_embedding_failed_using_fallback_hash",
-                extra={"error": str(exc), "url": url, "model": EMBEDDING_MODEL},
+                "llm_embedding_failed_using_fallback_hash",
+                extra={"error": str(exc)},
             )
 
         return _embed(text, self._embedding_dim)

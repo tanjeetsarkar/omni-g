@@ -13,17 +13,17 @@ scrape_configs:
   # in docker-compose.yml (required on Linux).
   - job_name: 'aggregator'
     static_configs:
-      - targets: ['host.docker.internal:8080']
+      - targets: ['aggregator:8080']
     metrics_path: '/metrics'
 
   - job_name: 'processor'
     static_configs:
-      - targets: ['host.docker.internal:8003']
+      - targets: ['processor:8001']
     metrics_path: '/metrics'
 
   - job_name: 'delivery-gateway'
     static_configs:
-      - targets: ['host.docker.internal:9464']
+      - targets: ['gateway:9464']
     metrics_path: '/metrics'
 
   # Note: Kafka and Redis do not expose Prometheus metrics natively on their
