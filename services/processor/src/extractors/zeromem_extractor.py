@@ -7,6 +7,7 @@ Zero LLM calls — all entity detection is done by local NER models.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -17,6 +18,33 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# ── spaCy label allowlist ──────────────────────────────────────────────────
+# Only labels that represent knowledge-graph entities.  Numeric / temporal
+# labels like CARDINAL, ORDINAL, PERCENT, MONEY, QUANTITY, TIME, DATE are
+# quantities and temporal references — not entities — and are dropped.
+#
+# Mirrors the distinction already used by QueryProfiler in retrieval/profiler.py
+# (_ENTITY_LABELS vs _TEMPORAL_LABELS).
+_SPACY_ALLOWED_LABELS: frozenset[str] = frozenset(
+    {
+        "PERSON",
+        "ORG",
+        "GPE",
+        "LOC",
+        "FAC",
+        "PRODUCT",
+        "WORK_OF_ART",
+        "NORP",
+        "LAW",
+        "EVENT",
+        "LANGUAGE",
+    }
+)
+
+# Regex: true when *text* contains no ASCII letter — catches bare numbers,
+# punctuation-only tokens, and symbols.
+_NON_ALPHABETIC_RE = re.compile(r"^[^A-Za-z]+$")
 
 # GLiNER generic entity labels for domain-agnostic extraction
 _GLINER_LABELS = [
@@ -37,11 +65,26 @@ class ZeroMemExtractor:
     Loaded once at runtime initialisation.  Both models are CPU-safe and run
     synchronously — the blocking call is acceptable because Celery workers
     run in separate processes and the extractor is not on the asyncio event loop.
+
+    Parameters
+    ----------
+    spacy_allowed_labels:
+        Override the default spaCy label allowlist.  When ``None``, the
+        module-level ``_SPACY_ALLOWED_LABELS`` is used.
+    min_entity_length:
+        Minimum character length for a spaCy entity name.  Shorter spans are
+        dropped.  Default: 2.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        spacy_allowed_labels: frozenset[str] | None = None,
+        min_entity_length: int = 2,
+    ) -> None:
         self._nlp: Any = None
         self._gliner: Any = None
+        self._spacy_allowed_labels = spacy_allowed_labels or _SPACY_ALLOWED_LABELS
+        self._min_entity_length = min_entity_length
 
     def _get_nlp(self) -> Any:
         if self._nlp is None:
@@ -78,27 +121,53 @@ class ZeroMemExtractor:
         now = datetime.now(UTC)
         entities: list[Entity] = []
         entity_counts: dict[str, int] = {}
+        dropped: dict[str, int] = {}
 
         # ── spaCy NER ────────────────────────────────────────────────────
         nlp = self._get_nlp()
         doc = nlp(text)
+        min_len = self._min_entity_length
         for ent in doc.ents:
+            label = ent.label_
+            name = ent.text.strip()
+
+            # Drop non-entity labels (CARDINAL, ORDINAL, PERCENT, MONEY,
+            # QUANTITY, TIME, DATE, etc.)
+            if label not in self._spacy_allowed_labels:
+                dropped.setdefault(label, 0)
+                dropped[label] += 1
+                continue
+
+            # Drop entities that are too short or purely numeric/punctuation
+            if len(name) < min_len:
+                dropped.setdefault("_too_short", 0)
+                dropped["_too_short"] += 1
+                continue
+            if _NON_ALPHABETIC_RE.match(name):
+                dropped.setdefault("_non_alphabetic", 0)
+                dropped["_non_alphabetic"] += 1
+                continue
+
             entity_id = f"entity--{uuid4()}"
             entities.append(
                 Entity(
                     id=entity_id,
-                    type=ent.label_,
-                    name=ent.text.strip(),
+                    type=label,
+                    name=name,
                     confidence=0.75,
                     tenant_id=tenant_id,
-                    source_spans=[
-                        EvidenceSpan(text=ent.text, start=ent.start_char, end=ent.end_char)
-                    ],
+                    source_spans=[EvidenceSpan(text=ent.text, start=ent.start_char, end=ent.end_char)],
                     created=now,
                     modified=now,
                 )
             )
             entity_counts[entity_id] = 1
+
+        if dropped:
+            logger.debug(
+                "zeromem_spacy_dropped",
+                extra={"context_id": context_id, "dropped": dropped},
+            )
 
         # ── GLiNER (generic types spaCy may miss) ─────────────────────────
         try:
@@ -130,9 +199,7 @@ class ZeroMemExtractor:
 
         # ── Co-occurrence weight: w(d,e) = c(e,d) / Σ_e' c(e',d) ─────────
         total = max(sum(entity_counts.values()), 1)
-        entity_context_weights: dict[str, float] = {
-            eid: count / total for eid, count in entity_counts.items()
-        }
+        entity_context_weights: dict[str, float] = {eid: count / total for eid, count in entity_counts.items()}
         uniform = 1.0 / max(len(entities), 1)
         for entity in entities:
             entity_context_weights.setdefault(entity.id, uniform)

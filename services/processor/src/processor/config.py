@@ -17,21 +17,15 @@ class Settings(BaseSettings):
     kafka_raw_topic: str = Field(default="raw-feed", alias="KAFKA_RAW_TOPIC")
     kafka_entities_topic: str = Field(default="processed-entities", alias="KAFKA_ENTITIES_TOPIC")
     kafka_alerts_topic: str = Field(default="analyst-alerts", alias="KAFKA_ALERTS_TOPIC")
-    kafka_assessment_topic: str = Field(
-        default="assessments-produced", alias="KAFKA_ASSESSMENT_TOPIC"
-    )
-    kafka_processor_events_topic: str = Field(
-        default="processor-events", alias="KAFKA_PROCESSOR_EVENTS_TOPIC"
-    )
+    kafka_assessment_topic: str = Field(default="assessments-produced", alias="KAFKA_ASSESSMENT_TOPIC")
+    kafka_processor_events_topic: str = Field(default="processor-events", alias="KAFKA_PROCESSOR_EVENTS_TOPIC")
     kafka_dlq_topic: str = Field(default="raw-feed.dlq", alias="KAFKA_DLQ_TOPIC")
     kafka_num_workers: int = Field(default=1, alias="KAFKA_NUM_WORKERS")
 
     # Celery (V2 Step 2 scaffolding)
     celery_enabled: bool = Field(default=False, alias="CELERY_ENABLED")
     celery_broker_url: str = Field(default="redis://localhost:6379/1", alias="CELERY_BROKER_URL")
-    celery_result_backend: str = Field(
-        default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND"
-    )
+    celery_result_backend: str = Field(default="redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND")
     celery_task_queue: str = Field(default="processor-process-event", alias="CELERY_TASK_QUEUE")
     celery_task_always_eager: bool = Field(default=True, alias="CELERY_TASK_ALWAYS_EAGER")
     celery_task_ignore_result: bool = Field(default=True, alias="CELERY_TASK_IGNORE_RESULT")
@@ -58,15 +52,14 @@ class Settings(BaseSettings):
     # LLM Provider (OpenRouter or Ollama)
     llm_provider: str = Field(default="ollama", alias="LLM_PROVIDER")  # "openrouter" | "ollama"
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
-    openrouter_base_url: str = Field(
-        default="https://openrouter.ai/api/v1/chat/completions", alias="OPENROUTER_BASE_URL"
-    )
-    openrouter_model: str = Field(
-        default="meta-llama/llama-3.1-8b-instruct", alias="OPENROUTER_MODEL"
-    )
-    openrouter_embedding_model: str = Field(
-        default="text-embedding-3-small", alias="OPENROUTATOR_EMBEDDING_MODEL"
-    )
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
+    openrouter_model: str = Field(default="meta-llama/llama-3.1-8b-instruct", alias="OPENROUTER_MODEL")
+    openrouter_embedding_model: str = Field(default="text-embedding-3-small", alias="OPENROUTER_EMBEDDING_MODEL")
+
+    # Embedding (local BGE-M3 via FlagEmbedding)
+    embedding_model: str = Field(default="BAAI/bge-m3", alias="EMBEDDING_MODEL_NAME")
+    embedding_dim: int = Field(default=1024, alias="EMBEDDING_DIM")
+    embedding_use_fp16: bool = Field(default=True, alias="EMBEDDING_USE_FP16")
 
     # MinIO / S3-compatible object storage
     minio_url: str = Field(default="http://localhost:9000", alias="MINIO_URL")
@@ -90,6 +83,14 @@ class Settings(BaseSettings):
 
     # Aggregator (for processor → aggregator enrichment callbacks)
     aggregator_url: str = Field(default="http://localhost:8000", alias="AGGREGATOR_URL")
+
+    # ── Extractor NER filtering ─────────────────────────────────────────
+    # Comma-separated list of spaCy entity labels to allow (labels not listed
+    # are dropped).  When empty or unset the module-level default is used.
+    extractor_spacy_allowed_labels: str = Field(default="", alias="EXTRACTOR_SPACY_ALLOWED_LABELS")
+    # Minimum character length for a spaCy entity name.  Shorter spans are
+    # dropped.  Default: 2.
+    extractor_min_entity_length: int = Field(default=2, alias="EXTRACTOR_MIN_ENTITY_LENGTH")
 
 
 def get_settings() -> Settings:

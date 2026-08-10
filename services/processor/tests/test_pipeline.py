@@ -130,9 +130,7 @@ class TestRawEventEnvelope:
         assert envelope.payload["content"] == "article text"
 
     def test_extra_top_level_fields_are_allowed(self) -> None:
-        envelope = RawEventEnvelope.model_validate(
-            {"payload": {"text": "intel"}, "custom_field": "value"}
-        )
+        envelope = RawEventEnvelope.model_validate({"payload": {"text": "intel"}, "custom_field": "value"})
         assert envelope.model_extra is not None
         assert envelope.model_extra.get("custom_field") == "value"
 
@@ -386,6 +384,127 @@ class TestProcessingPipeline:
         assert result is not None
         # resolve_and_persist should be called once for each entity (2 total)
         assert mock_resolver.resolve_and_persist.call_count == 2
+
+    async def test_resolver_canonical_ids_propagated_to_extraction_result(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """When resolver returns AUTO_MERGE with a different ID, canonical IDs replace originals."""
+        from datetime import UTC, datetime
+
+        from src.resolution.models import ResolutionDecision, ResolutionResult
+
+        now = datetime.now(UTC)
+        original_id = "entity--00000000-0000-0000-0000-000000000001"
+        canonical_id = "entity--aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+        entity1 = Entity(
+            id=original_id,
+            type="Person",
+            name="Narendra Modi",
+            created=now,
+            modified=now,
+        )
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-canonical",
+            extraction_confidence=0.9,
+            entities=[entity1],
+        )
+
+        mock_resolver = AsyncMock(spec=EntityResolver)
+
+        # Return AUTO_MERGE with a matched_entity_id different from the incoming id
+        mock_resolver.resolve_and_persist.return_value = ResolutionResult(
+            decision=ResolutionDecision.AUTO_MERGE,
+            matched_entity_id=canonical_id,
+            confidence_score=0.97,
+            entity=entity1,
+        )
+
+        mock_graph = AsyncMock()
+        pipeline_with_resolver = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
+            resolver=cast(EntityResolver, mock_resolver),
+            graph_persistence=mock_graph,
+        )
+
+        event = _make_valid_event(id="evt-canonical", payload={"text": "Narendra Modi speaks"})
+        result = await pipeline_with_resolver.process(event)
+
+        assert result is not None
+        # The entity in the result should carry the canonical ID, not the original
+        assert len(result.entities) == 1
+        assert result.entities[0].id == canonical_id
+        # persist_extraction should have been called with the canonical ID
+        mock_graph.persist_extraction.assert_called_once()
+        persisted = mock_graph.persist_extraction.call_args.args[0]
+        assert persisted.entities[0].id == canonical_id
+
+    async def test_resolver_dedups_entities_mapped_to_same_canonical_id(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """When two incoming entities merge to the same canonical ID, the result is deduped."""
+        from datetime import UTC, datetime
+
+        from src.resolution.models import ResolutionDecision, ResolutionResult
+
+        now = datetime.now(UTC)
+        canonical_id = "entity--aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+        entity1 = Entity(
+            id="entity--00000000-0000-0000-0000-000000000001",
+            type="Person",
+            name="PM Modi",
+            confidence=0.75,
+            created=now,
+            modified=now,
+        )
+        entity2 = Entity(
+            id="entity--00000000-0000-0000-0000-000000000002",
+            type="Person",
+            name="Narendra Modi",
+            confidence=0.95,
+            created=now,
+            modified=now,
+        )
+        mock_extractor.extract.return_value = ExtractionResult(
+            source_event_id="evt-dedup",
+            extraction_confidence=0.9,
+            entities=[entity1, entity2],
+        )
+
+        mock_resolver = AsyncMock(spec=EntityResolver)
+
+        # Both entities AUTO_MERGE to the same canonical ID
+        mock_resolver.resolve_and_persist.return_value = ResolutionResult(
+            decision=ResolutionDecision.AUTO_MERGE,
+            matched_entity_id=canonical_id,
+            confidence_score=0.97,
+            entity=entity1,
+        )
+
+        mock_graph = AsyncMock()
+        pipeline_with_resolver = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
+            resolver=cast(EntityResolver, mock_resolver),
+            graph_persistence=mock_graph,
+        )
+
+        event = _make_valid_event(id="evt-dedup", payload={"text": "PM Modi speaks"})
+        result = await pipeline_with_resolver.process(event)
+
+        assert result is not None
+        # Dedup should collapse to 1 entity, keeping the highest-confidence replica.
+        # entity2 (Narendra Modi, 0.95) has higher confidence than entity1 (PM Modi, 0.75).
+        assert len(result.entities) == 1
+        assert result.entities[0].id == canonical_id
+        assert result.entities[0].name == "Narendra Modi"
+        assert result.entities[0].confidence == 0.95
 
     async def test_resolver_not_called_when_none(
         self,

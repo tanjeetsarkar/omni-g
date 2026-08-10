@@ -48,11 +48,20 @@ export function transformToEChartsData(
   evidenceNodes: EvidenceNode[],
   edges: EvidenceEdge[],
 ) {
-  const nodes = evidenceNodes.map((node) => {
+  const total = evidenceNodes.length;
+
+  const nodes = evidenceNodes.map((node, idx) => {
     const confidence = Math.max(0, Math.min(1, node.score));
     const opacity = 0.4 + confidence * 0.6;
     const isHighConfidence = confidence > 0.8;
     const labelEnabled = confidence > 0.3;
+
+    // Deterministic x/y for static (layout: "none") rendering.  Force and
+    // circular layouts override these, so they're harmless in other modes.
+    const angle = total > 1 ? (2 * Math.PI * idx) / total : 0;
+    const radius = 300;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
 
     return {
       id: node.id,
@@ -61,6 +70,8 @@ export function transformToEChartsData(
       symbolSize: node.depth === 0 ? 45 : node.depth === 1 ? 32 : 22,
       category: node.type,
       value: node.score,
+      x,
+      y,
       itemStyle: {
         color: getTypeColor(node.type),
         opacity,

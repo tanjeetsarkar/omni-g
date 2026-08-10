@@ -60,18 +60,19 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
     expect(nodes).toHaveLength(3);
     expect(links).toHaveLength(2);
 
-    expect(nodes[0]).toEqual({
-      id: "hospital_123",
-      name: "hospital_123",
-      label: "Johns Hopkins Hospital",
-      symbolSize: 45,
-      category: "FACILITY",
-      value: 0.95,
-      itemStyle: { color: getTypeColor("FACILITY") },
-      rawContext: "A famous hospital",
-      sourceId: "src-1",
-      timestamp: "2026-08-01T00:00:00Z",
-    });
+    // Node 0 assertions — x/y added for static layout, confidence for tooltips
+    expect(nodes[0].id).toBe("hospital_123");
+    expect(nodes[0].name).toBe("hospital_123");
+    expect(nodes[0].label).toBe("Johns Hopkins Hospital");
+    expect(nodes[0].symbolSize).toBe(45);
+    expect(nodes[0].category).toBe("FACILITY");
+    expect(nodes[0].value).toBe(0.95);
+    expect(nodes[0].rawContext).toBe("A famous hospital");
+    expect(nodes[0].sourceId).toBe("src-1");
+    expect(nodes[0].timestamp).toBe("2026-08-01T00:00:00Z");
+    expect(typeof nodes[0].x).toBe("number");
+    expect(typeof nodes[0].y).toBe("number");
+    expect(nodes[0].confidence).toBe(0.95);
 
     expect(links[0]).toEqual({
       source: "hospital_123",
@@ -91,5 +92,33 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
     expect(rootNode?.symbolSize).toBe(45);
     expect(midNode?.symbolSize).toBe(32);
     expect(leafNode?.symbolSize).toBe(22);
+  });
+
+  it("emits x/y coordinates for static (layout: none) rendering", () => {
+    const { nodes } = transformToEChartsData(mockNodes, mockEdges);
+
+    for (const node of nodes) {
+      expect(typeof node.x).toBe("number");
+      expect(typeof node.y).toBe("number");
+      expect(Number.isFinite(node.x)).toBe(true);
+      expect(Number.isFinite(node.y)).toBe(true);
+    }
+  });
+
+  it("places nodes in a circular distribution when >1 node", () => {
+    const { nodes } = transformToEChartsData(mockNodes, mockEdges);
+
+    // With 3 nodes, the angles should be 0, 2π/3, 4π/3 on a circle radius 300
+    const radius = 300;
+
+    // Each node should be at roughly radius distance from origin
+    for (const node of nodes) {
+      const dist = Math.sqrt(node.x * node.x + node.y * node.y);
+      expect(dist).toBeCloseTo(radius, -1); // within ~10 due to floating point
+    }
+
+    // Nodes should be distinct positions (not all at the same spot)
+    const positions = nodes.map((n) => `${n.x.toFixed(2)},${n.y.toFixed(2)}`);
+    expect(new Set(positions).size).toBe(nodes.length);
   });
 });

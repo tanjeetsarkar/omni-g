@@ -24,6 +24,18 @@ from .stage_publisher import StageEventPublisher
 logger = logging.getLogger(__name__)
 
 
+def _parse_allowed_labels(labels_str: str) -> frozenset[str] | None:
+    """Parse a comma-separated *labels_str* into a frozenset, or ``None`` if empty.
+
+    Returns ``None`` (meaning "use the module-level default") when *labels_str*
+    is empty or whitespace-only.
+    """
+    stripped = labels_str.strip()
+    if not stripped:
+        return None
+    return frozenset(lbl.strip() for lbl in stripped.split(",") if lbl.strip())
+
+
 @dataclass
 class ProcessorRuntime:
     pipeline: ProcessingPipeline
@@ -46,10 +58,11 @@ class ProcessorRuntime:
         await deduplicator.connect(cfg.redis_url)
         logger.info("Deduplicator connected", extra={"worker_id": worker_id})
 
-        zeromem_extractor = ZeroMemExtractor()
-        logger.info(
-            "ZeroMemExtractor initialised (lazy model load)", extra={"worker_id": worker_id}
+        zeromem_extractor = ZeroMemExtractor(
+            spacy_allowed_labels=_parse_allowed_labels(cfg.extractor_spacy_allowed_labels),
+            min_entity_length=cfg.extractor_min_entity_length,
         )
+        logger.info("ZeroMemExtractor initialised (lazy model load)", extra={"worker_id": worker_id})
 
         neo4j_driver = AsyncGraphDatabase.driver(
             cfg.neo4j_url,
@@ -77,9 +90,11 @@ class ProcessorRuntime:
         vector_indexer = ContextUnitIndexer(
             qdrant_url=cfg.qdrant_url,
             api_key=cfg.qdrant_api_key,
+            settings=cfg,
         )
         logger.info(
-            "ContextUnitIndexer initialised (lazy BGE-M3 load)", extra={"worker_id": worker_id}
+            "ContextUnitIndexer initialised (lazy embedding load)",
+            extra={"worker_id": worker_id, "llm_provider": cfg.llm_provider},
         )
 
         temporal_store = TemporalStore(postgres_url=cfg.postgres_url)

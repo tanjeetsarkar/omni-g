@@ -44,11 +44,9 @@ export type ToastState = "idle" | "running" | "done" | "error";
 const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "schema_validation", label: "Validating schema" },
   { key: "deduplication", label: "Deduplicating content" },
-  { key: "llm_extraction", label: "Extracting entities (LLM)" },
-  { key: "grounding_validation", label: "Grounding check (source evidence)" },
+  { key: "ner_extraction", label: "Extracting entities (NER)" },
   { key: "entity_resolution", label: "Resolving entities" },
   { key: "graph_persistence", label: "Writing to Knowledge Graph" },
-  { key: "graphrag_index", label: "Building community index" },
   { key: "alert_publishing", label: "Publishing analyst alerts" },
 ];
 

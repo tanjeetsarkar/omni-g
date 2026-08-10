@@ -42,14 +42,9 @@ const PIPELINE_STAGES: StageInfo[] = [
     detail: "Redis SHA-256 content hash",
   },
   {
-    key: "llm_extraction",
-    label: "LLM Extraction",
-    detail: "STIX entity identification",
-  },
-  {
-    key: "grounding_validation",
-    label: "Grounding Check",
-    detail: "Source-evidence verification",
+    key: "ner_extraction",
+    label: "NER Extraction",
+    detail: "spaCy + GLiNER entity detection",
   },
   {
     key: "entity_resolution",
@@ -60,11 +55,6 @@ const PIPELINE_STAGES: StageInfo[] = [
     key: "graph_persistence",
     label: "Graph Persistence",
     detail: "Neo4j STIX write",
-  },
-  {
-    key: "graphrag_index",
-    label: "GraphRAG Index",
-    detail: "Community summaries",
   },
   {
     key: "alert_publishing",

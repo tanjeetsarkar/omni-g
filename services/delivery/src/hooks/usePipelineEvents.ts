@@ -32,12 +32,11 @@ const MAX_EVENTS = 100;
 const PIPELINE_STAGES = [
   "schema_validation",
   "deduplication",
-  "llm_extraction",
-  "grounding_validation",
+  "ner_extraction",
   "entity_resolution",
   "graph_persistence",
-  "graphrag_index",
   "alert_publishing",
+  "pipeline_complete",
 ] as const;
 
 function initialStageStatuses(): Record<string, StageStatus> {

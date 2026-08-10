@@ -384,14 +384,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..models.entities import Entity
 
         if not body.entity_ids:
-            return JSONResponse(
-                {"entities": [], "relationships": [], "context_units": [], "total": 0}
-            )
+            return JSONResponse({"entities": [], "relationships": [], "context_units": [], "total": 0})
 
         cfg: Settings = app.state.settings
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         graph_persistence = GraphPersistenceService(neo4j_driver)
         entities: list[Entity] = []
         relationships: list[dict[str, Any]] = []
@@ -423,9 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     logger.exception("Failed to parse entity from Neo4j row")
             if entities:
                 entity_ids = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(
-                    entity_ids, body.tenant_id
-                )
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids, body.tenant_id)
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:
@@ -472,13 +466,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..retrieval.temporal import TemporalRetriever
 
         cfg: Settings = app.state.settings
-        logger.info(
-            "Search request received", extra={"tenant_id": body.tenant_id, "query": body.query}
-        )
+        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query})
 
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
         graph_persistence = GraphPersistenceService(neo4j_driver)
 
@@ -488,9 +478,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             profile = profiler.profile(body.query)
 
             # Lazy-loaded indexer (BGE-M3)
-            vector_indexer = ContextUnitIndexer(
-                qdrant_url=cfg.qdrant_url, api_key=cfg.qdrant_api_key
-            )
+            vector_indexer = ContextUnitIndexer(qdrant_url=cfg.qdrant_url, api_key=cfg.qdrant_api_key, settings=cfg)
 
             # Temporal store (fail-open)
             temporal_store = TemporalStore(postgres_url=cfg.postgres_url)
@@ -503,13 +491,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             temporal_retriever = TemporalRetriever(temporal_store, neo4j_driver)
 
             # Parallel retrieval
-            rel_task = relational_retriever.retrieve(
-                profile, body.tenant_id, profile.d_max, body.limit
-            )
+            rel_task = relational_retriever.retrieve(profile, body.tenant_id, profile.d_max, body.limit)
             temp_task = temporal_retriever.retrieve(profile, body.tenant_id, body.limit)
-            relational_results, temporal_results = await _asyncio.gather(
-                rel_task, temp_task, return_exceptions=True
-            )
+            relational_results, temporal_results = await _asyncio.gather(rel_task, temp_task, return_exceptions=True)
             if isinstance(relational_results, Exception):
                 logger.warning("Relational retrieval failed: %s", relational_results)
                 relational_results = []
@@ -575,17 +559,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             if entities:
                 entity_ids_final = [e.id for e in entities]
-                neighbors = await graph_persistence.fetch_neighbor_entities(
-                    entity_ids_final, body.tenant_id
-                )
+                neighbors = await graph_persistence.fetch_neighbor_entities(entity_ids_final, body.tenant_id)
                 existing_ids = {e.id for e in entities}
                 for n in neighbors:
                     if n.id not in existing_ids:
                         entities.append(n)
                 entity_ids_final = [e.id for e in entities]
-                relationships = await graph_persistence.fetch_relationships_for_entities(
-                    entity_ids_final
-                )
+                relationships = await graph_persistence.fetch_relationships_for_entities(entity_ids_final)
 
             await temporal_store.close()
         finally:
@@ -631,9 +611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         graph_persistence = GraphPersistenceService(neo4j_driver)
 
         context_units_payload = []
@@ -729,8 +707,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if all_entity_ids:
                     async with neo4j_driver.session() as session:
                         result = await session.run(
-                            "MATCH (e:Entity) WHERE e.id IN $ids "
-                            "AND e.tenant_id = $tenant_id RETURN e",
+                            "MATCH (e:Entity) WHERE e.id IN $ids " "AND e.tenant_id = $tenant_id RETURN e",
                             ids=all_entity_ids,
                             tenant_id=body.tenant_id,
                         )
@@ -754,9 +731,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         except Exception:
                             logger.exception("Failed to parse node in expand")
 
-                    relationships = await graph_persistence.fetch_relationships_for_entities(
-                        all_entity_ids
-                    )
+                    relationships = await graph_persistence.fetch_relationships_for_entities(all_entity_ids)
 
         finally:
             await neo4j_driver.close()
@@ -800,9 +775,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Try LLM-synthesized summary
         try:
             llm = LLMClient(cfg)
-            context_text = "\n".join(
-                f"[{i + 1}] {u.get('text', '')}" for i, u in enumerate(sorted_units[:10])
-            )
+            context_text = "\n".join(f"[{i + 1}] {u.get('text', '')}" for i, u in enumerate(sorted_units[:10]))
             prompt = (
                 "You are an intelligence analyst. Provide a 2-3 sentence BLUF "
                 "(Bottom Line Up Front) summary of the following intelligence findings. "
@@ -829,9 +802,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from neo4j import AsyncGraphDatabase
 
         cfg: Settings = app.state.settings
-        neo4j_driver = AsyncGraphDatabase.driver(
-            cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password)
-        )
+        neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
 
         entities: list[dict[str, Any]] = []
         try:
@@ -953,9 +924,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Next",
                 "Last",
             }
-            entities_list = list(
-                dict.fromkeys(m for m in matches if m not in stop_words and len(m) > 2)
-            )[:10]
+            entities_list = list(dict.fromkeys(m for m in matches if m not in stop_words and len(m) > 2))[:10]
 
             return JSONResponse(
                 {

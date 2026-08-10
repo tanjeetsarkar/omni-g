@@ -41,6 +41,7 @@ import { useSearchHistory } from "../../hooks/useSearchHistory";
 import PipelineProgressToast, {
   ToastState,
 } from "../../components/graph/PipelineProgressToast";
+import ActivityDrawer from "../../components/graph/ActivityDrawer";
 import { BlufStrip } from "../../components/synthesis/BlufStrip";
 import { NotificationBell } from "../../components/notifications/NotificationBell";
 
@@ -92,12 +93,22 @@ export function ExplorerContent() {
     joinTenant(tenantId);
   }, [tenantId]);
 
-  // Synchronize toastState when alert_publishing finishes (pipeline completed successfully)
+  // Synchronize toastState when pipeline completes.  We watch both
+  // alert_publishing (highest-confidence pipelines) and the pipeline_complete
+  // synthetic stage that the processor always emits regardless of confidence.
   useEffect(() => {
-    if (toastState === "running" && stageStatuses.alert_publishing === "done") {
+    if (toastState !== "running") return;
+    if (
+      stageStatuses.alert_publishing === "done" ||
+      stageStatuses.pipeline_complete === "done"
+    ) {
       setToastState("done");
     }
-  }, [toastState, stageStatuses.alert_publishing]);
+  }, [
+    toastState,
+    stageStatuses.alert_publishing,
+    stageStatuses.pipeline_complete,
+  ]);
 
   // 90-second safety fallback timeout for the running toast
   useEffect(() => {
@@ -565,6 +576,9 @@ export function ExplorerContent() {
           onDismiss={handleDismissToast}
           onRetry={handleRetrySearch}
         />
+
+        {/* Always-visible pipeline activity drawer */}
+        <ActivityDrawer socket={socket} />
       </div>
     </div>
   );

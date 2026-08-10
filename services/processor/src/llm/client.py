@@ -65,9 +65,7 @@ class LLMClient:
         """Generate text using OpenRouter API."""
         try:
             model = kwargs.get("model", self._settings.openrouter_model)
-            response = await self._openrouter_client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], **kwargs
-            )
+            response = await self._openrouter_client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], **kwargs)
             return response.choices[0].message.content or ""
         except Exception as e:
             raise Exception(f"OpenRouter generation failed: {str(e)}") from e
@@ -88,15 +86,15 @@ class LLMClient:
             raise Exception(f"Ollama generation failed: {str(e)}") from e
 
     async def _embed_openrouter(self, text: str) -> list[float]:
-        """Generate embeddings using OpenRouter API."""
+        """Generate embeddings using the OpenRouter embeddings API.
+
+        OpenRouter provides an OpenAI-compatible ``POST /api/v1/embeddings`` endpoint.
+        See https://openrouter.ai/docs/api-reference/embeddings for details.
+        """
         try:
-            # OpenRouter doesn't have a direct embedding API,
-            # so we'll use OpenAI-compatible embeddings
-            # For now, we'll return a placeholder - in a real implementation,
-            # you might use a separate
-            # embedding service or a model that supports embeddings
             response = await self._openrouter_client.embeddings.create(
-                model=self._settings.openrouter_embedding_model, input=text
+                model=self._settings.openrouter_embedding_model,
+                input=text,
             )
             return response.data[0].embedding
         except Exception as e:
