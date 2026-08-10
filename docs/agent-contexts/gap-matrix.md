@@ -41,11 +41,7 @@ The following V2 features have been **intentionally removed** as part of the V3 
 
 | Removed | Reason |
 |---------|--------|
-| `KIQ`, `CollectedEvidence`, `Hypothesis`, `Assessment`, `CollectionGap` models | Replaced by ContextUnit-first paradigm; intelligence cycle re-emerges at Delivery synthesis level |
-| `LLMExtractor` (pipeline stage) | Replaced by `ZeroMemExtractor` (NER-based, zero LLM calls on ingest path) |
 | `GraphRAGIndexer`, `CommunityDetector`, `CommunitySummarizer` | Replaced by dual-view PPR retrieval; community summaries replaced by calibrated R(q) |
-| `EvidencePublisher`, `AssessmentPublisher` | No longer needed; intelligence cycle outputs produced at Delivery |
-| `HypothesisService`, `AssessmentService` | Deprecated; ACH at Delivery synthesis layer (future) |
 | `langchain`, `instructor`, `pydantic-ai-slim`, `openai`, `stix2` Python packages | Removed from `pyproject.toml` |
 
 ---

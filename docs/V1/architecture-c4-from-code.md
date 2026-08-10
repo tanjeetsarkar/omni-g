@@ -269,7 +269,7 @@ class ContentDeduplicator {
   +check_and_set(tenantId, event)
 }
 
-class LLMExtractor {
+class ZeroMemExtractor {
   +extract(eventId, text, metadata)
 }
 
@@ -331,7 +331,7 @@ RawEventConsumer --> ProcessingPipeline : process(event)
 RawEventConsumer --> Kafka : consume raw-feed\nsend DLQ
 
 ProcessingPipeline --> ContentDeduplicator : stage dedup
-ProcessingPipeline --> LLMExtractor : stage extraction
+ProcessingPipeline --> ZeroMemExtractor : stage extraction
 ProcessingPipeline --> EntityResolver : stage resolution
 ProcessingPipeline --> GraphPersistenceService : stage persistence
 ProcessingPipeline --> GraphRAGIndexer : stage graphrag
@@ -339,7 +339,7 @@ ProcessingPipeline --> AlertPublisher : stage alert publish
 ProcessingPipeline --> StageEventPublisher : stage telemetry
 
 ContentDeduplicator --> Redis : dedup keys
-LLMExtractor --> Ollama : extraction + embeddings
+ZeroMemExtractor --> Ollama : embeddings
 EntityResolver --> Qdrant : vector candidates
 EntityResolver --> Neo4j : structural matching
 GraphPersistenceService --> Neo4j : write/read graph
@@ -393,4 +393,3 @@ Proc->>Q: semantic query search
 Proc->>Neo: fetch neighbors + relationships
 Proc-->>UI: entities + relationships
 UI-->>Analyst: Updated graph with realtime nodes
-```

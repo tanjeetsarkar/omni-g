@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     kafka_raw_topic: str = Field(default="raw-feed", alias="KAFKA_RAW_TOPIC")
     kafka_entities_topic: str = Field(default="processed-entities", alias="KAFKA_ENTITIES_TOPIC")
     kafka_alerts_topic: str = Field(default="analyst-alerts", alias="KAFKA_ALERTS_TOPIC")
-    kafka_evidence_topic: str = Field(default="evidence-created", alias="KAFKA_EVIDENCE_TOPIC")
     kafka_assessment_topic: str = Field(
         default="assessments-produced", alias="KAFKA_ASSESSMENT_TOPIC"
     )
@@ -55,6 +54,19 @@ class Settings(BaseSettings):
     ollama_url: str = Field(default="http://localhost:11434", alias="OLLAMA_URL")
     ollama_model: str = Field(default="qwen2.5:1.5b", alias="OLLAMA_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+
+    # LLM Provider (OpenRouter or Ollama)
+    llm_provider: str = Field(default="ollama", alias="LLM_PROVIDER")  # "openrouter" | "ollama"
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1/chat/completions", alias="OPENROUTER_BASE_URL"
+    )
+    openrouter_model: str = Field(
+        default="meta-llama/llama-3.1-8b-instruct", alias="OPENROUTER_MODEL"
+    )
+    openrouter_embedding_model: str = Field(
+        default="text-embedding-3-small", alias="OPENROUTATOR_EMBEDDING_MODEL"
+    )
 
     # MinIO / S3-compatible object storage
     minio_url: str = Field(default="http://localhost:9000", alias="MINIO_URL")

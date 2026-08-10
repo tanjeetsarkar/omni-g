@@ -1,3 +1,3 @@
-from .extractor import LLMExtractor
+from .client import LLMClient
 
-__all__ = ["LLMExtractor"]
+__all__ = ["LLMClient"]

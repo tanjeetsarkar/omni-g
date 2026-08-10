@@ -3,7 +3,7 @@
 V3 NOTE: The GraphRAG CommunitySummarizer content source was removed.
 The natural V3 replacement is calibrated R(q) context arrays from the
 Dual-View Retrieval Engine — treat as follow-on work after Phase 6.
-For now the generator produces a placeholder script via direct Ollama calls.
+For now the generator produces a placeholder script via LLM calls.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import time
 from typing import Any
 
 from prometheus_client import Counter, Histogram
+
+from ..llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +46,9 @@ class BriefingScriptGenerator:
 
     def __init__(
         self,
-        ollama_url: str = "http://localhost:11434",
-        model: str = "qwen2.5:3b",
+        llm_client: LLMClient | None = None,
     ) -> None:
-        self._ollama_url = ollama_url.rstrip("/")
-        self._model = model
+        self._llm_client = llm_client or LLMClient()
 
     async def generate(self, tenant_id: str, context: list[dict[str, Any]] | None = None) -> str:
         """Generate a spoken briefing script for *tenant_id*.
@@ -60,7 +60,7 @@ class BriefingScriptGenerator:
         summaries = context or []
         try:
             if summaries:
-                script = await self._call_ollama(summaries)
+                script = await self._call_llm(summaries)
             else:
                 script = self._placeholder_script(tenant_id)
             BRIEFING_SCRIPT_LATENCY.observe(time.perf_counter() - t0)
@@ -77,22 +77,14 @@ class BriefingScriptGenerator:
             )
             return self._placeholder_script(tenant_id)
 
-    async def _call_ollama(self, summaries: list[dict[str, Any]]) -> str:
-        import httpx
-
+    async def _call_llm(self, summaries: list[dict[str, Any]]) -> str:
         top = summaries[:10]
         context_text = "\n".join(
             f"[{i + 1}] {s.get('text', s.get('community_summary', ''))}" for i, s in enumerate(top)
         )
         prompt = _BRIEFING_PROMPT.format(context=context_text or "No context available.")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{self._ollama_url}/api/generate",
-                json={"model": self._model, "prompt": prompt, "stream": False},
-            )
-            resp.raise_for_status()
-            return str(resp.json().get("response", ""))
+        return await self._llm_client.generate(prompt)
 
     @staticmethod
     def _placeholder_script(tenant_id: str) -> str:

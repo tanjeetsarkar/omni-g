@@ -65,7 +65,7 @@ class ProcessingPipeline:
     def __init__(
         self,
         deduplicator: ContentDeduplicator,      # required — always runs
-        extractor: LLMExtractor,                # required — always runs
+        zeromem_extractor: ZeroMemExtractor,    # required — always runs
         resolver: EntityResolver | None = None, # optional — skipped if None
         graph_persistence: GraphPersistenceService | None = None,  # optional
         graphrag_indexer: GraphRAGIndexer | None = None,           # optional
@@ -302,7 +302,7 @@ is selected for the LLM.
 
 ### Rate limiting
 
-`LLMExtractor` contains an `asyncio.Semaphore(LLM_RATE_LIMIT_RPS)` (default: 10). The
+`ZeroMemExtractor` contains an `asyncio.Semaphore(LLM_RATE_LIMIT_RPS)` (default: 10). The
 `extract()` call is wrapped in `async with self._semaphore:`, which means at most
 `LLM_RATE_LIMIT_RPS` concurrent LLM calls are running at once. This prevents flooding the
 local Ollama server.

@@ -81,7 +81,7 @@ async def fake_deduplicator() -> AsyncGenerator[object]:
 
 
 @pytest.fixture()
-def mock_llm_extractor() -> MagicMock:
+def mock_zeromem_extractor() -> MagicMock:
     """Mock ZeroMemExtractor that returns an empty result."""
     from unittest.mock import MagicMock
 

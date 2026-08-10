@@ -356,7 +356,8 @@ Per the paper's design, the LLM should only appear at final synthesis. In the cu
 
 - `POST /search` and `POST /query/expand` (Processor `main.py`) never call an LLM — confirmed by `test_echarts_drilldown_pipeline.py`'s explicit assertion `assert "token" not in data or data.get("tokens", 0) == 0`.
 - `BriefingScriptGenerator` (`src/briefing/script_generator.py`) **does** call Ollama directly for the spoken-briefing synthesis step — the one place LLM usage is architecturally sanctioned. But its docstring flags a known gap: *"the GraphRAG CommunitySummarizer content source was removed. The natural V3 replacement is calibrated R(q) context arrays — treat as follow-on work after Phase 6"* — i.e., right now briefings fall back to a placeholder script rather than consuming the dual-view retrieval output, which is a genuine incompleteness against the paper's design.
-- A stale `services/processor/src/llm/extractor.py` (pydantic-ai based, V2-era) still exists in the tree but is **not imported by any V3 code path** — the gap matrix flags this explicitly: *"not imported by any V3 path but will fail if imported"* — dead code that should be deleted to avoid accidental reintroduction of LLM calls into the ingest hot path.
+- `services/processor/src/llm/extractor.py` — stale V2 LLM extractor (deleted)
+- `services/processor/src/llm/prompts.py` — only used by stale extractor (deleted)
 
 ---
 
