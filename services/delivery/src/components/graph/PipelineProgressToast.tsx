@@ -14,9 +14,11 @@
  *     exactly what the Aggregator rejected (schema violations, plugin errors, etc.)
  *   - The toast transitions from "running" → "error" without blocking the rest
  *     of the workspace.
+ *
+ * B7: Dismissed errors are pushed into the notification log via useNotificationLog.
  */
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Activity,
   AlertCircle,
@@ -31,6 +33,7 @@ import {
 
 import type { Socket } from "socket.io-client";
 import { usePipelineEvents, type StageStatus } from "@/hooks/usePipelineEvents";
+import { useNotificationLog } from "@/hooks/useNotificationLog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,11 +98,32 @@ export default function PipelineProgressToast({
   onRetry,
 }: PipelineProgressToastProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { pushNotification } = useNotificationLog();
 
   // Always-on listener via usePipelineEvents — avoids the timing bug where
   // conditional socket.on registration misses early stage events that arrive
   // before the "running" effect re-registers.
   const { stageStatuses } = usePipelineEvents(socket);
+
+  // ── B7: Push dismissed errors into the notification log ────────────────
+  // Track whether the current error has been logged so we only push once.
+  const lastErrorLoggedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (toastState === "error" && errorDetail) {
+      // Only log when error detail changes (so retry → new error logs again)
+      if (lastErrorLoggedRef.current !== errorDetail) {
+        lastErrorLoggedRef.current = errorDetail;
+        pushNotification("error", errorDetail);
+      }
+    }
+    if (toastState === "done") {
+      pushNotification(
+        "success",
+        `Pipeline complete for "${query.slice(0, 50)}"`,
+      );
+    }
+  }, [toastState, errorDetail, query, pushNotification]);
 
   // ── Nothing to show ────────────────────────────────────────────────────────
   if (toastState === "idle") return null;

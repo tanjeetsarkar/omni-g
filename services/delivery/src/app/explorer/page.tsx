@@ -8,7 +8,15 @@ import React, {
   Suspense,
 } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Search, Loader, Hexagon, ShieldAlert, Layers } from "lucide-react";
+import {
+  Search,
+  Loader,
+  Hexagon,
+  ShieldAlert,
+  Layers,
+  TrendingUp,
+  Clock,
+} from "lucide-react";
 import {
   EChartsGraphCanvas,
   EChartsNode,
@@ -23,13 +31,18 @@ import type {
   Entity,
   Relationship,
   SearchResponse,
+  ContextUnit,
+  TrendingEntity,
 } from "../../types/entities";
 import { getSocket, joinTenant } from "../../lib/socket";
 import { usePipelineEvents } from "../../hooks/usePipelineEvents";
 import { useRealtimeNodes } from "../../hooks/useRealtimeNodes";
+import { useSearchHistory } from "../../hooks/useSearchHistory";
 import PipelineProgressToast, {
   ToastState,
 } from "../../components/graph/PipelineProgressToast";
+import { BlufStrip } from "../../components/synthesis/BlufStrip";
+import { NotificationBell } from "../../components/notifications/NotificationBell";
 
 export function ExplorerContent() {
   const searchParams = useSearchParams();
@@ -46,12 +59,14 @@ export function ExplorerContent() {
   const [evidenceNodes, setEvidenceNodes] = useState<EvidenceNode[]>([]);
   const [evidenceEdges, setEvidenceEdges] = useState<EvidenceEdge[]>([]);
 
-  interface SearchContextUnit {
-    context_id: string;
-    score: number;
-    text: string;
-    entity_ids: string[];
-  }
+  // Context units for BLUF strip
+  const [contextUnits, setContextUnits] = useState<ContextUnit[]>([]);
+
+  // Trending entities for empty state (B8)
+  const [trendingEntities, setTrendingEntities] = useState<TrendingEntity[]>(
+    [],
+  );
+  const [trendingLoading, setTrendingLoading] = useState(false);
 
   // Selection inspection
   const [selectedNode, setSelectedNode] = useState<EChartsNode | null>(null);
@@ -68,6 +83,9 @@ export function ExplorerContent() {
     tenantId,
     enabled: true,
   });
+
+  // Search history (B4)
+  const { history, addSearch } = useSearchHistory();
 
   // Join the Socket.io tenant room on mount
   useEffect(() => {
@@ -90,12 +108,33 @@ export function ExplorerContent() {
     return () => clearTimeout(timer);
   }, [toastState]);
 
+  // Fetch trending entities on mount (B8)
+  useEffect(() => {
+    async function fetchTrending() {
+      setTrendingLoading(true);
+      try {
+        const res = await fetch(
+          `/api/trending?tenant_id=${encodeURIComponent(tenantId)}&limit=5`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setTrendingEntities(data.entities ?? []);
+        }
+      } catch {
+        // Trending unavailable — silently ignore
+      } finally {
+        setTrendingLoading(false);
+      }
+    }
+    fetchTrending();
+  }, [tenantId]);
+
   // Helper mappings
   const mapEntitiesToEvidenceRef = useRef<
     | ((
         entities: Entity[],
         relationships: Relationship[],
-        contextUnits?: SearchContextUnit[],
+        contextUnits?: ContextUnit[],
         defaultDepth?: number,
       ) => { nodes: EvidenceNode[]; edges: EvidenceEdge[] })
     | null
@@ -105,11 +144,11 @@ export function ExplorerContent() {
     (
       entities: Entity[],
       relationships: Relationship[],
-      contextUnits: SearchContextUnit[] = [],
+      ctxUnits: ContextUnit[] = [],
       defaultDepth = 0,
     ): { nodes: EvidenceNode[]; edges: EvidenceEdge[] } => {
       const nodes: EvidenceNode[] = entities.map((entity) => {
-        const matchingCtx = contextUnits.find((ctx) =>
+        const matchingCtx = ctxUnits.find((ctx) =>
           ctx.entity_ids?.includes(entity.id),
         );
         const raw_text = matchingCtx?.text || entity.description || undefined;
@@ -198,18 +237,23 @@ export function ExplorerContent() {
           return;
         }
 
-        const data: SearchResponse & { context_units?: SearchContextUnit[] } =
+        const data: SearchResponse & { context_units?: ContextUnit[] } =
           await res.json();
+        const ctxUnits = data.context_units || [];
         const { nodes, edges } = mapEntitiesToEvidence(
           data.entities || [],
           data.relationships || [],
-          data.context_units || [],
+          ctxUnits,
           0,
         );
 
         setEvidenceNodes(nodes);
         setEvidenceEdges(edges);
+        setContextUnits(ctxUnits);
         setSelectedNode(null);
+
+        // ── B4: Add to search history ──
+        addSearch(trimmed, nodes.length);
 
         // Transition layout/toast to running state
         setToastState("running");
@@ -240,7 +284,7 @@ export function ExplorerContent() {
         setSubmitting(false);
       }
     },
-    [tenantId, mapEntitiesToEvidence],
+    [tenantId, mapEntitiesToEvidence, addSearch],
   );
 
   const handleRefreshGraph = useCallback(() => {
@@ -297,14 +341,22 @@ export function ExplorerContent() {
         return;
       }
 
-      const data: SearchResponse & { context_units?: SearchContextUnit[] } =
+      const data: SearchResponse & { context_units?: ContextUnit[] } =
         await res.json();
+      const ctxUnits = data.context_units || [];
       const mapped = mapEntitiesToEvidence(
         data.entities || [],
         data.relationships || [],
-        data.context_units || [],
+        ctxUnits,
         nextDepth,
       );
+
+      // Merge context units
+      setContextUnits((prev) => {
+        const existingIds = new Set(prev.map((c) => c.context_id));
+        const newCtx = ctxUnits.filter((c) => !existingIds.has(c.context_id));
+        return [...prev, ...newCtx];
+      });
 
       // Deduplicate State Merge
       setEvidenceNodes((prev) => {
@@ -324,6 +376,8 @@ export function ExplorerContent() {
   };
 
   const { nodes, links } = transformToEChartsData(evidenceNodes, evidenceEdges);
+
+  const hasResults = nodes.length > 0;
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-slate-100 overflow-hidden">
@@ -379,7 +433,19 @@ export function ExplorerContent() {
             )}
           </button>
         </form>
+
+        {/* ── B7: Notification bell ── */}
+        <NotificationBell />
       </header>
+
+      {/* ── B1: BLUF / Synthesis Strip (only when results exist) ── */}
+      {hasResults && contextUnits.length > 0 && (
+        <BlufStrip
+          contextUnits={contextUnits}
+          query={currentSearchQuery}
+          tenantId={tenantId}
+        />
+      )}
 
       {/* Main Exploration Canvas */}
       <div className="flex-1 relative flex overflow-hidden">
@@ -390,7 +456,7 @@ export function ExplorerContent() {
           </div>
         )}
 
-        {nodes.length === 0 && !submitting ? (
+        {!hasResults && !submitting ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-950 text-center space-y-3 z-0">
             <Layers size={36} className="text-slate-700 animate-bounce" />
             <h2 className="text-slate-300 font-semibold text-sm">
@@ -401,6 +467,76 @@ export function ExplorerContent() {
               localized walks to quickly discover relationships and evidence
               context units.
             </p>
+
+            {/* ── B4: Recent search history ── */}
+            {history.length > 0 && (
+              <div className="mt-4 w-full max-w-sm">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Clock size={12} className="text-slate-500" />
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
+                    Recent Searches
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 justify-center">
+                  {history.map((entry) => (
+                    <button
+                      key={`${entry.query}-${entry.timestamp}`}
+                      onClick={() => {
+                        setSearchQuery(entry.query);
+                        router.replace(
+                          `/explorer?q=${encodeURIComponent(entry.query)}`,
+                        );
+                        runSearch(entry.query);
+                      }}
+                      className="text-xs px-2.5 py-1 rounded-full bg-slate-800 hover:bg-indigo-900/40 hover:text-indigo-300 text-slate-400 border border-slate-700 transition-colors"
+                    >
+                      {entry.query}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── B8: Trending/recent entities ── */}
+            {trendingEntities.length > 0 && (
+              <div className="mt-4 w-full max-w-sm">
+                <div className="flex items-center gap-1.5 mb-2 justify-center">
+                  <TrendingUp size={12} className="text-slate-500" />
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
+                    Recently Added
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 justify-center">
+                  {trendingEntities.map((entity) => (
+                    <button
+                      key={entity.id}
+                      onClick={() => {
+                        setSearchQuery(entity.name);
+                        router.replace(
+                          `/explorer?q=${encodeURIComponent(entity.name)}`,
+                        );
+                        runSearch(entity.name);
+                      }}
+                      className="text-xs px-2.5 py-1 rounded-full bg-slate-800 hover:bg-indigo-900/40 hover:text-indigo-300 text-slate-400 border border-slate-700 transition-colors"
+                    >
+                      {entity.name}
+                      <span className="ml-1 text-[10px] text-slate-600">
+                        ({entity.type})
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {trendingLoading && (
+              <div className="flex items-center gap-2 mt-2">
+                <Loader size={12} className="animate-spin text-slate-500" />
+                <span className="text-[10px] text-slate-500">
+                  Loading trending entities…
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex-1 h-full w-full relative">

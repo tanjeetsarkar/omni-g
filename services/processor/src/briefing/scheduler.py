@@ -32,10 +32,23 @@ class BriefingScheduler:
     # ------------------------------------------------------------------
 
     async def on_demand(self, tenant_id: str) -> str:
-        """Generate, synthesize, upload, and return the object key immediately."""
+        """Generate, synthesize, upload, and return the object key immediately.
+
+        Also stores the script text alongside the audio for transcript retrieval.
+        """
         script = await self._script_generator.generate(tenant_id)
         audio_bytes = await self._tts.synthesize(script)
         object_key = await self._storage.upload_audio(tenant_id, audio_bytes)
+
+        # Store the script text alongside the audio for transcript retrieval (B6)
+        try:
+            await self._storage.upload_text(tenant_id, script)
+        except Exception as exc:
+            logger.warning(
+                "briefing_text_upload_failed",
+                extra={"tenant_id": tenant_id, "error": str(exc)},
+            )
+
         logger.info(
             "briefing_on_demand_complete",
             extra={"tenant_id": tenant_id, "object_key": object_key},

@@ -97,6 +97,45 @@ This document should be updated after every implementation change. Capture only 
 | Scheduled analytical jobs | Recurring briefings, re-analysis, and background maintenance should run through Celery Beat | **V2 Step 4 complete:** `generate_briefing_task` registered in Celery Beat schedule when `CELERY_BRIEFING_ENABLED=true`; one daily crontab entry per tenant from `BRIEFING_TENANTS`; APScheduler path deprecated. **V2 Step 9:** `reanalyze_kiq_task` dispatched as a background Celery job per pipeline run that carries a KIQ; runs hypothesis generation + ACH scoring + assessment production outside the hot path. Periodic background re-assessment on a fixed cadence (e.g., re-score all active KIQs on a schedule) remains future work. | Partially closed (briefings + on-demand reanalysis) | Medium |
 | V1 carryover cleanup | Non-KIQ-driven "interesting things" paths should be demoted or removed where they conflict with V2 workflow | Current pipeline still optimizes for general discovery and synthesis outputs | Product simplification gap | Medium |
 
+### Workstream B: Delivery UX Enhancements (August 10, 2026)
+
+The following Delivery UX enhancements from roadmapv3.md have been implemented:
+
+| Feature | What Changed | Status |
+|---------|-------------|--------|
+| **B1: BLUF/Synthesis Strip** | Created `BlufStrip.tsx` — collapsible summary panel above the graph canvas showing top-3 context units by score with optional LLM-synthesized BLUF summary via `POST /synthesize` endpoint on Processor and Delivery API route | ✅ Complete |
+| **B2: Legend-as-filter with counts** | `EChartsGraphCanvas.tsx` updated with `selectedMode: 'multiple'`, per-category count display in legend text, and legend selection state that filters visible nodes/links | ✅ Complete |
+| **B3: Confidence-driven visual encoding** | `useEChartsGraphAdapter.ts` updated: opacity = 0.4 + (confidence * 0.6), high-confidence entities (>0.8) get border, labels hidden for confidence < 0.3, tooltip shows visual confidence bar | ✅ Complete |
+| **B4: Search history** | Created `useSearchHistory.ts` hook — persists last 10 searches in `sessionStorage`, clickable recent-search chips in empty state | ✅ Complete |
+| **B5: Layout switcher** | `EChartsGraphCanvas.tsx` updated with 3-button floating toggle (Force/Circular/Static), persisted in `sessionStorage` | ✅ Complete |
+| **B6: Briefing reconnection** | `BriefingPanel.tsx` updated with transcript fetch + entity chips; `GET /briefings/{id}/transcript` endpoint on Processor + Delivery API route; `MinIOStorageService.upload_text()` and `get_text()` methods added; `BriefingScheduler.on_demand()` stores script text alongside audio | ✅ Complete |
+| **B7: Persistent notification log** | Created `NotificationProvider` + `useNotificationLog` context in `useNotificationLog.tsx`; `NotificationBell.tsx` component with bell icon, unread badge, and dropdown; `PipelineProgressToast` pushes errors/successes to notification log; `NotificationProvider` wrapped in root layout | ✅ Complete |
+| **B8: Trending empty state** | `GET /trending` endpoint on Processor queries Neo4j for recently-added high-confidence entities; Delivery API route + empty state shows trending entity chips as clickable suggestions | ✅ Complete |
+
+**New files created:**
+- `services/delivery/src/components/synthesis/BlufStrip.tsx` — BLUF summary panel
+- `services/delivery/src/components/synthesis/AssessmentCard.tsx` — BLUF assessment card with evidence/gaps
+- `services/delivery/src/components/notifications/NotificationBell.tsx` — notification bell with dropdown
+- `services/delivery/src/hooks/useSearchHistory.ts` — search persistence hook
+- `services/delivery/src/hooks/useNotificationLog.tsx` — notification context provider
+- `services/delivery/src/app/api/synthesize/route.ts` — proxy to Processor `/synthesize`
+- `services/delivery/src/app/api/trending/route.ts` — proxy to Processor `/trending`
+- `services/delivery/src/app/api/briefings/[id]/transcript/route.ts` — proxy to Processor `/briefings/{id}/transcript`
+
+**Modified files:**
+- `services/processor/src/processor/main.py` — added `/synthesize`, `/trending`, `/briefings/{id}/transcript` endpoints
+- `services/processor/src/briefing/storage.py` — added `upload_text()` and `get_text()` methods
+- `services/processor/src/briefing/scheduler.py` — stores script text alongside audio
+- `services/delivery/src/types/entities.ts` — added `ContextUnit`, `Assessment`, `CollectionGap`, `TrendingEntity`, `BriefingTranscript` types
+- `services/delivery/src/components/canvas/EChartsGraphCanvas.tsx` — B2 legend-as-filter, B5 layout switcher
+- `services/delivery/src/components/canvas/useEChartsGraphAdapter.ts` — B3 confidence encoding
+- `services/delivery/src/components/briefing/BriefingPanel.tsx` — B6 transcript + entity chips
+- `services/delivery/src/components/graph/PipelineProgressToast.tsx` — B7 notification log integration
+- `services/delivery/src/app/explorer/page.tsx` — integrated all UX components
+- `services/delivery/src/app/layout.tsx` — wrapped with `NotificationProvider`
+
+---
+
 ## Current Snapshot
 
 ### Confirmed Alignment
