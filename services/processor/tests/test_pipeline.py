@@ -302,6 +302,85 @@ class TestProcessingPipeline:
         assert result.plugin_id == "shodan-mcp"
         assert result.plugin_version == "2.0.0"
 
+    async def test_provenance_fields_propagated_to_context_unit(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """source_name / source_url / plugin_name flow from envelope to ContextUnit."""
+
+        from src.models.entities import ContextUnit
+
+        captured: dict[str, ContextUnit] = {}
+
+        class CapturingPersistence:
+            async def upsert_context_unit(self, unit: ContextUnit) -> None:
+                captured["unit"] = unit
+
+            async def get_latest_context_for_source(self, *args: Any) -> None:
+                return None
+
+            async def link_adjacent_contexts(self, *args: Any) -> None:
+                return None
+
+            async def persist_extraction(self, *args: Any, **kwargs: Any) -> list[str]:
+                return []
+
+        pipe = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
+            graph_persistence=cast(Any, CapturingPersistence()),
+        )
+        event = _make_valid_event(
+            id="evt-prov",
+            plugin_name="pubmed-scraper",
+            source_name="PubMed Central",
+            source_url="https://pubmed.ncbi.nlm.nih.gov/12345",
+        )
+        await pipe.process(event)
+        assert "unit" in captured
+        assert captured["unit"].source_name == "PubMed Central"
+        assert captured["unit"].source_url == "https://pubmed.ncbi.nlm.nih.gov/12345"
+        assert captured["unit"].plugin_name == "pubmed-scraper"
+
+    async def test_provenance_source_name_defaults_to_plugin_name(
+        self,
+        fake_deduplicator: ContentDeduplicator,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """When source_name is absent, ContextUnit.source_name falls back to plugin_name."""
+        from src.models.entities import ContextUnit
+
+        captured: dict[str, ContextUnit] = {}
+
+        class CapturingPersistence:
+            async def upsert_context_unit(self, unit: ContextUnit) -> None:
+                captured["unit"] = unit
+
+            async def get_latest_context_for_source(self, *args: Any) -> None:
+                return None
+
+            async def link_adjacent_contexts(self, *args: Any) -> None:
+                return None
+
+            async def persist_extraction(self, *args: Any, **kwargs: Any) -> list[str]:
+                return []
+
+        pipe = ProcessingPipeline(
+            deduplicator=fake_deduplicator,
+            zeromem_extractor=cast(ZeroMemExtractor, mock_extractor),
+            graph_persistence=cast(Any, CapturingPersistence()),
+        )
+        event = _make_valid_event(
+            id="evt-prov-default",
+            plugin_name="mcp-health-scraper",
+        )
+        await pipe.process(event)
+        assert "unit" in captured
+        assert captured["unit"].source_name == "mcp-health-scraper"
+        assert captured["unit"].source_url is None
+        assert captured["unit"].plugin_name == "mcp-health-scraper"
+
     async def test_different_tenants_not_deduplicated(
         self,
         pipeline: ProcessingPipeline,

@@ -2,7 +2,43 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 10, 2026 — Bug fixes: canonical-ID propagation, extractor label filtering, static canvas layout, pipeline activity stage alignment.
+**Last Updated:** August 11, 2026 — V4 Track 1 + Track 2: provenance end-to-end, τ/D_max query params, rich-text card nodes, Zustand canvas store, floating UI controls, responsive evidence drawer.
+
+---
+
+## V4 Track 1 + Track 2: Canvas Uplift & Zero-Mem Provenance (August 11, 2026)
+
+Implements the V4 roadmap (`docs/V4/overall_raodmap_v4.md` Track 1 + Track 2, cross-referenced with `docs/V4/UI_uplift_roadmapV4.md`). Closes the gap between the V4 spec and the already-advanced V3 codebase.
+
+### Completed
+
+| Phase | What Changed | Status |
+|-------|-------------|--------|
+| **A — Provenance Contract (backend)** | Added `SourceName`, `SourceURL` to Go `RawEvent` struct (`services/aggregator/internal/kafka/producer.go`); `Pipeline.Process()`/`ProcessBlock()` accept + propagate `sourceName`/`sourceURL` (defaults `SourceName` to `PluginName`); callers in `search_handler.go` and `server.go` updated; added `source_name`/`source_url` to Processor `RawEventEnvelope` and `ContextUnit` model; `upsert_context_unit()` Cypher SETs `source_name`/`source_url`/`plugin_name` on ContextUnit nodes; pipeline step 3 populates provenance from envelope. 2 new Go tests + 2 new Python tests. | ✅ Complete |
+| **B — Query Params + Response Models (backend)** | Added `relevance_threshold` (τ) and `traversal_depth` (D_max) to `SearchRequest`; `ExpandRequest` gains `relevance_threshold`; `/search` overrides profiler `d_max` when `traversal_depth` set and prunes edges with weight < τ; `/query/expand` applies same τ pruning; created `services/processor/src/models/api.py` with `NodeProvenance`, `RawContextSnippet`, `CustomNodeResponse`, `GraphQueryResponse`; `_build_custom_nodes()` helper maps entities + context units + relationships into structured rich-node payload with provenance + sub-entity count; `SearchResponse` gains optional `nodes` + `total_tokens_consumed` (zero-mem invariant). 3 new tests (τ pruning, D_max override, nodes payload). | ✅ Complete |
+| **C — Zustand Store + Floating UI (frontend)** | Installed `zustand`; created `services/delivery/src/store/useGraphExplorerStore.ts` with `query`/`depth`/`relevanceThreshold`/`tokenCap`/`nodes`/`edges`/`selectedNode` state + `setQuery`/`setSettings`/`executeQuery`/`selectNode`/`clearCanvas`/`mergeRealtime` actions; `executeQuery` purges stale canvas then POSTs `/api/query` with τ + D_max; created `FloatingSearchBar.tsx` (top-center frosted-glass pill, Enter triggers `executeQuery`); created `SettingsGearPanel.tsx` (top-right gear popover with τ slider [0.1,1.0], D_max dial [1,4], L_max slider [2048,8192]); updated `/api/query` route to forward `relevance_threshold` + `traversal_depth`; extended `entities.ts` with `NodeProvenance`/`RawContextSnippet`/`CustomNodeResponse` types. | ✅ Complete |
+| **D — Rich-Text Card Nodes (frontend)** | `useEChartsGraphAdapter.ts` now produces `roundRect` card nodes (`symbolSize: [170, 54]`) with multi-line rich-text labels: `{typeBadge| TYPE }` + `{title| Name }` + `{subText| +N links 📍 source }`; `RICH_LABEL_STYLES` exported for the canvas; confidence-based opacity/border encoding retained on the card; `EvidenceNode` extended with `source_name`/`source_url`/`plugin_name`/`sub_entity_count`; `EChartsGraphCanvas.tsx` label config updated to `position: "inside"` with `rich` styles; `EChartsNode` interface updated (`symbolSize: number | number[]`, added provenance fields). 3 new adapter tests. | ✅ Complete |
+| **E — Responsive Evidence Drawer (frontend)** | Installed `framer-motion`; created `services/delivery/src/components/drawer/SourceTraceDrawer.tsx` replacing `SourceTracePane.tsx` — desktop (>1024px) floating right sidebar 380px with spring slide-in; mobile (<767px) swipeable bottom sheet with drag-to-dismiss + backdrop; renders only human-readable provenance (`source_name`, `source_url`, `plugin_name`, `ingested_at`) + unmodified raw context snippet; `stripUuids()` removes any UUID substrings from display; wired `explorer/page.tsx` `handleNodeSelect` to sync the Zustand store; mounted `FloatingSearchBar` + `SettingsGearPanel` + `SourceTraceDrawer` in the canvas area. | ✅ Complete |
+
+### Verification
+
+| Component | Target | Result |
+|-----------|--------|--------|
+| Aggregator provenance | `go test ./...` | ✅ All packages pass (kafka, mcp, pipeline, scheduler, server, validation) |
+| Processor provenance + τ/D_max | `pytest tests/` | ✅ 183 passed (excluding pre-existing briefing generator fixture errors) |
+| Delivery adapter + drawer | `pnpm exec jest` | ✅ 8 suites pass (canvas, adapter, API routes, hooks, gateway, socket); 1 pre-existing BriefingPanel `useRouter` failure unrelated to V4 |
+| Type safety | `pnpm exec tsc --noEmit` | ✅ No errors |
+| Zero-mem invariant | `total_tokens_consumed == 0` | ✅ Asserted in `/search` + `/query/expand` responses + drilldown test |
+
+### Open V4 Gaps
+
+| Area | Gap | Priority |
+|------|-----|----------|
+| **Page.tsx full Zustand migration** | ✅ Closed (Aug 11): `explorer/page.tsx` now drives the canvas purely from `useGraphExplorerStore` — `evidenceNodes`/`evidenceEdges`/`selectedNode` are derived from `storeNodes`/`storeEdges`/`storeSelectNode`; `runSearch`, realtime merge, and drilldown all write into the store via `useGraphExplorerStore.setState()` / `storeMergeRealtime()`. The dual-state source of truth is eliminated. | ✅ Closed |
+| **Aggregator MCP normalizer** | ✅ Closed (Aug 11): Created `services/aggregator/internal/ingest/normalizer.go` (`ExtractProvenance`) which auto-extracts `document_title`/`publisher_name`/`title`/`headline` → `source_name` and `source_url`/`url`/`link` → `source_url` from content-block JSON payloads (case-insensitive, shallow lookup). `Pipeline.ProcessBlock()` calls it when caller-supplied `sourceName`/`sourceURL` are empty; caller-supplied values take precedence. 8 normalizer tests + 2 pipeline integration tests. | ✅ Closed |
+| **SourceTracePane removal** | ✅ Closed (Aug 11): `services/delivery/src/components/inspector/SourceTracePane.tsx` deleted; no source consumers remained (only `.next/` build cache referenced it). | ✅ Closed |
+| **E2E Playwright suite** | ✅ Closed (Aug 11): Created `tests/e2e/test_ui_provenance_pipeline.py` with 4 tests validating the three roadmap assertions (stale canvas purge, every node has title + source tag, click opens matching snippet, zero-mem invariant) via the Processor `/search` API contract. Uses `ScoredContext` mocks + filtered Neo4j mock; runs with existing pytest (no Playwright browser dependency). | ✅ Closed |
+| **Briefing generator tests** | ✅ Closed (Aug 11): `tests/test_briefing_script_generator.py` fixture updated to use `llm_client` (V3 signature) instead of `ollama_url`/`model`; patches target `_call_llm` not `_call_ollama`. All 6 tests pass. `BriefingPanel.test.tsx` `useRouter` failure fixed via `next/navigation` mock in `jest.setup.ts`; all 5 tests pass. | ✅ Closed |
 
 ---
 

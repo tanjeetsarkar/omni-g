@@ -117,8 +117,14 @@ class GraphPersistenceService:
             "ON CREATE SET n.text = $text, n.source_id = $source_id, "
             "              n.tenant_id = $tenant_id, n.session_id = $session_id, "
             "              n.episode_id = $episode_id, n.window_id = $window_id, "
-            "              n.created = $created, n.metadata = $metadata "
-            "ON MATCH SET  n.modified = $created"
+            "              n.created = $created, n.metadata = $metadata, "
+            "              n.source_name = $source_name, "
+            "              n.source_url = $source_url, "
+            "              n.plugin_name = $plugin_name "
+            "ON MATCH SET  n.modified = $created, "
+            "              n.source_name = $source_name, "
+            "              n.source_url = $source_url, "
+            "              n.plugin_name = $plugin_name"
         )
         try:
             async with self._driver.session() as session:
@@ -133,10 +139,11 @@ class GraphPersistenceService:
                     window_id=unit.window_id,
                     created=unit.created.isoformat(),
                     metadata=json.dumps(unit.metadata, default=str),
+                    source_name=unit.source_name,
+                    source_url=unit.source_url,
+                    plugin_name=unit.plugin_name,
                 )
-            GRAPH_WRITE_LATENCY.labels(operation="upsert_context_unit").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="upsert_context_unit").observe(time.perf_counter() - t0)
         except Exception:
             GRAPH_WRITE_ERRORS.labels(operation="upsert_context_unit").inc()
             logger.exception("context_unit_persist_failed", extra={"context_id": unit.id})
@@ -166,9 +173,7 @@ class GraphPersistenceService:
                     tenant_id=tenant_id,
                     weight=weight,
                 )
-            GRAPH_WRITE_LATENCY.labels(operation="link_entity_to_context").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="link_entity_to_context").observe(time.perf_counter() - t0)
         except Exception:
             GRAPH_WRITE_ERRORS.labels(operation="link_entity_to_context").inc()
             logger.exception(
@@ -199,9 +204,7 @@ class GraphPersistenceService:
                     curr_id=curr_context_id,
                     tenant_id=tenant_id,
                 )
-            GRAPH_WRITE_LATENCY.labels(operation="link_adjacent_contexts").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="link_adjacent_contexts").observe(time.perf_counter() - t0)
         except Exception:
             GRAPH_WRITE_ERRORS.labels(operation="link_adjacent_contexts").inc()
             logger.exception(
@@ -337,9 +340,7 @@ class GraphPersistenceService:
                 async with self._driver.session() as s:
                     await s.run(cypher, **params)
 
-            GRAPH_WRITE_LATENCY.labels(operation="upsert_relationship").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="upsert_relationship").observe(time.perf_counter() - t0)
             logger.debug(
                 "relationship_persisted",
                 extra={
@@ -443,9 +444,7 @@ class GraphPersistenceService:
 
                     await tx.commit()
 
-            GRAPH_WRITE_LATENCY.labels(operation="persist_extraction").observe(
-                time.perf_counter() - t0
-            )
+            GRAPH_WRITE_LATENCY.labels(operation="persist_extraction").observe(time.perf_counter() - t0)
             logger.info(
                 "extraction_persisted",
                 extra={
@@ -562,9 +561,7 @@ class GraphPersistenceService:
 
         rels: list[dict[str, Any]] = []
         for row in rows:
-            rel_id = row.get("id") or (
-                f"rel--{row.get('source_ref','')}-{row.get('type','')}-{row.get('target_ref','')}"
-            )
+            rel_id = row.get("id") or (f"rel--{row.get('source_ref','')}-{row.get('type','')}-{row.get('target_ref','')}")
             rels.append(
                 {
                     "id": rel_id,

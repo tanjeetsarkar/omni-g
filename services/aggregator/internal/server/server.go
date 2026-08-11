@@ -87,7 +87,9 @@ func (s *Server) Start(ctx context.Context) error {
 			if version == "" {
 				version = "unknown"
 			}
-			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version, "")
+			// Scheduled polls do not carry a human-readable publisher name;
+			// default to the tool name via Pipeline → Producer.
+			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version, "", "", "")
 		})
 	}
 

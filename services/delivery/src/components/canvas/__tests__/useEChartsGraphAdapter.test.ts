@@ -60,11 +60,14 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
     expect(nodes).toHaveLength(3);
     expect(links).toHaveLength(2);
 
-    // Node 0 assertions — x/y added for static layout, confidence for tooltips
+    // Node 0 assertions — V4 Track 1: roundRect card with rich-text label
     expect(nodes[0].id).toBe("hospital_123");
     expect(nodes[0].name).toBe("hospital_123");
-    expect(nodes[0].label).toBe("Johns Hopkins Hospital");
-    expect(nodes[0].symbolSize).toBe(45);
+    // Label is now a rich-text multi-line formatter string
+    expect(nodes[0].label).toContain("FACILITY");
+    expect(nodes[0].label).toContain("Johns Hopkins Hospital");
+    expect(nodes[0].symbol).toBe("roundRect");
+    expect(nodes[0].symbolSize).toEqual([170, 54]);
     expect(nodes[0].category).toBe("FACILITY");
     expect(nodes[0].value).toBe(0.95);
     expect(nodes[0].rawContext).toBe("A famous hospital");
@@ -78,20 +81,38 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
       source: "hospital_123",
       target: "dr_smith",
       value: 0.9,
-      lineStyle: { width: 2.7, opacity: 0.6 },
+      lineStyle: { width: 2.7, opacity: 0.7, color: "#475569" },
     });
   });
 
-  it("asserts root nodes (D=0) receive larger symbol size than leaf nodes (D=1, 2)", () => {
+  it("V4 Track 1: all nodes use roundRect card dimensions [170, 54]", () => {
     const { nodes } = transformToEChartsData(mockNodes, mockEdges);
 
-    const rootNode = nodes.find((n) => n.id === "hospital_123");
-    const midNode = nodes.find((n) => n.id === "dr_smith");
-    const leafNode = nodes.find((n) => n.id === "trial_2025");
+    for (const node of nodes) {
+      expect(node.symbol).toBe("roundRect");
+      expect(node.symbolSize).toEqual([170, 54]);
+    }
+  });
 
-    expect(rootNode?.symbolSize).toBe(45);
-    expect(midNode?.symbolSize).toBe(32);
-    expect(leafNode?.symbolSize).toBe(22);
+  it("V4 Track 1: rich-text label includes type badge, title, and source tag", () => {
+    const nodesWithProvenance: EvidenceNode[] = [
+      {
+        id: "hospital_123",
+        label: "Johns Hopkins Hospital",
+        type: "FACILITY",
+        score: 0.95,
+        depth: 0,
+        source_name: "PubMed Central",
+        sub_entity_count: 12,
+      },
+    ];
+    const { nodes } = transformToEChartsData(nodesWithProvenance, []);
+    const label = nodes[0].label as string;
+
+    expect(label).toContain("{typeBadge| FACILITY }");
+    expect(label).toContain("{title| Johns Hopkins Hospital }");
+    expect(label).toContain("+12 links");
+    expect(label).toContain("📍 PubMed Central");
   });
 
   it("emits x/y coordinates for static (layout: none) rendering", () => {

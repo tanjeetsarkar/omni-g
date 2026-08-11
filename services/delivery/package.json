@@ -17,6 +17,7 @@
     "echarts": "^5.6.0",
     "echarts-for-react": "^3.0.2",
     "elkjs": "^0.9.3",
+    "framer-motion": "^13.0.0",
     "kafkajs": "^2.2.4",
     "lucide-react": "0.468.0",
     "neo4j-driver": "~5.28.3",
@@ -26,7 +27,8 @@
     "react-dom": "19.1.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "4.8.1",
-    "tailwind-merge": "2.5.5"
+    "tailwind-merge": "2.5.5",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

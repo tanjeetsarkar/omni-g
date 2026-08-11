@@ -112,6 +112,10 @@ class RawEventEnvelope(BaseModel):
     plugin_name: str | None = None
     plugin_version: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # Human-readable provenance (V4 Track 2). Aggregator stamps these on
+    # every RawEvent; source_name defaults to plugin_name upstream.
+    source_name: str | None = None
+    source_url: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -226,6 +230,9 @@ class ProcessingPipeline:
                 "plugin_version": envelope.plugin_version,
                 "source_event_id": envelope.id,
             },
+            source_name=envelope.source_name or envelope.plugin_name,
+            source_url=envelope.source_url or None,
+            plugin_name=envelope.plugin_name,
         )
 
         # Offload blocking spaCy + GLiNER calls to a thread pool so they

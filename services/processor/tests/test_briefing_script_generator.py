@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -12,7 +12,9 @@ import pytest
 def generator() -> Any:
     from src.briefing.script_generator import BriefingScriptGenerator
 
-    return BriefingScriptGenerator(ollama_url="http://localhost:11434", model="qwen2.5:3b")
+    # V3: BriefingScriptGenerator takes an optional LLMClient, not ollama_url.
+    mock_client = MagicMock()
+    return BriefingScriptGenerator(llm_client=mock_client)
 
 
 @pytest.mark.asyncio()
@@ -22,22 +24,18 @@ async def test_generate_with_no_context_returns_placeholder(generator: Any) -> N
 
 
 @pytest.mark.asyncio()
-async def test_generate_with_context_calls_ollama(generator: Any) -> None:
+async def test_generate_with_context_calls_llm(generator: Any) -> None:
     context = [{"text": "APT28 targeted healthcare sector."}]
-    with patch.object(
-        generator, "_call_ollama", new=AsyncMock(return_value="Good morning. Test briefing.")
-    ) as mock_call:
+    with patch.object(generator, "_call_llm", new=AsyncMock(return_value="Good morning. Test briefing.")) as mock_call:
         script = await generator.generate("test-tenant", context=context)
         mock_call.assert_called_once_with(context)
         assert script == "Good morning. Test briefing."
 
 
 @pytest.mark.asyncio()
-async def test_generate_falls_back_to_placeholder_on_ollama_error(generator: Any) -> None:
+async def test_generate_falls_back_to_placeholder_on_llm_error(generator: Any) -> None:
     context = [{"text": "APT28 targeted healthcare sector."}]
-    with patch.object(
-        generator, "_call_ollama", new=AsyncMock(side_effect=RuntimeError("LLM unavailable"))
-    ):
+    with patch.object(generator, "_call_llm", new=AsyncMock(side_effect=RuntimeError("LLM unavailable"))):
         script = await generator.generate("test-tenant", context=context)
         assert "briefing" in script.lower()
 

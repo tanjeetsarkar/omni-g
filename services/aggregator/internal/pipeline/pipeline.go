@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omni-g/aggregator/internal/ingest"
 	kafkainternal "github.com/omni-g/aggregator/internal/kafka"
 	"github.com/omni-g/aggregator/internal/metrics"
 	"github.com/omni-g/aggregator/internal/validation"
@@ -51,11 +52,15 @@ func New(validator SchemaValidator, publisher Publisher, topic string, tenantID 
 // pluginName and pluginVersion are stamped into the event envelope for provenance.
 // kiqID is the optional Key Intelligence Question reference that tasked this
 // collection; pass an empty string for untasked (general) collection.
+// sourceName is the human-readable name of the originating source
+// (e.g. "PubMed Central"); pass "" to default to pluginName.
+// sourceURL is the canonical human-facing URL of the source document; pass ""
+// when only the plugin URL is available.
 //
 // If the validation sidecar is unreachable the event is dropped and an error
 // is returned (fail-closed). If the payload is invalid the event is counted as
 // a validation failure and dropped without an error (the rejection is expected).
-func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string) error {
+func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
 	start := time.Now()
 	logger := log.With().
 		Str("source", source).
@@ -64,6 +69,8 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		Str("topic", p.topic).
 		Str("tenant_id", p.tenantID).
 		Str("kiq_id", kiqID).
+		Str("source_name", sourceName).
+		Str("source_url", sourceURL).
 		Logger()
 
 	logger.Info().Msg("pipeline processing started")
@@ -94,6 +101,14 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	// ── publish ───────────────────────────────────────────────────────────
 	logger.Info().Msg("payload valid, building kafka event")
 	elapsed := time.Since(start).Milliseconds()
+	// Default human-readable source name to the plugin name when the
+	// upstream plugin did not supply a publisher/document title. Applied
+	// here (before publish) so the value is observable regardless of which
+	// Publisher implementation is wired in.
+	effectiveSourceName := sourceName
+	if effectiveSourceName == "" {
+		effectiveSourceName = pluginName
+	}
 	event := &kafkainternal.RawEvent{
 		ID:              uuid.New().String(),
 		Source:          source,
@@ -104,6 +119,8 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		IngestLatencyMs: elapsed,
 		TenantID:        p.tenantID,
 		KIQID:           kiqID,
+		SourceName:      effectiveSourceName,
+		SourceURL:       sourceURL,
 	}
 
 	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
@@ -127,8 +144,10 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 // to Process. Malformed JSON is dropped and logged.
 // kiqID is the optional Key Intelligence Question reference that tasked this
 // collection; pass an empty string for untasked (general) collection.
-func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string) error {
-	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Msg("processing content block")
+// sourceName and sourceURL carry human-readable provenance; pass "" to
+// default sourceName to pluginName and leave sourceURL unset.
+func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
+	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Str("source_name", sourceName).Msg("processing content block")
 	log.Debug().Str("source", source).Str("content_block_text", text).Msg("received content block text")
 
 	var payload map[string]any
@@ -139,5 +158,20 @@ func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string,
 		return nil // non-fatal
 	}
 	log.Debug().Str("source", source).Interface("payload", payload).Msg("parsed content block JSON payload")
-	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID)
+
+	// V4 Track 2: when the caller did not supply a human-readable source
+	// name/URL, auto-extract them from the content-block payload (e.g.
+	// document_title, publisher_name, source_url). This keeps provenance
+	// non-empty for scheduled polls that have no caller-supplied metadata.
+	if sourceName == "" || sourceURL == "" {
+		prov := ingest.ExtractProvenance(text)
+		if sourceName == "" {
+			sourceName = prov.SourceName
+		}
+		if sourceURL == "" {
+			sourceURL = prov.SourceURL
+		}
+	}
+
+	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID, sourceName, sourceURL)
 }

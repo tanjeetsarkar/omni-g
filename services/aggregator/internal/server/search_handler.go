@@ -177,7 +177,7 @@ func (h *SearchHandler) callPlugin(
 		if block.Type != mcp.ContentTypeText || block.Text == "" {
 			continue
 		}
-		if err := h.pipeline.ProcessBlock(ctx, sourceURL, block.Text, toolName, "", ""); err != nil {
+		if err := h.pipeline.ProcessBlock(ctx, sourceURL, block.Text, toolName, "", "", sourceName, sourceURL); err != nil {
 			logger.Warn().Err(err).Msg("pipeline.ProcessBlock error")
 			continue
 		}

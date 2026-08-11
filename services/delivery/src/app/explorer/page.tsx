@@ -1,12 +1,6 @@
 "use client";
 
-import React, {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  Suspense,
-} from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   Search,
@@ -21,7 +15,10 @@ import {
   EChartsGraphCanvas,
   EChartsNode,
 } from "../../components/canvas/EChartsGraphCanvas";
-import { SourceTracePane } from "../../components/inspector/SourceTracePane";
+import { SourceTraceDrawer } from "../../components/drawer/SourceTraceDrawer";
+import { FloatingSearchBar } from "../../components/controls/FloatingSearchBar";
+import { SettingsGearPanel } from "../../components/controls/SettingsGearPanel";
+import { useGraphExplorerStore } from "../../store/useGraphExplorerStore";
 import {
   transformToEChartsData,
   EvidenceNode,
@@ -33,6 +30,7 @@ import type {
   SearchResponse,
   ContextUnit,
   TrendingEntity,
+  CustomNodeResponse,
 } from "../../types/entities";
 import { getSocket, joinTenant } from "../../lib/socket";
 import { usePipelineEvents } from "../../hooks/usePipelineEvents";
@@ -52,15 +50,45 @@ export function ExplorerContent() {
 
   const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
 
+  // V4 Track 1: canvas state lives in the Zustand store (single source of
+  // truth for nodes/edges/selectedNode). The page retains UI-only state
+  // (search input, toast, trending, history) that the store does not own.
+  const storeNodes = useGraphExplorerStore((s) => s.nodes);
+  const storeEdges = useGraphExplorerStore((s) => s.edges);
+  const storeClearCanvas = useGraphExplorerStore((s) => s.clearCanvas);
+  const storeMergeRealtime = useGraphExplorerStore((s) => s.mergeRealtime);
+  const storeSelectNode = useGraphExplorerStore((s) => s.selectNode);
+  const storeSetTenantId = useGraphExplorerStore((s) => s.setTenantId);
+  const storeDepth = useGraphExplorerStore((s) => s.depth);
+  const storeThreshold = useGraphExplorerStore((s) => s.relevanceThreshold);
+
+  // Derive EvidenceNode/EvidenceEdge arrays from the store for the adapter.
+  const evidenceNodes: EvidenceNode[] = storeNodes.map((n) => ({
+    id: n.id,
+    label: n.entity_name,
+    type: n.entity_type,
+    score: n.confidence_score,
+    depth: n.depth ?? 0,
+    raw_text: n.raw_context?.snippet_text,
+    source_id: n.source.source_url ?? undefined,
+    created_at: n.source.ingested_at,
+    source_name: n.source.source_name,
+    source_url: n.source.source_url ?? undefined,
+    plugin_name: n.source.mcp_plugin_name ?? undefined,
+    sub_entity_count: n.sub_entity_count,
+  }));
+  const evidenceEdges: EvidenceEdge[] = storeEdges.map((e) => ({
+    id: e.id,
+    source_id: e.source,
+    target_id: e.target,
+    weight: e.weight,
+  }));
+
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [submitting, setSubmitting] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  // Core graph state
-  const [evidenceNodes, setEvidenceNodes] = useState<EvidenceNode[]>([]);
-  const [evidenceEdges, setEvidenceEdges] = useState<EvidenceEdge[]>([]);
-
-  // Context units for BLUF strip
+  // Context units for BLUF strip (kept local — store owns nodes/edges only)
   const [contextUnits, setContextUnits] = useState<ContextUnit[]>([]);
 
   // Trending entities for empty state (B8)
@@ -68,9 +96,6 @@ export function ExplorerContent() {
     [],
   );
   const [trendingLoading, setTrendingLoading] = useState(false);
-
-  // Selection inspection
-  const [selectedNode, setSelectedNode] = useState<EChartsNode | null>(null);
 
   // Ingestion progress toast states
   const [toastState, setToastState] = useState<ToastState>("idle");
@@ -87,6 +112,12 @@ export function ExplorerContent() {
 
   // Search history (B4)
   const { history, addSearch } = useSearchHistory();
+
+  // Sync tenant id into the store so floating controls dispatch queries
+  // with the correct tenant scope.
+  useEffect(() => {
+    storeSetTenantId(tenantId);
+  }, [tenantId, storeSetTenantId]);
 
   // Join the Socket.io tenant room on mount
   useEffect(() => {
@@ -140,84 +171,14 @@ export function ExplorerContent() {
     fetchTrending();
   }, [tenantId]);
 
-  // Helper mappings
-  const mapEntitiesToEvidenceRef = useRef<
-    | ((
-        entities: Entity[],
-        relationships: Relationship[],
-        contextUnits?: ContextUnit[],
-        defaultDepth?: number,
-      ) => { nodes: EvidenceNode[]; edges: EvidenceEdge[] })
-    | null
-  >(null);
-
-  const mapEntitiesToEvidence = useCallback(
-    (
-      entities: Entity[],
-      relationships: Relationship[],
-      ctxUnits: ContextUnit[] = [],
-      defaultDepth = 0,
-    ): { nodes: EvidenceNode[]; edges: EvidenceEdge[] } => {
-      const nodes: EvidenceNode[] = entities.map((entity) => {
-        const matchingCtx = ctxUnits.find((ctx) =>
-          ctx.entity_ids?.includes(entity.id),
-        );
-        const raw_text = matchingCtx?.text || entity.description || undefined;
-
-        return {
-          id: entity.id,
-          label: entity.name,
-          type: entity.type,
-          score: entity.confidence,
-          depth: defaultDepth,
-          raw_text,
-          source_id: entity.source_id || undefined,
-          created_at: entity.created || undefined,
-        };
-      });
-
-      const edges: EvidenceEdge[] = relationships.map((rel) => ({
-        id: rel.id,
-        source_id: rel.source_ref,
-        target_id: rel.target_ref,
-        weight: rel.confidence,
-      }));
-
-      return { nodes, edges };
-    },
-    [],
-  );
-
-  // Update ref
-  useEffect(() => {
-    mapEntitiesToEvidenceRef.current = mapEntitiesToEvidence;
-  }, [mapEntitiesToEvidence]);
-
   // Merge real-time entities and relationships when alerts are broadcasted
   useEffect(() => {
     if (newEntities.length > 0 || newRelationships.length > 0) {
-      const mapped = mapEntitiesToEvidence(
-        newEntities,
-        newRelationships,
-        [],
-        1, // Real-time additions are added at depth 1
-      );
-
-      setEvidenceNodes((prev) => {
-        const existingIds = new Set(prev.map((n) => n.id));
-        const filteredNew = mapped.nodes.filter((n) => !existingIds.has(n.id));
-        return filteredNew.length > 0 ? [...prev, ...filteredNew] : prev;
-      });
-
-      setEvidenceEdges((prev) => {
-        const existingIds = new Set(prev.map((e) => e.id));
-        const filteredNew = mapped.edges.filter((e) => !existingIds.has(e.id));
-        return filteredNew.length > 0 ? [...prev, ...filteredNew] : prev;
-      });
-
+      // V4 Track 1: merge realtime updates into the Zustand store.
+      storeMergeRealtime(newEntities, newRelationships);
       clearNewEntities();
     }
-  }, [newEntities, newRelationships, mapEntitiesToEvidence, clearNewEntities]);
+  }, [newEntities, newRelationships, storeMergeRealtime, clearNewEntities]);
 
   const runSearch = useCallback(
     async (q: string) => {
@@ -228,6 +189,9 @@ export function ExplorerContent() {
       setErrorDetail(null);
       setCurrentSearchQuery(trimmed);
 
+      // V4 Track 1: purge stale canvas state via the store before fetching.
+      storeClearCanvas();
+
       try {
         const res = await fetch("/api/query", {
           method: "POST",
@@ -236,6 +200,8 @@ export function ExplorerContent() {
             query: trimmed,
             tenant_id: tenantId,
             limit: 50,
+            relevance_threshold: storeThreshold,
+            traversal_depth: storeDepth,
           }),
         });
 
@@ -251,17 +217,63 @@ export function ExplorerContent() {
         const data: SearchResponse & { context_units?: ContextUnit[] } =
           await res.json();
         const ctxUnits = data.context_units || [];
-        const { nodes, edges } = mapEntitiesToEvidence(
-          data.entities || [],
-          data.relationships || [],
-          ctxUnits,
-          0,
-        );
 
-        setEvidenceNodes(nodes);
-        setEvidenceEdges(edges);
+        // V4 Track 1: write results into the Zustand store. Prefer the
+        // structured `nodes` payload; fall back to mapping legacy entities.
+        const customNodes = (data.nodes ?? []).map((n: CustomNodeResponse) => ({
+          ...n,
+          depth: 0,
+        }));
+        const relationships = data.relationships || [];
+        const entities = data.entities || [];
+
+        let nodes = customNodes;
+        if (nodes.length === 0 && entities.length > 0) {
+          nodes = entities.map((e) => {
+            const ctx = ctxUnits.find((c) => c.entity_ids?.includes(e.id));
+            return {
+              id: e.id,
+              entity_name: e.name,
+              entity_type: e.type,
+              sub_entity_count: relationships.filter(
+                (r) => r.source_ref === e.id || r.target_ref === e.id,
+              ).length,
+              confidence_score: e.confidence,
+              source: {
+                source_name:
+                  ctx?.text?.slice(0, 40) || e.source_id || "unknown",
+                source_url: null,
+                ingested_at: e.created,
+                mcp_plugin_name: null,
+              },
+              raw_context: ctx
+                ? {
+                    snippet_text: ctx.text,
+                    char_offset_start: 0,
+                    char_offset_end: ctx.text.length,
+                    document_id: ctx.context_id,
+                  }
+                : null,
+              depth: 0,
+            };
+          });
+        }
+        const edges = relationships.map((r) => ({
+          id: r.id,
+          source: r.source_ref,
+          target: r.target_ref,
+          weight: r.confidence,
+        }));
+
+        useGraphExplorerStore.setState({
+          nodes,
+          edges,
+          entities,
+          relationships,
+          contextUnits: ctxUnits,
+          selectedNode: null,
+        });
         setContextUnits(ctxUnits);
-        setSelectedNode(null);
 
         // ── B4: Add to search history ──
         addSearch(trimmed, nodes.length);
@@ -295,7 +307,7 @@ export function ExplorerContent() {
         setSubmitting(false);
       }
     },
-    [tenantId, mapEntitiesToEvidence, addSearch],
+    [tenantId, storeThreshold, storeDepth, storeClearCanvas, addSearch],
   );
 
   const handleRefreshGraph = useCallback(() => {
@@ -325,9 +337,44 @@ export function ExplorerContent() {
     runSearch(searchQuery);
   };
 
-  // Node Selection callback
+  // Node Selection callback — V4 Track 1: selection lives in the Zustand store.
   const handleNodeSelect = (node: EChartsNode) => {
-    setSelectedNode(node);
+    storeSelectNode(node.id);
+    // If the store has no matching node (legacy ECharts node not in store),
+    // seed the store's selectedNode directly from the ECharts payload.
+    const nodeExtra = node as unknown as Record<string, unknown>;
+    const store = useGraphExplorerStore.getState();
+    if (node.id && !store.nodes.some((n) => n.id === node.id)) {
+      useGraphExplorerStore.setState((s) => ({
+        ...s,
+        selectedNode: {
+          id: node.id,
+          entity_name: node.label ?? node.name,
+          entity_type: node.category ?? "Unknown",
+          sub_entity_count:
+            (nodeExtra.subEntityCount as number | undefined) ?? 0,
+          confidence_score: node.value ?? node.confidence ?? 0.5,
+          source: {
+            source_name:
+              (nodeExtra.sourceName as string | undefined) ??
+              node.sourceId ??
+              "unknown",
+            source_url: (nodeExtra.sourceUrl as string | undefined) ?? null,
+            ingested_at: node.timestamp ?? "",
+            mcp_plugin_name:
+              (nodeExtra.pluginName as string | undefined) ?? null,
+          },
+          raw_context: node.rawContext
+            ? {
+                snippet_text: node.rawContext,
+                char_offset_start: 0,
+                char_offset_end: node.rawContext.length,
+                document_id: node.sourceId ?? "",
+              }
+            : null,
+        },
+      }));
+    }
   };
 
   // Double Click / Drill down dynamic expansion callback
@@ -355,32 +402,38 @@ export function ExplorerContent() {
       const data: SearchResponse & { context_units?: ContextUnit[] } =
         await res.json();
       const ctxUnits = data.context_units || [];
-      const mapped = mapEntitiesToEvidence(
-        data.entities || [],
-        data.relationships || [],
-        ctxUnits,
-        nextDepth,
-      );
 
-      // Merge context units
+      // V4 Track 1: merge drilldown results into the Zustand store.
+      const newNodes = (data.nodes ?? []).map((n: CustomNodeResponse) => ({
+        ...n,
+        depth: nextDepth,
+      }));
+      const newEdges = (data.relationships || []).map((r) => ({
+        id: r.id,
+        source: r.source_ref,
+        target: r.target_ref,
+        weight: r.confidence,
+      }));
+
+      // Merge context units (local — store owns nodes/edges only)
       setContextUnits((prev) => {
         const existingIds = new Set(prev.map((c) => c.context_id));
         const newCtx = ctxUnits.filter((c) => !existingIds.has(c.context_id));
         return [...prev, ...newCtx];
       });
 
-      // Deduplicate State Merge
-      setEvidenceNodes((prev) => {
-        const existingIds = new Set(prev.map((n) => n.id));
-        const newNodes = mapped.nodes.filter((n) => !existingIds.has(n.id));
-        return [...prev, ...newNodes];
-      });
-
-      setEvidenceEdges((prev) => {
-        const existingIds = new Set(prev.map((e) => e.id));
-        const newEdges = mapped.edges.filter((e) => !existingIds.has(e.id));
-        return [...prev, ...newEdges];
-      });
+      // Deduplicate merge into the store
+      const store = useGraphExplorerStore.getState();
+      const existingNodeIds = new Set(store.nodes.map((n) => n.id));
+      const existingEdgeIds = new Set(store.edges.map((e) => e.id));
+      const nodesToAdd = newNodes.filter((n) => !existingNodeIds.has(n.id));
+      const edgesToAdd = newEdges.filter((e) => !existingEdgeIds.has(e.id));
+      if (nodesToAdd.length > 0 || edgesToAdd.length > 0) {
+        useGraphExplorerStore.setState((s) => ({
+          nodes: [...s.nodes, ...nodesToAdd],
+          edges: [...s.edges, ...edgesToAdd],
+        }));
+      }
     } catch (err) {
       console.error("Error expanding node:", err);
     }
@@ -551,6 +604,9 @@ export function ExplorerContent() {
           </div>
         ) : (
           <div className="flex-1 h-full w-full relative">
+            {/* V4 Track 1: floating Figma-style controls */}
+            <FloatingSearchBar />
+            <SettingsGearPanel />
             <EChartsGraphCanvas
               nodes={nodes}
               links={links}
@@ -560,11 +616,8 @@ export function ExplorerContent() {
           </div>
         )}
 
-        {/* Dynamic slide-out inspect sidebar */}
-        <SourceTracePane
-          selectedNode={selectedNode}
-          onClose={() => setSelectedNode(null)}
-        />
+        {/* V4 Track 1: responsive evidence drawer (desktop side panel / mobile bottom sheet) */}
+        <SourceTraceDrawer />
 
         {/* Floating live ingestion progress toast (M6 UX) */}
         <PipelineProgressToast

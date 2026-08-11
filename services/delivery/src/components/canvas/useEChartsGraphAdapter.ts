@@ -9,6 +9,11 @@ export interface EvidenceNode {
   raw_text?: string;
   source_id?: string;
   created_at?: string;
+  // V4 Track 1: provenance + sub-entity count for rich-text card rendering.
+  source_name?: string;
+  source_url?: string;
+  plugin_name?: string;
+  sub_entity_count?: number;
 }
 
 export interface EvidenceEdge {
@@ -39,10 +44,56 @@ export function getTypeColor(type: string): string {
 }
 
 /**
- * B3: Confidence-driven visual encoding.
+ * V4 Track 1: rich-text label formatter for roundRect card nodes.
+ *
+ * Produces a three-line label:
+ *   {typeBadge| TYPE }      — colored type pill
+ *   {title| Entity Name}    — bold white title
+ *   {subText| +N links 📍 source} — link count + source tag
+ *
+ * The `rich` style object is returned separately and merged into the series
+ * label config by the canvas component.
+ */
+export function buildRichTextLabel(node: EvidenceNode): string {
+  const linkCount = node.sub_entity_count ?? 0;
+  const sourceTag = node.source_name ? ` 📍 ${node.source_name}` : "";
+  return [
+    `{typeBadge| ${node.type} }`,
+    `{title| ${node.label} }`,
+    `{subText| +${linkCount} links${sourceTag} }`,
+  ].join("\n");
+}
+
+export const RICH_LABEL_STYLES = {
+  typeBadge: {
+    backgroundColor: "#2563EB",
+    color: "#FFF",
+    borderRadius: 3,
+    padding: [2, 4],
+    fontSize: 9,
+  },
+  title: {
+    color: "#F8FAFC",
+    fontSize: 12,
+    fontWeight: "bold" as const,
+    padding: [3, 0],
+  },
+  subText: {
+    color: "#94A3B8",
+    fontSize: 9,
+  },
+  source: {
+    color: "#38BDF8",
+    fontSize: 9,
+  },
+};
+
+/**
+ * B3 + V4 Track 1: Confidence-driven visual encoding on roundRect card nodes.
  * - opacity = 0.4 + (confidence * 0.6) — low-confidence entities visually recede
  * - High-confidence entities (>0.8) get a thicker border
  * - Label only shown for nodes with confidence > 0.3
+ * - symbol: 'roundRect', symbolSize: [170, 54] — Figma-style card dimensions
  */
 export function transformToEChartsData(
   evidenceNodes: EvidenceNode[],
@@ -66,21 +117,27 @@ export function transformToEChartsData(
     return {
       id: node.id,
       name: node.id, // Must use ID as unique identifier 'name' so ECharts links can resolve perfectly
-      label: node.label, // Human-readable string loaded into custom field
-      symbolSize: node.depth === 0 ? 45 : node.depth === 1 ? 32 : 22,
+      label: buildRichTextLabel(node), // V4 Track 1: rich-text card label
+      symbol: "roundRect",
+      symbolSize: [170, 54], // V4 Track 1: Figma-style card dimensions
       category: node.type,
       value: node.score,
       x,
       y,
       itemStyle: {
-        color: getTypeColor(node.type),
+        color: "#0F172A", // V4 Track 1: dark card background
         opacity,
-        borderColor: isHighConfidence ? "#f8fafc" : getTypeColor(node.type),
-        borderWidth: isHighConfidence ? 2 : 0,
+        borderColor: isHighConfidence ? "#f8fafc" : "#334155",
+        borderWidth: isHighConfidence ? 2 : 1.5,
+        borderRadius: 8,
       },
       labelEnabled, // controls series-level label visibility
       rawContext: node.raw_text,
       sourceId: node.source_id,
+      sourceName: node.source_name,
+      sourceUrl: node.source_url,
+      pluginName: node.plugin_name,
+      subEntityCount: node.sub_entity_count ?? 0,
       timestamp: node.created_at,
       // Confidence field for tooltips
       confidence,
@@ -97,7 +154,11 @@ export function transformToEChartsData(
       source: edge.source_id,
       target: edge.target_id,
       value: edge.weight,
-      lineStyle: { width: Math.max(1, edge.weight * 3), opacity: 0.6 },
+      lineStyle: {
+        width: Math.max(1, edge.weight * 3),
+        opacity: 0.7,
+        color: "#475569",
+      },
     }));
 
   return { nodes, links };
