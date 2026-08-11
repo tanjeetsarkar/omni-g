@@ -69,13 +69,6 @@ func NewProducer(brokers, topic string) (*Producer, error) {
 						Str("topic", *ev.TopicPartition.Topic).
 						Str("event_key", string(ev.Key)).
 						Msg("kafka delivery failed")
-				} else {
-					log.Debug().
-						Str("topic", *ev.TopicPartition.Topic).
-						Int32("partition", ev.TopicPartition.Partition).
-						Int64("offset", int64(ev.TopicPartition.Offset)).
-						Str("event_key", string(ev.Key)).
-						Msg("kafka delivery acknowledged")
 				}
 			}
 		}
@@ -108,7 +101,6 @@ func (pr *Producer) Publish(ctx context.Context, event *RawEvent) error {
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	log.Debug().Str("topic", pr.topic).Str("event_id", event.ID).Str("payload", string(payload)).Msg("kafka publish payload prepared")
 
 	msg := &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &pr.topic, Partition: kafka.PartitionAny},
@@ -123,32 +115,24 @@ func (pr *Producer) Publish(ctx context.Context, event *RawEvent) error {
 		return fmt.Errorf("enqueue message: %w", err)
 	}
 
-	log.Info().
-		Str("topic", pr.topic).
-		Str("event_id", event.ID).
-		Str("source", event.Source).
-		Str("tenant_id", event.TenantID).
-		Msg("event enqueued to kafka producer")
+	log.Debug().Str("topic", pr.topic).Str("event_id", event.ID).Str("source", event.Source).Msg("event enqueued")
 
 	return nil
 }
 
 // Flush waits for all enqueued messages to be delivered or ctx to be cancelled.
 func (pr *Producer) Flush(ctx context.Context) error {
-	log.Info().Str("topic", pr.topic).Msg("flushing kafka producer queue")
 	remaining := pr.p.Flush(int(time.Until(deadline(ctx)).Milliseconds()))
 	if remaining > 0 {
 		return fmt.Errorf("%d messages not flushed before timeout", remaining)
 	}
-	log.Info().Str("topic", pr.topic).Msg("kafka producer queue flushed")
 	return nil
 }
 
 // Close flushes and closes the underlying producer.
 func (pr *Producer) Close(ctx context.Context) error {
-	log.Info().Str("topic", pr.topic).Msg("closing kafka producer")
 	if err := pr.Flush(ctx); err != nil {
-		log.Warn().Err(err).Msg("flush warning on close")
+		log.Warn().Err(err).Msg("kafka producer flush warning on close")
 	}
 	pr.p.Close()
 	log.Info().Str("topic", pr.topic).Msg("kafka producer closed")

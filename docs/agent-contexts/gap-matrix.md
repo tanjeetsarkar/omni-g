@@ -2,7 +2,75 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 11, 2026 — V4 Track 3 + Track 4 (revised): wttr.in weather service, Location removed, /search + /enrich routed through harness, WatcherAgent wired.
+**Last Updated:** August 11, 2026 — Logging cleanup: INFO-level terminal logs cleaned across Aggregator + Processor.
+
+---
+
+## Logging Cleanup: Clean INFO-Level Terminal Output (August 11, 2026)
+
+Cleans up terminal log output across both services so INFO level shows meaningful status changes (tool running, pipeline start/done, errors, warnings) without per-event/per-message noise. Per-event and per-message logs that fire at high frequency are moved to DEBUG; lifecycle, error, and warning logs remain at INFO.
+
+### Completed
+
+| Service | What Changed | Status |
+|---------|-------------|--------|
+| **Aggregator — `cmd/aggregator/main.go`** | Consolidated startup config into a single `"aggregator starting"` log; removed redundant per-component init logs (kafka producer initialized, validation sidecar initialized, ingest pipeline initialized, harness initialized, http server and handlers initialized, watcher agent not enabled); domain service registration now logs a single count; shutdown logs consolidated. | ✅ Complete |
+| **Aggregator — `internal/kafka/producer.go`** | Removed per-event `"event enqueued to kafka producer"` Info log (moved to Debug); removed verbose payload Debug dump; removed per-delivery Debug acknowledged log; consolidated flush/close lifecycle logs. | ✅ Complete |
+| **Aggregator — `internal/pipeline/pipeline.go`** | Consolidated 5 per-event Info logs (processing started, validating payload, validation sidecar responded, payload valid building kafka event, processing completed) into 2 (start + done); moved validation details to Debug; removed verbose payload/raw_event Debug dumps; cleaned ProcessBlock to a single Info per block. | ✅ Complete |
+| **Aggregator — `internal/mcp/client.go`** | Removed per-call Info logs (calling MCP tools/list, MCP tools/list completed, calling MCP tool via SSE, SSE connection established, reading MCP SSE stream, SSE stream closed, JSON-RPC response received); moved to Debug; removed verbose request/response payload Debug dumps; removed per-SSE-payload Debug log. | ✅ Complete |
+| **Aggregator — `internal/validation/validator.go`** | Removed per-call Info logs (sending payload to validation sidecar, validation completed); moved to Debug; removed verbose payload/response_body Debug dumps. | ✅ Complete |
+| **Aggregator — `pkg/harness/harness.go`** | Consolidated 3 per-invocation Info logs (tool executed, observed, invoke complete) into a single `"harness: invoke complete"` log with event_id, blocks, and latency. | ✅ Complete |
+| **Aggregator — `pkg/agent/poller.go`** | Moved per-cycle `"starting tool poll cycle"` Info log to Debug (fires every interval); kept start/stop/error at Info. | ✅ Complete |
+| **Aggregator — `pkg/agent/watcher.go`** | Moved per-reconnect `"watcher stream completed, reconnecting"` Info log to Debug; kept start/stop/error at Info. | ✅ Complete |
+| **Aggregator — `internal/server/search_handler.go`** | Removed per-source fan-out Info logs (starting governed source fan-out, calling governed tool via harness, governed source completed); moved to Debug; kept request-level Info logs (received + completed) and errors. | ✅ Complete |
+| **Aggregator — `internal/server/enrich_handler.go`** | Removed verbose Debug query construction log; kept request received + completed Info logs. | ✅ Complete |
+| **Aggregator — `internal/server/server.go`** | Removed redundant `"HTTP server starting"` Info log (main.go already logs `"aggregator server starting"`). | ✅ Complete |
+| **Processor — `src/processor/main.py`** | Added 13 more noisy third-party loggers to WARNING silence list (httpx, httpcore, neo4j, qdrant_client, asyncpg, aioboto3, botocore, openai, apscheduler, celery, celery.worker, celery.beat); consolidated startup config into a single log; removed per-worker init logs; moved per-Celery-task dispatch Info to Debug; moved `/validate` request Info to Debug. | ✅ Complete |
+| **Processor — `src/kafka/consumer.py`** | Moved per-message Info logs (message received, message processed successfully) to Debug (fire on every message at high ingestion rates); removed verbose payload Debug dump; kept lifecycle (start/stop/partitions assigned/revoked) and errors/warnings at Info. | ✅ Complete |
+| **Processor — `src/processor/pipeline.py`** | Moved per-event intermediate Info logs (pipeline_extraction_done, entity_resolution_canonical_ids) to Debug; kept pipeline_run_start and pipeline_run_done at Info with key metrics (entity_count, confidence). | ✅ Complete |
+| **Processor — `src/processor/runtime.py`** | Consolidated 6 per-component init Info logs (Deduplicator connected, ZeroMemExtractor initialised, EntityResolver initialised, GraphPersistenceService initialised, ContextUnitIndexer initialised, TemporalStore connected) into Debug; kept a single `"Processor runtime initialised"` Info log with key config. | ✅ Complete |
+| **Processor — `src/processor/alert_publisher.py`** | Moved per-alert `"alert_published"` Info log to Debug; removed init/close Info logs; kept errors at Info. | ✅ Complete |
+| **Processor — `src/processor/stage_publisher.py`** | Moved per-stage-event `"stage_event_published"` Info log to Debug (fires on every stage of every event — very noisy); removed init/close Info logs; kept errors at Info. | ✅ Complete |
+| **Processor — `src/resolution/resolver.py`** | Moved per-entity Info logs (entity_resolved, entity_auto_merged) to Debug (fire on every entity resolution); kept errors/warnings at Info. | ✅ Complete |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` in `services/aggregator` | ✅ BUILD OK |
+| Aggregator lint | `get_errors` on all edited Go files | ✅ No new errors (2 pre-existing lint warnings unchanged) |
+| Processor lint | `get_errors` on all edited Python files | ✅ No errors found |
+
+### What INFO Level Shows Now
+
+**Aggregator** (at INFO):
+- `aggregator starting` — startup config (log_level, http_port, kafka_brokers, kafka_topic, tenant_id, mcp_plugins)
+- `tool discovery succeeded` — per plugin at startup
+- `domain services registered` — count at startup
+- `poller agent registered` / `watcher agent registered` — at startup
+- `aggregator server starting` — at startup
+- `harness: invoke complete` — per tool invocation (event_id, blocks, latency_s)
+- `processing content block` — per content block (source, plugin_name, kiq_id, source_name)
+- `pipeline processing started` / `pipeline processing completed` — per event (event_id, ingest_latency_ms)
+- `/search request received` / `/search request completed` — per search
+- `/enrich request received` / `/enrich request completed` — per enrich
+- `harness: tool registered` — per tool at registration
+- Warnings: tool discovery failed, validation failed, circuit breaker open, tool poll failed, etc.
+- Errors: kafka delivery failed, validation sidecar unreachable, kafka publish failed, etc.
+
+**Processor** (at INFO):
+- `Processor service starting` — startup config (port, kafka_enabled, celery_enabled, neo4j_url, qdrant_url)
+- `Launching Kafka consumer workers` — worker count at startup
+- `Kafka consumer worker started` — per worker (worker_id, topic, celery_enabled)
+- `Kafka partitions assigned` / `Kafka partitions revoked` — rebalance events
+- `Kafka consumer started` / `Kafka consumer closed` — lifecycle
+- `Processor runtime initialised` — per worker (worker_id, llm_provider, neo4j_url, qdrant_url)
+- `pipeline_run_start` / `pipeline_run_done` — per event (event_id, tenant_id, entity_count, confidence)
+- `Search request received` / `Expand request received` / `Briefing generation requested` — per HTTP request
+- `Celery worker runtime initialised` — per Celery worker
+- `briefing_task_complete` — per briefing
+- Warnings: Redis unavailable, TemporalStore connection failed, DLQ routing, etc.
+- Errors: alert_publish_failed, briefing generation failed, etc.
 
 ---
 

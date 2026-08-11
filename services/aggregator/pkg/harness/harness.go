@@ -195,13 +195,11 @@ func (h *Harness) InvokeTool(
 	}
 	b.recordSuccess(d.Name)
 	h.recordStage(d.Name, StageExecute, "ok")
-	logger.Info().Int("blocks", len(blocks)).Msg("harness: tool executed")
 
 	// ── Stage 7: Observe ────────────────────────────────────────────────
 	latency := h.clock.Now().Sub(start).Seconds()
 	HarnessInvokeDuration.Observe(latency)
 	h.recordStage(d.Name, StageObserve, "ok")
-	logger.Info().Float64("latency_seconds", latency).Msg("harness: observed")
 
 	// ── Stage 8: Normalize ──────────────────────────────────────────────
 	// Convert the streamed ContentBlocks into a normalized RawEvent envelope.
@@ -223,7 +221,7 @@ func (h *Harness) InvokeTool(
 		Stage:   StageReturnLoop,
 	}
 	h.recordStage(d.Name, StageReturnLoop, "ok")
-	logger.Info().Str("event_id", normalized.ID).Msg("harness: invoke complete")
+	logger.Info().Str("event_id", normalized.ID).Int("blocks", len(blocks)).Float64("latency_s", latency).Msg("harness: invoke complete")
 	return result, nil
 }
 

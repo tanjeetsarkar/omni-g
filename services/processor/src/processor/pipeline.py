@@ -165,7 +165,7 @@ class ProcessingPipeline:
         self._stage_publisher = stage_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
-        logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
+        logger.info("pipeline_run_start", extra={"event_id": event.get("id", ""), "tenant_id": event.get("tenant_id", "default")})
 
         # ── Step 1: Schema validation ──────────────────────────────────────
         if self._stage_publisher:
@@ -300,7 +300,7 @@ class ProcessingPipeline:
 
         if self._stage_publisher:
             self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "done")
-        logger.info(
+        logger.debug(
             "pipeline_extraction_done",
             extra={
                 "event_id": envelope.id,
@@ -385,7 +385,7 @@ class ProcessingPipeline:
                     "entity_context_weights": resolved_weights,
                 }
             )
-            logger.info(
+            logger.debug(
                 "entity_resolution_canonical_ids",
                 extra={
                     "event_id": envelope.id,
@@ -431,6 +431,7 @@ class ProcessingPipeline:
             extra={
                 "event_id": envelope.id,
                 "tenant_id": envelope.tenant_id,
+                "entity_count": len(extraction.entities),
                 "confidence": extraction.extraction_confidence,
             },
         )

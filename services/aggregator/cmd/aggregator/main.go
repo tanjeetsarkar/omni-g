@@ -40,27 +40,23 @@ func main() {
 	log.Info().
 		Str("log_level", level.String()).
 		Str("http_port", cfg.HTTPPort).
-		Str("kafka_topic", cfg.KafkaTopic).
 		Strs("kafka_brokers", cfg.KafkaBrokers).
-		Str("validation_service_url", cfg.ValidationServiceURL).
+		Str("kafka_topic", cfg.KafkaTopic).
 		Str("tenant_id", cfg.TenantID).
-		Int("mcp_plugin_count", len(cfg.MCPPluginURLs)).
-		Msg("aggregator startup configuration loaded")
+		Int("mcp_plugins", len(cfg.MCPPluginURLs)).
+		Msg("aggregator starting")
 
 	// ── Kafka producer ────────────────────────────────────────────────────
 	producer, err := kafka.NewProducer(strings.Join(cfg.KafkaBrokers, ","), cfg.KafkaTopic)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create kafka producer")
 	}
-	log.Info().Str("topic", cfg.KafkaTopic).Msg("kafka producer initialized")
 
 	// ── Validation sidecar ────────────────────────────────────────────────
 	validator := validation.NewValidator(cfg.ValidationServiceURL)
-	log.Info().Str("url", cfg.ValidationServiceURL).Msg("validation sidecar client initialized")
 
 	// ── Processing pipeline ───────────────────────────────────────────────
 	pl := pipeline.New(validator, producer, cfg.KafkaTopic, cfg.TenantID)
-	log.Info().Str("topic", cfg.KafkaTopic).Str("tenant_id", cfg.TenantID).Msg("ingest pipeline initialized")
 
 	// ── V4 Track 3: Tool Governance Harness ───────────────────────────────
 	harnessCfg := harness.Config{
@@ -69,11 +65,6 @@ func main() {
 		CircuitBreakerReset:     time.Duration(cfg.HarnessCircuitBreakerResetMs) * time.Millisecond,
 	}
 	h := harness.New(harnessCfg, nil)
-	log.Info().
-		Dur("invoke_timeout", harnessCfg.InvokeTimeout).
-		Int("cb_threshold", harnessCfg.CircuitBreakerThreshold).
-		Dur("cb_reset", harnessCfg.CircuitBreakerReset).
-		Msg("tool governance harness initialized")
 
 	// ── V4 Track 3: Micro/Mu domain services ──────────────────────────────
 	svcCfg := services.ServiceConfig{
@@ -82,13 +73,15 @@ func main() {
 		WikipediaPluginURL: cfg.WikipediaPluginURL,
 		WikidataPluginURL:  cfg.WikidataPluginURL,
 	}
+	registered := 0
 	for _, svc := range services.All(svcCfg) {
 		if err := svc.Register(h); err != nil {
 			log.Error().Str("service", svc.Name()).Err(err).Msg("failed to register domain service")
 		} else {
-			log.Info().Str("service", svc.Name()).Msg("domain service registered with harness")
+			registered++
 		}
 	}
+	log.Info().Int("services_registered", registered).Msg("domain services registered")
 
 	// ── MCP discovery handler ─────────────────────────────────────────────
 	mcpHandler := mcp.NewHandler()
@@ -101,7 +94,7 @@ func main() {
 			if err != nil {
 				log.Warn().Str("plugin", u).Err(err).Msg("initial tool discovery failed, will retry on next poll")
 			} else {
-				log.Info().Str("plugin", u).Int("tools_discovered", len(tools)).Msg("initial tool discovery succeeded")
+				log.Info().Str("plugin", u).Int("tools", len(tools)).Msg("tool discovery succeeded")
 			}
 		}
 		discoverCancel()
@@ -147,7 +140,7 @@ func main() {
 		RestartMax: cfg.AgentRestartMax,
 	})
 	supervisor.Register(poller)
-	log.Info().Dur("poll_interval", pollInterval).Msg("poller agent registered with supervisor")
+	log.Info().Dur("poll_interval", pollInterval).Msg("poller agent registered")
 
 	// ── V4 Track 3: WatcherAgent (streaming ingestion) ────────────────────
 	// When enabled, the watcher continuously calls the configured governed
@@ -182,9 +175,7 @@ func main() {
 			},
 		})
 		supervisor.Register(watcher)
-		log.Info().Str("watcher_tool", cfg.WatcherTool).Msg("watcher agent registered with supervisor")
-	} else {
-		log.Info().Bool("watcher_enabled", cfg.WatcherEnabled).Msg("watcher agent not enabled")
+		log.Info().Str("watcher_tool", cfg.WatcherTool).Msg("watcher agent registered")
 	}
 
 	// NOTE: The legacy internal/scheduler is deprecated as of V4 Track 3.
@@ -211,7 +202,6 @@ func main() {
 	)
 
 	srv := server.New(cfg, pl, supervisor, mcpHandler, searchHandler)
-	log.Info().Msg("http server and handlers initialized")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -221,11 +211,11 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to start agent supervisor")
 	}
 
-	log.Info().Msg("starting aggregator server loop")
+	log.Info().Str("http_port", cfg.HTTPPort).Msg("aggregator server starting")
 	if err := srv.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("server exited with error")
 	}
-	log.Info().Msg("server loop stopped, beginning graceful shutdown")
+	log.Info().Msg("aggregator shutting down")
 
 	// Stop the agent supervisor gracefully.
 	if err := supervisor.Stop(); err != nil {

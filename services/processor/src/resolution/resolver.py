@@ -199,7 +199,7 @@ class EntityResolver:
         elif result.decision == ResolutionDecision.AUTO_MERGE:
             SAME_AS_MERGES.labels(tenant_id=tenant_id).inc()
 
-        logger.info(
+        logger.debug(
             "entity_resolved",
             extra={
                 "tenant_id": tenant_id,
@@ -235,7 +235,7 @@ class EntityResolver:
         if decision == ResolutionDecision.AUTO_MERGE:
             matched_id = resolution.matched_entity_id or entity.id
             await self._update_node(matched_id, props)
-            logger.info(
+            logger.debug(
                 "entity_auto_merged",
                 extra={
                     "tenant_id": tenant_id,

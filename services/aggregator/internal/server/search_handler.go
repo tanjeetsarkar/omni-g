@@ -87,8 +87,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchID := uuid.New().String()
-	log.Info().Str("search_id", searchID).Msg("received /search request")
-	log.Debug().Str("search_id", searchID).Interface("request", req).Msg("search request payload")
+	log.Info().Str("search_id", searchID).Str("query", req.Query).Msg("/search request received")
 
 	sources := h.resolveSources(req.Sources)
 	perm := harness.Permission{TenantID: h.tenantID} // allow-all for on-demand queries
@@ -100,7 +99,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		EventsQueued:   total,
 		QueuedBySource: bySource,
 	})
-	log.Info().Str("search_id", searchID).Int("events_queued", total).Interface("queued_by_source", bySource).Msg("/search request completed")
+	log.Info().Str("search_id", searchID).Int("events_queued", total).Msg("/search request completed")
 }
 
 // resolveSources returns the source list to use, defaulting to all configured
@@ -140,8 +139,6 @@ func (h *SearchHandler) fanOutThroughHarness(
 		}
 
 		go func(src, tool string) {
-			log.Info().Str("correlation_id", correlationID).Str("source", src).Str("tool", tool).
-				Msg("starting governed source fan-out")
 			count := h.invokeGovernedTool(bgCtx, correlationID, src, tool, query, perm, kiqID)
 			resultCh <- result{source: src, count: count}
 		}(source, toolName)
@@ -170,7 +167,6 @@ func (h *SearchHandler) invokeGovernedTool(
 	kiqID string,
 ) int {
 	logger := log.With().Str("correlation_id", correlationID).Str("source", sourceName).Str("tool", toolName).Logger()
-	logger.Info().Msg("calling governed tool via harness")
 
 	args := map[string]any{}
 	if query != "" {
@@ -195,6 +191,6 @@ func (h *SearchHandler) invokeGovernedTool(
 		}
 		count++
 	}
-	logger.Info().Int("blocks_queued", count).Msg("governed source completed")
+	logger.Debug().Int("blocks_queued", count).Msg("governed source completed")
 	return count
 }

@@ -74,32 +74,28 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		Logger()
 
 	logger.Info().Msg("pipeline processing started")
-	logger.Debug().Interface("payload", payload).Msg("pipeline received payload")
 
 	// ── validate ──────────────────────────────────────────────────────────
-	logger.Info().Msg("validating payload against sidecar schema")
 	result, err := p.validator.Validate(ctx, source, payload)
 	if err != nil {
 		logger.Error().Err(err).Msg("validation sidecar unreachable")
 		metrics.IngestTotal.WithLabelValues(source, "validation_error").Inc()
 		return fmt.Errorf("validation sidecar: %w", err)
 	}
-	logger.Info().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation sidecar responded")
+	logger.Debug().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation sidecar responded")
 
 	if !result.Valid {
 		reason := "schema_violation"
 		if len(result.Errors) > 0 {
 			reason = result.Errors[0].Field + ":" + result.Errors[0].Message
 		}
-		logger.Warn().Str("reason", reason).Interface("validation_errors", result.Errors).
-			Msg("event failed schema validation, dropping")
+		logger.Warn().Str("reason", reason).Msg("event failed schema validation, dropping")
 		metrics.ValidationFailureTotal.WithLabelValues(source, reason).Inc()
 		metrics.IngestTotal.WithLabelValues(source, "validation_failed").Inc()
 		return nil // expected rejection — not an error from caller's perspective
 	}
 
 	// ── publish ───────────────────────────────────────────────────────────
-	logger.Info().Msg("payload valid, building kafka event")
 	elapsed := time.Since(start).Milliseconds()
 	// Default human-readable source name to the plugin name when the
 	// upstream plugin did not supply a publisher/document title. Applied
@@ -135,8 +131,6 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 
 	event := evt.ToKafkaEvent()
 
-	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
-
 	if err := p.publisher.Publish(ctx, event); err != nil {
 		logger.Error().Err(err).Msg("kafka publish failed")
 		metrics.KafkaPublishTotal.WithLabelValues(p.topic, "error").Inc()
@@ -160,16 +154,13 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 // default sourceName to pluginName and leave sourceURL unset.
 func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
 	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Str("source_name", sourceName).Msg("processing content block")
-	log.Debug().Str("source", source).Str("content_block_text", text).Msg("received content block text")
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		log.Warn().Str("source", source).Str("text", text).
-			Err(err).Msg("ContentBlock text is not valid JSON, dropping")
+		log.Warn().Str("source", source).Err(err).Msg("content block is not valid JSON, dropping")
 		metrics.IngestTotal.WithLabelValues(source, "parse_error").Inc()
 		return nil // non-fatal
 	}
-	log.Debug().Str("source", source).Interface("payload", payload).Msg("parsed content block JSON payload")
 
 	// V4 Track 2: when the caller did not supply a human-readable source
 	// name/URL, auto-extract them from the content-block payload (e.g.

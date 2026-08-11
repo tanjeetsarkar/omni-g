@@ -60,14 +60,10 @@ func (h *SearchHandler) HandleEnrich(w http.ResponseWriter, r *http.Request) {
 		Str("enrichment_id", enrichmentID).
 		Str("entity_name", req.Entity.Name).
 		Str("entity_type", req.Entity.Type).
-		Msg("received /enrich request")
+		Msg("/enrich request received")
 
 	// Build a focused query string from entity metadata.
 	query := buildEnrichQuery(req.Entity)
-	log.Debug().
-		Str("enrichment_id", enrichmentID).
-		Str("query", query).
-		Msg("enrichment query constructed")
 
 	// Resolve which sources to use (defaults to all configured sources).
 	sources := h.resolveSources(req.Plugins)

@@ -167,7 +167,7 @@ func (w *WatcherAgent) watch(ctx context.Context) {
 		w.mu.Lock()
 		w.health.LastRun = &now
 		w.mu.Unlock()
-		logger.Info().Int("blocks", len(result.Blocks)).Msg("watcher stream completed, reconnecting")
+		logger.Debug().Int("blocks", len(result.Blocks)).Msg("stream completed, reconnecting")
 		// Reset backoff after a successful cycle.
 		attempt = 0
 	}

@@ -155,10 +155,10 @@ func (p *PollerAgent) Health() Health {
 // backoff on transient failures.
 func (p *PollerAgent) runTool(ctx context.Context, toolName string) {
 	logger := log.With().Str("agent", p.cfg.Name).Str("tool", toolName).Logger()
-	logger.Info().Msg("tool polling loop started")
+	logger.Info().Msg("polling loop started")
 
 	for {
-		logger.Info().Msg("starting tool poll cycle")
+		logger.Debug().Msg("starting poll cycle")
 		if err := p.pollOnce(ctx, toolName); err != nil {
 			logger.Error().Err(err).Msg("tool poll failed")
 			p.mu.Lock()
@@ -169,7 +169,7 @@ func (p *PollerAgent) runTool(ctx context.Context, toolName string) {
 
 		select {
 		case <-ctx.Done():
-			logger.Info().Msg("tool polling loop stopping")
+			logger.Info().Msg("polling loop stopping")
 			return
 		case <-time.After(p.cfg.Interval):
 		}

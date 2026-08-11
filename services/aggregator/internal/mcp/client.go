@@ -35,14 +35,12 @@ func NewClient(baseURL string) *Client {
 // tools.
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	logger := log.With().Str("plugin_url", c.baseURL).Str("method", "tools/list").Logger()
-	logger.Info().Msg("calling MCP tools/list")
 
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "tools/list",
 	}
-	logger.Debug().Interface("request", req).Msg("MCP tools/list request payload")
 
 	resp, err := c.call(ctx, req)
 	if err != nil {
@@ -56,8 +54,7 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		return nil, fmt.Errorf("decode tools/list result: %w", err)
 	}
-	logger.Info().Int("tool_count", len(result.Tools)).Msg("MCP tools/list completed")
-	logger.Debug().Interface("tools", result.Tools).Msg("MCP tools/list response payload")
+	logger.Debug().Int("tool_count", len(result.Tools)).Msg("tools/list completed")
 
 	return result.Tools, nil
 }
@@ -67,8 +64,6 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 // stream ends or ctx is cancelled.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (<-chan ContentBlock, error) {
 	logger := log.With().Str("plugin_url", c.baseURL).Str("method", "tools/call").Str("tool", name).Logger()
-	logger.Info().Msg("calling MCP tool via SSE")
-	logger.Debug().Interface("arguments", args).Msg("MCP tools/call arguments payload")
 
 	params := ToolCallParams{Name: name, Arguments: args}
 	paramsJSON, err := json.Marshal(params)
@@ -87,7 +82,6 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	if err != nil {
 		return nil, fmt.Errorf("marshal jsonrpc request: %w", err)
 	}
-	logger.Debug().Str("request", string(body)).Msg("MCP tools/call JSON-RPC request payload")
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sse", bytes.NewReader(body))
 	if err != nil {
@@ -102,14 +96,14 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	if err != nil {
 		return nil, fmt.Errorf("call sse endpoint: %w", err)
 	}
-	logger.Info().Int("status_code", httpResp.StatusCode).Msg("MCP SSE connection established")
 
 	if httpResp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 4096))
 		httpResp.Body.Close()
-		logger.Debug().Str("error_body", string(raw)).Msg("MCP SSE unexpected response body")
 		return nil, fmt.Errorf("unexpected sse status %d: %s", httpResp.StatusCode, raw)
 	}
+
+	logger.Debug().Int("status_code", httpResp.StatusCode).Msg("SSE connection established")
 
 	ch := make(chan ContentBlock, 16)
 
@@ -121,10 +115,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 			httpResp.Body.Close()
 		}()
 		defer close(ch)
-		logger.Info().Msg("reading MCP SSE stream")
 		parseSSE(ctx, httpResp.Body, ch)
 		httpResp.Body.Close() // also close on natural stream end
-		logger.Info().Msg("MCP SSE stream closed")
+		logger.Debug().Msg("SSE stream closed")
 	}()
 
 	return ch, nil
@@ -134,12 +127,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 
 // call performs a standard JSON-RPC HTTP POST (non-streaming).
 func (c *Client) call(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse, error) {
-	logger := log.With().Str("plugin_url", c.baseURL).Str("method", req.Method).Logger()
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
-	logger.Debug().Str("request", string(body)).Msg("MCP JSON-RPC request payload")
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
@@ -152,11 +143,9 @@ func (c *Client) call(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse
 		return nil, fmt.Errorf("http post: %w", err)
 	}
 	defer httpResp.Body.Close()
-	logger.Info().Int("status_code", httpResp.StatusCode).Msg("MCP JSON-RPC response received")
 
 	if httpResp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, 4096))
-		logger.Debug().Str("error_body", string(raw)).Msg("MCP JSON-RPC unexpected response body")
 		return nil, fmt.Errorf("unexpected status %d: %s", httpResp.StatusCode, raw)
 	}
 
@@ -164,7 +153,6 @@ func (c *Client) call(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	logger.Debug().Interface("response", resp).Msg("MCP JSON-RPC response payload")
 
 	return &resp, nil
 }
@@ -190,7 +178,6 @@ func parseSSE(ctx context.Context, r io.Reader, ch chan<- ContentBlock) {
 		}
 
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		log.Debug().Str("sse_payload", payload).Msg("received MCP SSE payload")
 		if payload == "[DONE]" {
 			return
 		}

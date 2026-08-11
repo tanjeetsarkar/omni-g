@@ -59,6 +59,7 @@ def configure_logging(level_name: str) -> None:
     handler.setFormatter(StructuredFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
+    # Application loggers — set to the configured level.
     for name in (
         "src.processor",
         "src.kafka",
@@ -73,6 +74,7 @@ def configure_logging(level_name: str) -> None:
     ):
         logging.getLogger(name).setLevel(level)
 
+    # Noisy third-party loggers — silence to WARNING so the terminal stays clean.
     for noisy_logger in (
         "kafka",
         "kafka.client",
@@ -80,6 +82,18 @@ def configure_logging(level_name: str) -> None:
         "kafka.consumer",
         "kafka.consumer.fetcher",
         "urllib3",
+        "httpx",
+        "httpcore",
+        "neo4j",
+        "qdrant_client",
+        "asyncpg",
+        "aioboto3",
+        "botocore",
+        "openai",
+        "apscheduler",
+        "celery",
+        "celery.worker",
+        "celery.beat",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
@@ -111,7 +125,6 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         group_id=cfg.kafka_group_id,
         dlq_topic=cfg.kafka_dlq_topic,
     )
-    logger.info("RawEventConsumer initialised", extra={"worker_id": worker_id})
     runtime: ProcessorRuntime | None = None
     if not cfg.celery_enabled:
         runtime = await ProcessorRuntime.create(cfg, worker_id=worker_id)
@@ -129,7 +142,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     async def _handle(event: dict[str, Any]) -> None:
         if cfg.celery_enabled:
             task_id = enqueue_process_event(event)
-            logger.info(
+            logger.debug(
                 "Dispatched process_event Celery task",
                 extra={"worker_id": worker_id, "task_id": task_id},
             )
@@ -150,16 +163,14 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging(settings.log_level)
-    logger.info("Processor service starting", extra={"port": settings.http_port})
     logger.info(
-        "Processor runtime configuration loaded",
+        "Processor service starting",
         extra={
+            "port": settings.http_port,
             "kafka_enabled": settings.kafka_enabled,
-            "kafka_brokers": settings.kafka_brokers,
             "celery_enabled": settings.celery_enabled,
             "neo4j_url": settings.neo4j_url,
             "qdrant_url": settings.qdrant_url,
-            "postgres_url": settings.postgres_url,
         },
     )
 
@@ -174,16 +185,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer_tasks: list[asyncio.Task[None]] = []
     if settings.kafka_enabled:
-        logger.info("Kafka processing enabled; launching workers")
+        logger.info("Launching Kafka consumer workers", extra={"worker_count": settings.kafka_num_workers})
         for worker_id in range(settings.kafka_num_workers):
             try:
                 task = asyncio.create_task(startup_consumer(settings, worker_id=worker_id))
                 consumer_tasks.append(task)
-                logger.info("Kafka consumer worker task launched", extra={"worker_id": worker_id})
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to create Kafka consumer task %d: %s", worker_id, exc)
     else:
-        logger.info("Kafka processing disabled; worker startup skipped")
+        logger.info("Kafka processing disabled")
 
     yield
 
@@ -366,7 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/validate", tags=["ops"], response_model=ValidateResponse)
     async def validate(body: ValidateRequest) -> JSONResponse:
         errors: list[dict[str, str]] = []
-        logger.info("Validation request received", extra={"source": body.source})
+        logger.debug("Validation request received", extra={"source": body.source})
         if not body.source:
             errors.append({"field": "source", "message": "field 'source' is required"})
         if body.payload is None:
@@ -438,7 +448,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         cfg: Settings = app.state.settings
         tenant_id = body.get("tenant_id", "default")
-        logger.info("On-demand briefing requested", extra={"tenant_id": tenant_id})
+        logger.info("Briefing generation requested", extra={"tenant_id": tenant_id})
         script_gen = BriefingScriptGenerator()
         tts = TTSSynthesizer(kokoro_url=cfg.kokoro_url, elevenlabs_api_key=cfg.elevenlabs_api_key)
         storage = MinIOStorageService(
@@ -552,7 +562,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..retrieval.temporal import TemporalRetriever
 
         cfg: Settings = app.state.settings
-        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query})
+        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query[:100]})
 
         neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
