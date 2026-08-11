@@ -35,6 +35,31 @@ type Config struct {
 
 	// TenantID identifies the tenant for all events produced by this instance.
 	TenantID string `mapstructure:"TENANT_ID"`
+
+	// ── V4 Track 3: Harness & Agent governance knobs ───────────────────────
+	// HarnessInvokeTimeoutMs caps a single governed tool invocation.
+	HarnessInvokeTimeoutMs int `mapstructure:"HARNESS_INVOKE_TIMEOUT_MS"`
+	// HarnessCircuitBreakerThreshold is the consecutive failure count that
+	// opens the per-tool circuit breaker.
+	HarnessCircuitBreakerThreshold int `mapstructure:"HARNESS_CIRCUIT_BREAKER_THRESHOLD"`
+	// HarnessCircuitBreakerResetMs is how long the breaker stays open before
+	// moving to half-open.
+	HarnessCircuitBreakerResetMs int `mapstructure:"HARNESS_CIRCUIT_BREAKER_RESET_MS"`
+	// AgentHealthTickMs is how often the supervisor samples agent health.
+	AgentHealthTickMs int `mapstructure:"AGENT_HEALTH_TICK_MS"`
+	// AgentRestartMax is the max restart attempts per agent before degraded.
+	AgentRestartMax int `mapstructure:"AGENT_RESTART_MAX"`
+
+	// ── WatcherAgent (streaming ingestion) ────────────────────────────────
+	// WatcherEnabled controls whether a WatcherAgent is registered with the
+	// supervisor. When true, the watcher continuously calls WatcherTool and
+	// reconnects on stream end, turning any pollable tool into a live watch.
+	WatcherEnabled bool `mapstructure:"WATCHER_ENABLED"`
+	// WatcherTool is the governed tool name the watcher monitors.
+	WatcherTool string `mapstructure:"WATCHER_TOOL"`
+	// WatcherArgs is an optional JSON-encoded argument map passed to the
+	// watcher tool on each (re)connect (e.g. {"query":"breaking news"}).
+	WatcherArgs string `mapstructure:"WATCHER_ARGS"`
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -56,6 +81,18 @@ func Load() (*Config, error) {
 	v.SetDefault("WIKIDATA_PLUGIN_URL", "")
 	v.SetDefault("NEWSRSS_PLUGIN_URL", "")
 	v.SetDefault("REUTERS_PLUGIN_URL", "")
+
+	// V4 Track 3: harness & agent defaults.
+	v.SetDefault("HARNESS_INVOKE_TIMEOUT_MS", 30000)
+	v.SetDefault("HARNESS_CIRCUIT_BREAKER_THRESHOLD", 5)
+	v.SetDefault("HARNESS_CIRCUIT_BREAKER_RESET_MS", 30000)
+	v.SetDefault("AGENT_HEALTH_TICK_MS", 10000)
+	v.SetDefault("AGENT_RESTART_MAX", 3)
+
+	// WatcherAgent defaults.
+	v.SetDefault("WATCHER_ENABLED", false)
+	v.SetDefault("WATCHER_TOOL", "search_news")
+	v.SetDefault("WATCHER_ARGS", "")
 
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

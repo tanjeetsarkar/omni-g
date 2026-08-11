@@ -2,7 +2,51 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 11, 2026 — V4 Track 1 + Track 2: provenance end-to-end, τ/D_max query params, rich-text card nodes, Zustand canvas store, floating UI controls, responsive evidence drawer.
+**Last Updated:** August 11, 2026 — V4 Track 3 + Track 4 (revised): wttr.in weather service, Location removed, /search + /enrich routed through harness, WatcherAgent wired.
+
+---
+
+## V4 Track 3 + Track 4: Aggregator Harness, Agents & Governance Audit (August 11, 2026)
+
+Implements the V4 roadmap (`docs/V4/overall_raodmap_v4.md` Track 3 + Track 4, Milestones 1 + 5). Replaces the legacy `internal/scheduler` polling loop with a governed 9-stage Tool Execution Lifecycle Harness and Autonomous Ingestion Agents. Milestones 2-4 (Processor Zero-Mem, PPR retrieval, Delivery canvas) were already complete per the Track 1+2 entry below and are out of scope here; they were re-confirmed as part of the Milestone 5 verification.
+
+### Completed
+
+| Phase | What Changed | Status |
+|-------|-------------|--------|
+| **A — RawEvent Contract & Models Package** | Created `pkg/models/event.go` with the canonical governance `RawEvent` envelope mirroring `internal/kafka.RawEvent` plus `Validate()` enforcing non-null `source_name`/`plugin_name`/`timestamp`/`tenant_id`/`schema_version` (V4 provenance contract + multi-tenant isolation Principle 6); `NewRawEvent()` stamps UUID/timestamp/schema-version defaults; `ToKafkaEvent()`/`FromKafkaEvent()` convert at the publish boundary so the harness and agents depend only on `pkg/models`. Updated `internal/pipeline/pipeline.go` `Process()` to build `pkg/models.RawEvent`, call `Validate()`, then convert via `ToKafkaEvent()` before publish — adds a second validation layer (schema sidecar + envelope contract). 10 model tests + pipeline tests still green. | ✅ Complete |
+| **B — 9-Stage Tool Governance Harness** | Created `pkg/harness/` implementing the V4 9-stage Production Tool Execution Lifecycle: `types.go` (`Tool` interface, `ToolDescriptor`, `InvokeResult`, `Permission`, `Stage` enum Register=1…ReturnLoop=9); `validator.go` (Stage 1 `ValidateDescriptor` + Stage 4 `ValidateArguments` lightweight JSON-schema required/type checks); `permission.go` (Stage 5 `CheckPermission` per-tenant allow-list, empty=allow-all for untasked collection); `harness.go` (`Harness.InvokeTool` running stages 3-9: Select → Validate → Permission → Execute with per-tool circuit breaker + injected `Clock` → Observe → Normalize via `ingest.ExtractProvenance` + `models.NewRawEvent` → ReturnLoop; `Register`/`Advertise` for stages 1-2); `metrics.go` (`omni_g_harness_invoke_total{tool,stage,status}`, `_invoke_duration_seconds`, `_circuit_breaker_state{tool}`, `_permission_denied_total{tool,tenant}`). Circuit breaker opens after configurable consecutive failures, half-open after reset window. 16 harness tests covering each stage + full happy/rejection paths + circuit breaker open/half-open recovery + permission denial. | ✅ Complete |
+| **C — Autonomous Ingestion Agents** | Created `pkg/agent/` replacing the deprecated `internal/scheduler`: `types.go` (`Agent` interface, `Health`, `Status` running/degraded/stopped); `helpers.go` (`backoffDuration` exponential backoff capped at 60s, `toolHasRequiredParams` for skipping required-param tools on scheduled polls); `poller.go` (`PollerAgent` — per-tool goroutines, interval loop → `Harness.InvokeTool` → `OnResult` callback → `pipeline.ProcessBlock`, retries with backoff, non-retryable for circuit-breaker-open/permission denials); `watcher.go` (`WatcherAgent` — long-lived SSE stream via `InvokeTool`, auto-reconnect with backoff, stops on non-retryable rejections); `supervisor.go` (`AgentSupervisor` — fleet management, 10s health tick, restarts crashed agents up to `RestartMax` then marks degraded, `omni_g_agent_health{agent}` gauge). 7 agent tests (poller forwards/skips required-params/records errors; watcher forwards/stops on non-retryable; supervisor starts-stops all + restarts crashed). | ✅ Complete |
+| **D — Micro/Mu Domain Services** | Created `internal/services/` with 4 domain services: `types.go` (`DomainService` interface, `ServiceConfig`, `All()` factory); `mcp_tool.go` (`mcpPluginTool` single-plugin adapter + `fanOutTool` multi-plugin merger + `placeholderJSON` for unconfigured plugins); `news.go` (News → `search_news` fanning out to newsrss + reuters); `search.go` (Search → `web_search` fanning out to wikipedia + wikidata); `weather.go` (Weather → `fetch_weather` backed by the wttr.in JSON API with process-wide rate limiting — 2 concurrent calls, 1s min-interval; parses `current_condition` + `nearest_area` into a normalized provenance-bearing payload); `feeds.go` (Feeds → `fetch_feed` wrapping newsrss). Location service removed (not needed). All tools registered as governed `harness.Tool`s with risk levels + input schemas. Service tests cover registration + News/Search/Feeds invoking mock MCP plugins + Weather hitting a mock wttr.in server + rate-limiter interval enforcement. | ✅ Complete |
+| **E — Wiring & Deprecation** | Updated `internal/config/config.go` with `HARNESS_INVOKE_TIMEOUT_MS`/`HARNESS_CIRCUIT_BREAKER_THRESHOLD`/`HARNESS_CIRCUIT_BREAKER_RESET_MS`/`AGENT_HEALTH_TICK_MS`/`AGENT_RESTART_MAX` + `WATCHER_ENABLED`/`WATCHER_TOOL`/`WATCHER_ARGS` env knobs (sensible defaults). Rewrote `cmd/aggregator/main.go` to build the harness, register all 4 domain services, build a `PollerAgent` wired to `pipeline.ProcessBlock` via `OnResult`, conditionally build a `WatcherAgent` (when `WATCHER_ENABLED=true`) that continuously calls the configured governed tool and reconnects on stream end, register both with an `AgentSupervisor`, start the supervisor (non-blocking), populate `mcpHandler` from `harness.Advertise()`, and stop the supervisor on shutdown. The legacy `internal/scheduler` is deprecated (package retained for one release, no longer wired in `main.go`). Updated `internal/server/server.go` to accept `*agent.AgentSupervisor` instead of `*scheduler.Scheduler`, removed the scheduler start block, and added `GET /agents/health` returning `supervisor.Health()` JSON for the Milestone 5 audit. Rewrote `internal/server/search_handler.go` + `enrich_handler.go` so `/search` and `/enrich` route through the 9-stage harness via `harness.InvokeTool` (unified governance boundary for both autonomous agents and on-demand HTTP queries). Full aggregator suite (11 packages) green. | ✅ Complete |
+| **F — E2E Governance Audit & Verification** | Created `pkg/harness/audit_test.go` (Milestone 5 governance audit: 3 tools through all 9 stages, asserts every stage emits an `ok` metric on the happy path, permission-denial stops at Stage 5 with no later-stage metrics, validation-rejection stops at Stage 4, circuit breaker gauge transitions to open, normalized event passes the V4 envelope contract). Created `internal/server/e2e_governance_audit_test.go` (full-stack E2E: harness → services → poller → pipeline → recording publisher; asserts every published event has non-null `source_name`/`plugin_name`/`timestamp`/`tenant_id`; `/agents/health` returns the poller; `/metrics` exposes `omni_g_harness_invoke_total` + `omni_g_agent_health` + `omni_g_harness_circuit_breaker_state` + per-stage labels). Re-confirmed all 5 key verification criteria from the roadmap. | ✅ Complete |
+
+### Verification
+
+| # | Criterion | Command | Result |
+|---|-----------|---------|--------|
+| 1 | Aggregator Governance: 100% of agent calls pass through 9-stage Harness | `go test ./pkg/harness/... ./pkg/agent/...` | ✅ All pass; audit test confirms 9 stages per call with per-stage metrics |
+| 2 | Ingestion Token Cost: 0 LLM tokens during stream indexing | `pytest services/processor/tests/test_extractor.py` | ✅ 12 passed (re-confirmed, no regression) |
+| 3 | Retrieval Latency: multi-hop D=2 < 120ms | `pytest services/processor/tests/test_echarts_drilldown_pipeline.py` | ✅ 12 passed (re-confirmed, no regression) |
+| 4 | Canvas State Freshness: stale nodes purged instantly | `pnpm exec jest` in `services/delivery` | ✅ 9 suites / 76 tests pass (re-confirmed) |
+| 5 | Provenance Integrity: every node click opens unmodified source snippet | `pytest tests/e2e/test_ui_provenance_pipeline.py` | ✅ 4 passed (re-confirmed) |
+| — | Full aggregator suite | `go test ./...` in `services/aggregator` | ✅ 11 packages pass (models, harness, agent, services, pipeline, server, kafka, mcp, ingest, validation, scheduler-deprecated) |
+
+### Open V4 Gaps
+
+| Area | Gap | Priority |
+|------|-----|----------|
+| **gVisor sandboxing** | Harness Execute stage uses in-process circuit breakers + context timeouts; Docker network policies are the Phase 1 isolation. gVisor sandboxing is deferred to Phase 6 per `copilot-instructions.md` Principle 7. Not needed now. | Low (Phase 6) |
+| **`internal/scheduler` removal** | The legacy scheduler package is deprecated and no longer wired in `main.go` but is retained for one release to support rolling upgrades. Remove it once no deployments reference it. | Low |
+
+### Closed Gaps (this iteration, August 11, 2026)
+
+| Area | Resolution |
+|------|------------|
+| **Weather service** | ✅ `WeatherService` now backs `fetch_weather` with the wttr.in JSON API (`?format=j1`) and a process-wide rate limiter (2 concurrent calls, 1s min-interval). Parses `current_condition` + `nearest_area` into a normalized provenance-bearing payload (`source_name=wttr.in`, `source_url=https://wttr.in/<area>`). No MCP plugin needed. |
+| **Location service** | ✅ Removed — location is not needed as of now. `location.go` deleted; `All()` factory returns 4 services. |
+| **`/search` + `/enrich` harness routing** | ✅ `SearchHandler` rewritten to route through `harness.InvokeTool` — both `/search` and `/enrich` now pass through the 9-stage governance lifecycle (Select → Validate → Permission → Execute → Observe → Normalize → ReturnLoop) before publishing. Unified governance boundary for autonomous agents and on-demand HTTP queries. |
+| **WatcherAgent usage** | ✅ `WatcherAgent` wired in `main.go` behind `WATCHER_ENABLED`/`WATCHER_TOOL`/`WATCHER_ARGS` config knobs. When enabled, the watcher continuously calls the configured governed tool and reconnects on stream end (with backoff reset after success), turning any pollable tool into a live watch. Registered with the `AgentSupervisor` alongside the poller. |
 
 ---
 

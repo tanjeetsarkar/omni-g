@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/omni-g/aggregator/internal/ingest"
 	kafkainternal "github.com/omni-g/aggregator/internal/kafka"
 	"github.com/omni-g/aggregator/internal/metrics"
 	"github.com/omni-g/aggregator/internal/validation"
+	"github.com/omni-g/aggregator/pkg/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -109,19 +109,31 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	if effectiveSourceName == "" {
 		effectiveSourceName = pluginName
 	}
-	event := &kafkainternal.RawEvent{
-		ID:              uuid.New().String(),
-		Source:          source,
-		Timestamp:       time.Now().UTC(),
-		Payload:         payload,
-		PluginName:      pluginName,
-		PluginVersion:   pluginVersion,
-		IngestLatencyMs: elapsed,
-		TenantID:        p.tenantID,
-		KIQID:           kiqID,
-		SourceName:      effectiveSourceName,
-		SourceURL:       sourceURL,
+
+	// V4 Track 3: build the governance envelope (pkg/models.RawEvent) and
+	// enforce the non-null provenance contract before publishing. This is the
+	// second validation layer — the schema sidecar validates the payload
+	// shape; Validate() validates the envelope provenance fields required by
+	// the V4 roadmap (source_name, plugin_name, timestamp, tenant_id).
+	evt := models.NewRawEvent()
+	evt.Source = source
+	evt.Payload = payload
+	evt.PluginName = pluginName
+	evt.PluginVersion = pluginVersion
+	evt.IngestLatencyMs = elapsed
+	evt.TenantID = p.tenantID
+	evt.KIQID = kiqID
+	evt.SourceName = effectiveSourceName
+	evt.SourceURL = sourceURL
+	// NewRawEvent stamps ID/Timestamp/SchemaVersion; preserve them.
+
+	if err := evt.Validate(); err != nil {
+		logger.Warn().Err(err).Msg("envelope contract validation failed, dropping")
+		metrics.IngestTotal.WithLabelValues(source, "envelope_invalid").Inc()
+		return nil // envelope contract violation — drop, not a caller error
 	}
+
+	event := evt.ToKafkaEvent()
 
 	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
 

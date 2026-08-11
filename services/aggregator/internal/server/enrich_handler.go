@@ -1,13 +1,13 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/omni-g/aggregator/pkg/harness"
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,11 +38,12 @@ type enrichResponse struct {
 //
 // Unlike POST /search (which accepts a free-form query), /enrich accepts
 // structured entity metadata and builds a focused query string from it so
-// the MCP plugins can return content specifically about that entity.
+// the governed tools can return content specifically about that entity.
 //
-// The handler fans out only to the plugins named in the request (or all
-// configured plugins when the list is empty) and publishes results to Kafka
-// via the same pipeline used by /search.
+// The handler fans out only to the sources named in the request (or all
+// configured sources when the list is empty) and publishes results to Kafka
+// via the same harness-backed path used by /search. All tool calls route
+// through the 9-stage Tool Governance Harness.
 func (h *SearchHandler) HandleEnrich(w http.ResponseWriter, r *http.Request) {
 	var req enrichRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -68,68 +69,11 @@ func (h *SearchHandler) HandleEnrich(w http.ResponseWriter, r *http.Request) {
 		Str("query", query).
 		Msg("enrichment query constructed")
 
-	// Resolve which plugins to use.
-	plugins := req.Plugins
-	if len(plugins) == 0 {
-		for name := range h.pluginClients {
-			plugins = append(plugins, name)
-		}
-	}
+	// Resolve which sources to use (defaults to all configured sources).
+	sources := h.resolveSources(req.Plugins)
+	perm := harness.Permission{TenantID: h.tenantID} // allow-all for on-demand
 
-	type result struct {
-		source string
-		count  int
-	}
-	resultCh := make(chan result, len(plugins))
-	bgCtx := context.Background()
-
-	for _, pluginName := range plugins {
-		client, ok := h.pluginClients[pluginName]
-		if !ok {
-			log.Warn().
-				Str("enrichment_id", enrichmentID).
-				Str("plugin", pluginName).
-				Msg("/enrich: no client configured for plugin")
-			resultCh <- result{source: pluginName, count: 0}
-			continue
-		}
-		pluginURL, ok := h.pluginURLs[pluginName]
-		if !ok || pluginURL == "" {
-			log.Warn().
-				Str("enrichment_id", enrichmentID).
-				Str("plugin", pluginName).
-				Msg("/enrich: no URL configured for plugin")
-			resultCh <- result{source: pluginName, count: 0}
-			continue
-		}
-		toolName, ok := h.pluginTools[pluginName]
-		if !ok {
-			log.Warn().
-				Str("enrichment_id", enrichmentID).
-				Str("plugin", pluginName).
-				Msg("/enrich: no tool configured for plugin")
-			resultCh <- result{source: pluginName, count: 0}
-			continue
-		}
-
-		go func(name, url string) {
-			log.Info().
-				Str("enrichment_id", enrichmentID).
-				Str("plugin", name).
-				Str("tool", toolName).
-				Msg("starting enrichment plugin call")
-			count := h.callPlugin(bgCtx, enrichmentID, name, url, client, toolName, query)
-			resultCh <- result{source: name, count: count}
-		}(pluginName, pluginURL)
-	}
-
-	total := 0
-	bySource := make([]sourceResultCount, 0, len(plugins))
-	for range plugins {
-		r := <-resultCh
-		total += r.count
-		bySource = append(bySource, sourceResultCount{Source: r.source, BlocksQueued: r.count})
-	}
+	total, bySource := h.fanOutThroughHarness(r.Context(), enrichmentID, sources, query, perm, "")
 
 	writeJSON(w, http.StatusAccepted, enrichResponse{
 		EnrichmentID:   enrichmentID,
