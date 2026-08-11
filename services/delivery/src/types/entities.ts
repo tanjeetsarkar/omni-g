@@ -25,6 +25,37 @@ export interface Relationship {
 export interface SearchResponse {
   entities: Entity[];
   relationships: Relationship[];
+  // V4 Track 2: structured rich-node payload with provenance.
+  nodes?: CustomNodeResponse[];
+  // V4 Track 2: zero-mem invariant — graph expansion consumes 0 LLM tokens.
+  total_tokens_consumed?: number;
+}
+
+/** V4 Track 2: human-readable source provenance attached to every node. */
+export interface NodeProvenance {
+  source_name: string;
+  source_url: string | null;
+  ingested_at: string;
+  mcp_plugin_name: string | null;
+}
+
+/** V4 Track 2: verbatim source text excerpt with character offsets. */
+export interface RawContextSnippet {
+  snippet_text: string;
+  char_offset_start: number;
+  char_offset_end: number;
+  document_id: string;
+}
+
+/** V4 Track 2: structured node for the ECharts rich-text card renderer. */
+export interface CustomNodeResponse {
+  id: string;
+  entity_name: string;
+  entity_type: string;
+  sub_entity_count: number;
+  confidence_score: number;
+  source: NodeProvenance;
+  raw_context: RawContextSnippet | null;
 }
 
 export interface CollectionGap {

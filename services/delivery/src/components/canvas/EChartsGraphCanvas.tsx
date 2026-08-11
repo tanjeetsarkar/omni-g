@@ -2,13 +2,17 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import ReactECharts from "echarts-for-react";
-import { formatConfidenceBar } from "./useEChartsGraphAdapter";
+import {
+  formatConfidenceBar,
+  RICH_LABEL_STYLES,
+} from "./useEChartsGraphAdapter";
 
 export interface EChartsNode {
   id: string;
   name: string;
   label?: string; // Human-readable node label
-  symbolSize: number;
+  symbol?: string;
+  symbolSize: number | number[];
   category: string;
   value: number;
   itemStyle: {
@@ -16,11 +20,16 @@ export interface EChartsNode {
     opacity?: number;
     borderColor?: string;
     borderWidth?: number;
+    borderRadius?: number;
   };
   labelEnabled?: boolean;
   confidence?: number;
   rawContext?: string;
   sourceId?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  pluginName?: string;
+  subEntityCount?: number;
   timestamp?: string;
 }
 
@@ -177,17 +186,19 @@ export function EChartsGraphCanvas({
         links: visibleLinks,
         categories: seriesCategories,
         roam: true,
-        // ── B3: Conditional label visibility per node ──
+        // ── B3 + V4 Track 1: Rich-text card labels on roundRect nodes ──
         label: {
           show: true,
-          position: "right",
+          position: "inside",
           formatter: (params: any) => {
             // Only show labels for nodes with confidence > 0.3
             if (params.data.labelEnabled === false) return "";
+            // V4 Track 1: rich-text multi-line label (type badge + title + links/source)
             return params.data.label || params.name;
           },
-          color: "#cbd5e1",
-          fontSize: 10,
+          color: "#F8FAFC",
+          fontSize: 12,
+          rich: RICH_LABEL_STYLES,
         },
         ...(layoutType === "force"
           ? {

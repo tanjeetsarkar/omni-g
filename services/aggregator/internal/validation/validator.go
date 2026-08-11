@@ -47,9 +47,7 @@ func NewValidator(baseURL string) *Validator {
 
 // Validate sends the source+payload envelope to the sidecar and returns the result.
 func (v *Validator) Validate(ctx context.Context, source string, payload map[string]any) (*ValidationResult, error) {
-	logger := log.With().Str("source", source).Str("validation_url", v.baseURL+"/validate").Logger()
-	logger.Info().Msg("sending payload to validation sidecar")
-	logger.Debug().Interface("payload", payload).Msg("validation request payload")
+	logger := log.With().Str("source", source).Logger()
 
 	body, err := json.Marshal(validateRequest{Source: source, Payload: payload})
 	if err != nil {
@@ -72,7 +70,6 @@ func (v *Validator) Validate(ctx context.Context, source string, payload map[str
 	if err != nil {
 		return nil, fmt.Errorf("read validation response: %w", err)
 	}
-	logger.Debug().Int("status_code", resp.StatusCode).Str("response_body", string(rawBody)).Msg("validation sidecar response received")
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
 		if len(rawBody) > 4096 {
@@ -86,7 +83,7 @@ func (v *Validator) Validate(ctx context.Context, source string, payload map[str
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	logger.Info().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation completed")
+	logger.Debug().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation completed")
 
 	return &result, nil
 }

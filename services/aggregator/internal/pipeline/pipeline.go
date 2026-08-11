@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/omni-g/aggregator/internal/ingest"
 	kafkainternal "github.com/omni-g/aggregator/internal/kafka"
 	"github.com/omni-g/aggregator/internal/metrics"
 	"github.com/omni-g/aggregator/internal/validation"
+	"github.com/omni-g/aggregator/pkg/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -51,11 +52,15 @@ func New(validator SchemaValidator, publisher Publisher, topic string, tenantID 
 // pluginName and pluginVersion are stamped into the event envelope for provenance.
 // kiqID is the optional Key Intelligence Question reference that tasked this
 // collection; pass an empty string for untasked (general) collection.
+// sourceName is the human-readable name of the originating source
+// (e.g. "PubMed Central"); pass "" to default to pluginName.
+// sourceURL is the canonical human-facing URL of the source document; pass ""
+// when only the plugin URL is available.
 //
 // If the validation sidecar is unreachable the event is dropped and an error
 // is returned (fail-closed). If the payload is invalid the event is counted as
 // a validation failure and dropped without an error (the rejection is expected).
-func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string) error {
+func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
 	start := time.Now()
 	logger := log.With().
 		Str("source", source).
@@ -64,49 +69,67 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 		Str("topic", p.topic).
 		Str("tenant_id", p.tenantID).
 		Str("kiq_id", kiqID).
+		Str("source_name", sourceName).
+		Str("source_url", sourceURL).
 		Logger()
 
 	logger.Info().Msg("pipeline processing started")
-	logger.Debug().Interface("payload", payload).Msg("pipeline received payload")
 
 	// ── validate ──────────────────────────────────────────────────────────
-	logger.Info().Msg("validating payload against sidecar schema")
 	result, err := p.validator.Validate(ctx, source, payload)
 	if err != nil {
 		logger.Error().Err(err).Msg("validation sidecar unreachable")
 		metrics.IngestTotal.WithLabelValues(source, "validation_error").Inc()
 		return fmt.Errorf("validation sidecar: %w", err)
 	}
-	logger.Info().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation sidecar responded")
+	logger.Debug().Bool("valid", result.Valid).Int("error_count", len(result.Errors)).Msg("validation sidecar responded")
 
 	if !result.Valid {
 		reason := "schema_violation"
 		if len(result.Errors) > 0 {
 			reason = result.Errors[0].Field + ":" + result.Errors[0].Message
 		}
-		logger.Warn().Str("reason", reason).Interface("validation_errors", result.Errors).
-			Msg("event failed schema validation, dropping")
+		logger.Warn().Str("reason", reason).Msg("event failed schema validation, dropping")
 		metrics.ValidationFailureTotal.WithLabelValues(source, reason).Inc()
 		metrics.IngestTotal.WithLabelValues(source, "validation_failed").Inc()
 		return nil // expected rejection — not an error from caller's perspective
 	}
 
 	// ── publish ───────────────────────────────────────────────────────────
-	logger.Info().Msg("payload valid, building kafka event")
 	elapsed := time.Since(start).Milliseconds()
-	event := &kafkainternal.RawEvent{
-		ID:              uuid.New().String(),
-		Source:          source,
-		Timestamp:       time.Now().UTC(),
-		Payload:         payload,
-		PluginName:      pluginName,
-		PluginVersion:   pluginVersion,
-		IngestLatencyMs: elapsed,
-		TenantID:        p.tenantID,
-		KIQID:           kiqID,
+	// Default human-readable source name to the plugin name when the
+	// upstream plugin did not supply a publisher/document title. Applied
+	// here (before publish) so the value is observable regardless of which
+	// Publisher implementation is wired in.
+	effectiveSourceName := sourceName
+	if effectiveSourceName == "" {
+		effectiveSourceName = pluginName
 	}
 
-	logger.Debug().Interface("raw_event", event).Msg("publishing event to kafka")
+	// V4 Track 3: build the governance envelope (pkg/models.RawEvent) and
+	// enforce the non-null provenance contract before publishing. This is the
+	// second validation layer — the schema sidecar validates the payload
+	// shape; Validate() validates the envelope provenance fields required by
+	// the V4 roadmap (source_name, plugin_name, timestamp, tenant_id).
+	evt := models.NewRawEvent()
+	evt.Source = source
+	evt.Payload = payload
+	evt.PluginName = pluginName
+	evt.PluginVersion = pluginVersion
+	evt.IngestLatencyMs = elapsed
+	evt.TenantID = p.tenantID
+	evt.KIQID = kiqID
+	evt.SourceName = effectiveSourceName
+	evt.SourceURL = sourceURL
+	// NewRawEvent stamps ID/Timestamp/SchemaVersion; preserve them.
+
+	if err := evt.Validate(); err != nil {
+		logger.Warn().Err(err).Msg("envelope contract validation failed, dropping")
+		metrics.IngestTotal.WithLabelValues(source, "envelope_invalid").Inc()
+		return nil // envelope contract violation — drop, not a caller error
+	}
+
+	event := evt.ToKafkaEvent()
 
 	if err := p.publisher.Publish(ctx, event); err != nil {
 		logger.Error().Err(err).Msg("kafka publish failed")
@@ -123,21 +146,50 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	return nil
 }
 
+// SourceForTool returns a valid HTTP(S) URL suitable for the validation
+// sidecar's `source` field. It prefers the tool descriptor's SourceURL; when
+// that is empty it falls back to a synthetic but valid URL keyed on the tool
+// name so the Processor's strict URL validator never rejects the event.
+//
+// The validation sidecar (Processor /validate) requires `source` to be a
+// valid HTTP(S) URL — passing the tool *name* (e.g. "web_search") causes a
+// 422 rejection and drops the event before it reaches Kafka.
+func SourceForTool(toolName, toolSourceURL string) string {
+	if toolSourceURL != "" {
+		return toolSourceURL
+	}
+	return "https://omni-g.internal/tool/" + toolName
+}
+
 // ProcessBlock parses a ContentBlock's text as a JSON payload and forwards it
 // to Process. Malformed JSON is dropped and logged.
 // kiqID is the optional Key Intelligence Question reference that tasked this
 // collection; pass an empty string for untasked (general) collection.
-func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string) error {
-	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Msg("processing content block")
-	log.Debug().Str("source", source).Str("content_block_text", text).Msg("received content block text")
+// sourceName and sourceURL carry human-readable provenance; pass "" to
+// default sourceName to pluginName and leave sourceURL unset.
+func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
+	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Str("source_name", sourceName).Msg("processing content block")
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		log.Warn().Str("source", source).Str("text", text).
-			Err(err).Msg("ContentBlock text is not valid JSON, dropping")
+		log.Warn().Str("source", source).Err(err).Msg("content block is not valid JSON, dropping")
 		metrics.IngestTotal.WithLabelValues(source, "parse_error").Inc()
 		return nil // non-fatal
 	}
-	log.Debug().Str("source", source).Interface("payload", payload).Msg("parsed content block JSON payload")
-	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID)
+
+	// V4 Track 2: when the caller did not supply a human-readable source
+	// name/URL, auto-extract them from the content-block payload (e.g.
+	// document_title, publisher_name, source_url). This keeps provenance
+	// non-empty for scheduled polls that have no caller-supplied metadata.
+	if sourceName == "" || sourceURL == "" {
+		prov := ingest.ExtractProvenance(text)
+		if sourceName == "" {
+			sourceName = prov.SourceName
+		}
+		if sourceURL == "" {
+			sourceURL = prov.SourceURL
+		}
+	}
+
+	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID, sourceName, sourceURL)
 }

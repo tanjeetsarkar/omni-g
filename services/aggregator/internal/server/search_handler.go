@@ -8,48 +8,51 @@ import (
 	"github.com/google/uuid"
 	"github.com/omni-g/aggregator/internal/mcp"
 	"github.com/omni-g/aggregator/internal/pipeline"
+	"github.com/omni-g/aggregator/pkg/harness"
 	"github.com/rs/zerolog/log"
 )
 
-// sourcePluginConfig maps logical source names to their plugin URL env key and
-// the tool name to invoke.
-type sourcePluginConfig struct {
-	url      string
+// sourceTool maps a logical source name (as used in /search and /enrich
+// request bodies) to the governed harness tool name that backs it.
+type sourceTool struct {
 	toolName string
 }
 
-// SearchHandler handles POST /search — on-demand search across OSINT plugins.
+// SearchHandler handles POST /search and POST /enrich — on-demand search and
+// enrichment across the governed domain-service tools. All tool calls route
+// through the 9-stage Tool Governance Harness so on-demand queries are subject
+// to the same validation, permission, circuit-breaker, and observability
+// guarantees as autonomous agent ingestion.
 type SearchHandler struct {
-	// pluginClients maps logical source name → MCP client.
-	pluginClients map[string]*mcp.Client
-	// pluginURLs maps logical source name → plugin base URL.
-	pluginURLs map[string]string
-	// pluginTools maps logical source name → tool name to call.
-	pluginTools map[string]string
-	pipeline    *pipeline.Pipeline
+	// sourceTools maps logical source name → governed tool name.
+	sourceTools map[string]string
+	// defaultSources is the order of sources used when a request omits the
+	// sources/plugins list.
+	defaultSources []string
+	harness        *harness.Harness
+	pipeline       *pipeline.Pipeline
+	tenantID       string
 }
 
-// NewSearchHandler constructs a SearchHandler.
-// pluginURLs maps logical source name (e.g. "wikipedia") → base URL.
-// pluginTools maps logical source name → tool name to invoke.
+// NewSearchHandler constructs a SearchHandler backed by the harness.
+// sourceTools maps logical source name (e.g. "wikipedia", "newsrss") →
+// governed harness tool name (e.g. "web_search", "search_news").
 func NewSearchHandler(
-	pluginURLs map[string]string,
-	pluginTools map[string]string,
+	sourceTools map[string]string,
 	pl *pipeline.Pipeline,
+	h *harness.Harness,
+	tenantID string,
 ) *SearchHandler {
-	clients := make(map[string]*mcp.Client, len(pluginURLs))
-	urls := make(map[string]string, len(pluginURLs))
-	for name, u := range pluginURLs {
-		if u != "" {
-			clients[name] = mcp.NewClient(u)
-			urls[name] = u
-		}
+	defaults := make([]string, 0, len(sourceTools))
+	for name := range sourceTools {
+		defaults = append(defaults, name)
 	}
 	return &SearchHandler{
-		pluginClients: clients,
-		pluginURLs:    urls,
-		pluginTools:   pluginTools,
-		pipeline:      pl,
+		sourceTools:    sourceTools,
+		defaultSources: defaults,
+		harness:        h,
+		pipeline:       pl,
+		tenantID:       tenantID,
 	}
 }
 
@@ -84,56 +87,63 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchID := uuid.New().String()
-	log.Info().Str("search_id", searchID).Msg("received /search request")
-	log.Debug().Str("search_id", searchID).Interface("request", req).Msg("search request payload")
+	log.Info().Str("search_id", searchID).Str("query", req.Query).Msg("/search request received")
 
-	// If no sources specified, use all configured plugins.
-	sources := req.Sources
-	if len(sources) == 0 {
-		for name := range h.pluginClients {
-			sources = append(sources, name)
-		}
+	sources := h.resolveSources(req.Sources)
+	perm := harness.Permission{TenantID: h.tenantID} // allow-all for on-demand queries
+
+	total, bySource := h.fanOutThroughHarness(r.Context(), searchID, sources, req.Query, perm, "")
+
+	writeJSON(w, http.StatusAccepted, searchResponse{
+		SearchID:       searchID,
+		EventsQueued:   total,
+		QueuedBySource: bySource,
+	})
+	log.Info().Str("search_id", searchID).Int("events_queued", total).Msg("/search request completed")
+}
+
+// resolveSources returns the source list to use, defaulting to all configured
+// sources when the request omits it.
+func (h *SearchHandler) resolveSources(requested []string) []string {
+	if len(requested) > 0 {
+		return requested
 	}
+	return h.defaultSources
+}
 
-	// Fan out to each requested plugin in background goroutines.
-	// We count events queued synchronously via a channel so we can return
-	// the total in the 202 response without blocking.
+// fanOutThroughHarness invokes the governed tool for each source in parallel
+// and forwards the resulting blocks to the pipeline. Returns the total block
+// count and per-source counts. kiqID is optional (empty for untasked).
+func (h *SearchHandler) fanOutThroughHarness(
+	parentCtx context.Context,
+	correlationID string,
+	sources []string,
+	query string,
+	perm harness.Permission,
+	kiqID string,
+) (int, []sourceResultCount) {
 	type result struct {
 		source string
 		count  int
 	}
 	resultCh := make(chan result, len(sources))
-
 	bgCtx := context.Background()
 
 	for _, source := range sources {
-		client, ok := h.pluginClients[source]
+		toolName, ok := h.sourceTools[source]
 		if !ok {
-			log.Warn().Str("source", source).Msg("/search: no plugin configured for source")
-			resultCh <- result{source: source, count: 0}
-			continue
-		}
-		pluginURL, ok := h.pluginURLs[source]
-		if !ok || pluginURL == "" {
-			log.Warn().Str("source", source).Msg("/search: no plugin URL configured for source")
-			resultCh <- result{source: source, count: 0}
-			continue
-		}
-		toolName, ok := h.pluginTools[source]
-		if !ok {
-			log.Warn().Str("source", source).Msg("/search: no tool configured for source")
+			log.Warn().Str("source", source).Str("correlation_id", correlationID).
+				Msg("no governed tool configured for source")
 			resultCh <- result{source: source, count: 0}
 			continue
 		}
 
-		go func(src string, srcURL string, c *mcp.Client, tool string) {
-			log.Info().Str("search_id", searchID).Str("source", src).Str("tool", tool).Msg("starting search source fan-out")
-			count := h.callPlugin(bgCtx, searchID, src, srcURL, c, tool, req.Query)
+		go func(src, tool string) {
+			count := h.invokeGovernedTool(bgCtx, correlationID, src, tool, query, perm, kiqID)
 			resultCh <- result{source: src, count: count}
-		}(source, pluginURL, client, toolName)
+		}(source, toolName)
 	}
 
-	// Collect counts — wait for all goroutines.
 	total := 0
 	bySource := make([]sourceResultCount, 0, len(sources))
 	for range sources {
@@ -141,49 +151,46 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		total += r.count
 		bySource = append(bySource, sourceResultCount{Source: r.source, BlocksQueued: r.count})
 	}
-
-	writeJSON(w, http.StatusAccepted, searchResponse{
-		SearchID:       searchID,
-		EventsQueued:   total,
-		QueuedBySource: bySource,
-	})
-	log.Info().Str("search_id", searchID).Int("events_queued", total).Interface("queued_by_source", bySource).Msg("/search request completed")
+	return total, bySource
 }
 
-// callPlugin calls a single tool and forwards each content block into the
-// pipeline. Returns the number of blocks successfully queued.
-func (h *SearchHandler) callPlugin(
+// invokeGovernedTool calls a single governed tool through the 9-stage harness
+// and forwards each resulting block into the pipeline. Returns the number of
+// blocks successfully queued.
+func (h *SearchHandler) invokeGovernedTool(
 	ctx context.Context,
-	searchID string,
+	correlationID string,
 	sourceName string,
-	sourceURL string,
-	client *mcp.Client,
 	toolName string,
 	query string,
+	perm harness.Permission,
+	kiqID string,
 ) int {
-	logger := log.With().Str("search_id", searchID).Str("source", sourceName).Logger()
-	logger.Info().Str("tool", toolName).Str("plugin_url", sourceURL).Msg("calling search plugin tool")
-	logger.Debug().Str("query", query).Msg("search query payload")
+	logger := log.With().Str("correlation_id", correlationID).Str("source", sourceName).Str("tool", toolName).Logger()
 
-	ch, err := client.CallTool(ctx, toolName, map[string]any{"query": query})
+	args := map[string]any{}
+	if query != "" {
+		args["query"] = query
+	}
+
+	result, err := h.harness.InvokeTool(ctx, toolName, args, perm, kiqID, h.tenantID)
 	if err != nil {
-		logger.Error().Err(err).Msg("tool call failed")
+		logger.Warn().Err(err).Msg("governed tool invocation failed")
 		return 0
 	}
 
 	count := 0
-	for block := range ch {
-		logger.Debug().Interface("content_block", block).Msg("received search content block")
+	for _, block := range result.Blocks {
 		if block.Type != mcp.ContentTypeText || block.Text == "" {
 			continue
 		}
-		if err := h.pipeline.ProcessBlock(ctx, sourceURL, block.Text, toolName, "", ""); err != nil {
+		if err := h.pipeline.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
+			result.Tool.Name, result.Tool.Version, kiqID, result.Tool.SourceName, result.Tool.SourceURL); err != nil {
 			logger.Warn().Err(err).Msg("pipeline.ProcessBlock error")
 			continue
 		}
 		count++
 	}
-
-	logger.Info().Int("blocks_queued", count).Msg("search source completed")
+	logger.Debug().Int("blocks_queued", count).Msg("governed source completed")
 	return count
 }

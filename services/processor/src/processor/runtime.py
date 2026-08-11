@@ -49,20 +49,16 @@ class ProcessorRuntime:
 
     @classmethod
     async def create(cls, cfg: Settings, *, worker_id: int) -> ProcessorRuntime:
-        logger.info(
-            "Initialising processor worker dependencies",
-            extra={"worker_id": worker_id},
-        )
+        logger.info("Initialising processor worker dependencies", extra={"worker_id": worker_id})
 
         deduplicator = ContentDeduplicator(ttl_seconds=cfg.dedup_ttl_seconds)
         await deduplicator.connect(cfg.redis_url)
-        logger.info("Deduplicator connected", extra={"worker_id": worker_id})
+        logger.debug("Deduplicator connected", extra={"worker_id": worker_id})
 
         zeromem_extractor = ZeroMemExtractor(
             spacy_allowed_labels=_parse_allowed_labels(cfg.extractor_spacy_allowed_labels),
             min_entity_length=cfg.extractor_min_entity_length,
         )
-        logger.info("ZeroMemExtractor initialised (lazy model load)", extra={"worker_id": worker_id})
 
         neo4j_driver = AsyncGraphDatabase.driver(
             cfg.neo4j_url,
@@ -73,7 +69,6 @@ class ProcessorRuntime:
             api_key=cfg.qdrant_api_key,
         )
         resolver = EntityResolver(neo4j_driver=neo4j_driver, qdrant_client=qdrant_client)
-        logger.info("EntityResolver initialised", extra={"worker_id": worker_id})
 
         schema_manager = GraphSchemaManager(neo4j_driver)
         try:
@@ -85,22 +80,16 @@ class ProcessorRuntime:
             )
 
         graph_persistence = GraphPersistenceService(neo4j_driver)
-        logger.info("GraphPersistenceService initialised", extra={"worker_id": worker_id})
 
         vector_indexer = ContextUnitIndexer(
             qdrant_url=cfg.qdrant_url,
             api_key=cfg.qdrant_api_key,
             settings=cfg,
         )
-        logger.info(
-            "ContextUnitIndexer initialised (lazy embedding load)",
-            extra={"worker_id": worker_id, "llm_provider": cfg.llm_provider},
-        )
 
         temporal_store = TemporalStore(postgres_url=cfg.postgres_url)
         try:
             await temporal_store.connect()
-            logger.info("TemporalStore connected", extra={"worker_id": worker_id})
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "TemporalStore connection failed (continuing without temporal hierarchy)",
@@ -129,7 +118,12 @@ class ProcessorRuntime:
 
         logger.info(
             "Processor runtime initialised",
-            extra={"worker_id": worker_id, "neo4j_url": cfg.neo4j_url},
+            extra={
+                "worker_id": worker_id,
+                "llm_provider": cfg.llm_provider,
+                "neo4j_url": cfg.neo4j_url,
+                "qdrant_url": cfg.qdrant_url,
+            },
         )
 
         return cls(

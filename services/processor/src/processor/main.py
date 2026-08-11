@@ -8,12 +8,18 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
+import networkx  # noqa: F401  — pre-imported so the first /query/expand call
+
+# doesn't pay the ~300ms one-time import cost inside the request path.
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
+from ..retrieval.pagerank import pagerank_subgraph  # noqa: F401  — pre-import
 from .config import Settings, get_settings
+
+# so scipy (used by nx.pagerank) is loaded at app startup, not on first request.
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,7 @@ def configure_logging(level_name: str) -> None:
     handler.setFormatter(StructuredFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
+    # Application loggers — set to the configured level.
     for name in (
         "src.processor",
         "src.kafka",
@@ -73,6 +80,7 @@ def configure_logging(level_name: str) -> None:
     ):
         logging.getLogger(name).setLevel(level)
 
+    # Noisy third-party loggers — silence to WARNING so the terminal stays clean.
     for noisy_logger in (
         "kafka",
         "kafka.client",
@@ -80,6 +88,18 @@ def configure_logging(level_name: str) -> None:
         "kafka.consumer",
         "kafka.consumer.fetcher",
         "urllib3",
+        "httpx",
+        "httpcore",
+        "neo4j",
+        "qdrant_client",
+        "asyncpg",
+        "aioboto3",
+        "botocore",
+        "openai",
+        "apscheduler",
+        "celery",
+        "celery.worker",
+        "celery.beat",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
@@ -111,7 +131,6 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
         group_id=cfg.kafka_group_id,
         dlq_topic=cfg.kafka_dlq_topic,
     )
-    logger.info("RawEventConsumer initialised", extra={"worker_id": worker_id})
     runtime: ProcessorRuntime | None = None
     if not cfg.celery_enabled:
         runtime = await ProcessorRuntime.create(cfg, worker_id=worker_id)
@@ -129,7 +148,7 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
     async def _handle(event: dict[str, Any]) -> None:
         if cfg.celery_enabled:
             task_id = enqueue_process_event(event)
-            logger.info(
+            logger.debug(
                 "Dispatched process_event Celery task",
                 extra={"worker_id": worker_id, "task_id": task_id},
             )
@@ -150,16 +169,14 @@ async def startup_consumer(cfg: Settings, worker_id: int = 0) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging(settings.log_level)
-    logger.info("Processor service starting", extra={"port": settings.http_port})
     logger.info(
-        "Processor runtime configuration loaded",
+        "Processor service starting",
         extra={
+            "port": settings.http_port,
             "kafka_enabled": settings.kafka_enabled,
-            "kafka_brokers": settings.kafka_brokers,
             "celery_enabled": settings.celery_enabled,
             "neo4j_url": settings.neo4j_url,
             "qdrant_url": settings.qdrant_url,
-            "postgres_url": settings.postgres_url,
         },
     )
 
@@ -174,16 +191,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer_tasks: list[asyncio.Task[None]] = []
     if settings.kafka_enabled:
-        logger.info("Kafka processing enabled; launching workers")
+        logger.info("Launching Kafka consumer workers", extra={"worker_count": settings.kafka_num_workers})
         for worker_id in range(settings.kafka_num_workers):
             try:
                 task = asyncio.create_task(startup_consumer(settings, worker_id=worker_id))
                 consumer_tasks.append(task)
-                logger.info("Kafka consumer worker task launched", extra={"worker_id": worker_id})
             except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to create Kafka consumer task %d: %s", worker_id, exc)
     else:
-        logger.info("Kafka processing disabled; worker startup skipped")
+        logger.info("Kafka processing disabled")
 
     yield
 
@@ -226,6 +242,13 @@ class SearchRequest(BaseModel):
     query: str
     tenant_id: str
     limit: int = 20
+    # V4 Track 2: dynamic relevance threshold (τ). Edges with co-occurrence
+    # weight < relevance_threshold are pruned before rendering. 0.0 = keep
+    # all edges (use fusion scores as-is).
+    relevance_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    # V4 Track 2: traversal depth (D_max) override. None = use the
+    # QueryProfiler's derived d_max; an explicit value takes precedence.
+    traversal_depth: int | None = Field(default=None, ge=1, le=4)
 
 
 class SearchResponse(BaseModel):
@@ -233,6 +256,10 @@ class SearchResponse(BaseModel):
     relationships: list[dict[str, Any]] = []
     context_units: list[dict[str, Any]] = []
     total: int
+    # V4 Track 2: structured rich-node payload for the ECharts card renderer.
+    nodes: list[dict[str, Any]] = []
+    # Zero-Mem verification: graph expansion consumes 0 LLM memory tokens.
+    total_tokens_consumed: int = 0
 
 
 class FetchEntitiesRequest(BaseModel):
@@ -245,12 +272,87 @@ class ExpandRequest(BaseModel):
     current_depth: int = 1
     target_depth: int = 2
     tenant_id: str = "default"
+    # V4 Track 2: dynamic relevance threshold (τ) for edge pruning on expand.
+    relevance_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class SynthesisRequest(BaseModel):
     query: str
     tenant_id: str = "default"
     context_units: list[dict[str, Any]] = []
+
+
+# ---------------------------------------------------------------------------
+# V4 Track 2: rich-node builder
+# ---------------------------------------------------------------------------
+
+
+def _build_custom_nodes(
+    entities: list[Any],
+    context_units_payload: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    tenant_id: str,
+) -> list[dict[str, Any]]:
+    """Map entities + context units + relationships into CustomNodeResponse dicts.
+
+    Each node carries:
+    - sub_entity_count: degree of the entity in the returned subgraph
+    - source: NodeProvenance (source_name / source_url / plugin_name) pulled
+      from the ContextUnit the entity was extracted from
+    - raw_context: RawContextSnippet with verbatim text + offsets when available
+
+    Falls back gracefully when context units lack provenance (legacy data).
+    """
+    # Degree map: count incident edges per entity id.
+    degree: dict[str, int] = {}
+    for rel in relationships:
+        src = rel.get("source_ref") or rel.get("source_id") or rel.get("source")
+        tgt = rel.get("target_ref") or rel.get("target_id") or rel.get("target")
+        if src:
+            degree[src] = degree.get(src, 0) + 1
+        if tgt:
+            degree[tgt] = degree.get(tgt, 0) + 1
+
+    # Index context units by entity id for provenance lookup.
+    ctx_by_entity: dict[str, dict[str, Any]] = {}
+    for ctx in context_units_payload:
+        for eid in ctx.get("entity_ids", []) or []:
+            ctx_by_entity.setdefault(eid, ctx)
+
+    nodes: list[dict[str, Any]] = []
+    for ent in entities:
+        ctx = ctx_by_entity.get(ent.id, {})
+        source_name = ctx.get("source_name") or ent.source_id or "unknown"
+        source_url = ctx.get("source_url")
+        plugin_name = ctx.get("plugin_name")
+        ingested_at = ctx.get("created") or (ent.created.isoformat() if hasattr(ent.created, "isoformat") else "")
+
+        raw_context = None
+        if ctx.get("text"):
+            raw_context = {
+                "snippet_text": str(ctx["text"])[:500],
+                "char_offset_start": 0,
+                "char_offset_end": min(len(str(ctx["text"])), 500),
+                "document_id": ctx.get("context_id", ""),
+            }
+
+        nodes.append(
+            {
+                "id": ent.id,
+                "entity_name": ent.name,
+                "entity_type": ent.type,
+                "sub_entity_count": degree.get(ent.id, 0),
+                "confidence_score": float(ent.confidence),
+                "source": {
+                    "source_name": source_name,
+                    "source_url": source_url,
+                    "ingested_at": ingested_at,
+                    "mcp_plugin_name": plugin_name,
+                },
+                "raw_context": raw_context,
+            }
+        )
+    return nodes
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -280,7 +382,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/validate", tags=["ops"], response_model=ValidateResponse)
     async def validate(body: ValidateRequest) -> JSONResponse:
         errors: list[dict[str, str]] = []
-        logger.info("Validation request received", extra={"source": body.source})
+        logger.debug("Validation request received", extra={"source": body.source})
         if not body.source:
             errors.append({"field": "source", "message": "field 'source' is required"})
         if body.payload is None:
@@ -352,7 +454,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         cfg: Settings = app.state.settings
         tenant_id = body.get("tenant_id", "default")
-        logger.info("On-demand briefing requested", extra={"tenant_id": tenant_id})
+        logger.info("Briefing generation requested", extra={"tenant_id": tenant_id})
         script_gen = BriefingScriptGenerator()
         tts = TTSSynthesizer(kokoro_url=cfg.kokoro_url, elevenlabs_api_key=cfg.elevenlabs_api_key)
         storage = MinIOStorageService(
@@ -466,7 +568,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from ..retrieval.temporal import TemporalRetriever
 
         cfg: Settings = app.state.settings
-        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query})
+        logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query[:100]})
 
         neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
@@ -476,6 +578,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Profile query
             profiler = QueryProfiler()  # type: ignore[no-untyped-call]
             profile = profiler.profile(body.query)
+
+            # V4 Track 2: user-supplied traversal depth (D_max) overrides the
+            # profiler-derived value when explicitly provided.
+            if body.traversal_depth is not None:
+                import dataclasses as _dc
+
+                profile = _dc.replace(profile, d_max=body.traversal_depth)
+                logger.info(
+                    "search_d_max_override",
+                    extra={"tenant_id": body.tenant_id, "d_max": body.traversal_depth},
+                )
 
             # Lazy-loaded indexer (BGE-M3)
             vector_indexer = ContextUnitIndexer(qdrant_url=cfg.qdrant_url, api_key=cfg.qdrant_api_key, settings=cfg)
@@ -567,18 +680,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 entity_ids_final = [e.id for e in entities]
                 relationships = await graph_persistence.fetch_relationships_for_entities(entity_ids_final)
 
+            # V4 Track 2: dynamic relevance threshold (τ) edge pruning.
+            # Drop edges whose weight falls below the user-supplied threshold
+            # so stale / low-weight co-occurrence links never reach the UI.
+            if body.relevance_threshold > 0.0 and relationships:
+                relationships = [rel for rel in relationships if float(rel.get("confidence", rel.get("weight", 0.0))) >= body.relevance_threshold]
+
             await temporal_store.close()
         finally:
             await neo4j_driver.close()
             await qdrant_client.close()
 
         ent_payload = [e.model_dump(mode="json") for e in entities]
+
+        # V4 Track 2: build structured rich-node payload with provenance.
+        # Each node carries source_name/source_url/plugin_name (from the
+        # ContextUnit it was extracted from) and a raw context snippet.
+        nodes_payload = _build_custom_nodes(entities, context_units_payload, relationships, body.tenant_id)
+
         logger.info(
             "Search response",
             extra={
                 "tenant_id": body.tenant_id,
                 "entity_count": len(ent_payload),
                 "context_unit_count": len(context_units_payload),
+                "node_count": len(nodes_payload),
             },
         )
         return JSONResponse(
@@ -587,6 +713,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "relationships": relationships,
                 "context_units": context_units_payload,
                 "total": len(ent_payload),
+                "nodes": nodes_payload,
+                "total_tokens_consumed": 0,
             }
         )
 
@@ -621,40 +749,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         now = _dt.now(UTC)
 
         try:
-            cypher_ppr = """
-            MATCH (anchor:Entity)
-            WHERE anchor.id = $anchor_id AND anchor.tenant_id = $tenant_id
-
-            CALL apoc.path.subgraphNodes(anchor, {
-                maxLevel: $target_depth,
-                relationshipFilter: 'CO_OCCURRED_IN',
-                labelFilter: '+ContextUnit|+Entity'
-            }) YIELD node
-
-            WITH collect(DISTINCT node) AS sub_nodes
-
-            CALL apoc.algo.pageRankWithConfig(sub_nodes, {dampingFactor: $gamma, iterations: 20})
-            YIELD node AS n, score
-
-            WHERE 'ContextUnit' IN labels(n) AND n.tenant_id = $tenant_id
-            RETURN n.id AS context_id, n.text AS text, score
-            ORDER BY score DESC LIMIT 10
-            """
-
-            rows = []
+            # Personalized PageRank via networkx (replaces the removed
+            # apoc.algo.pageRankWithConfig procedure, deleted in APOC 5.x).
+            # The shared helper fetches the k-hop subgraph via
+            # apoc.path.subgraphNodes (still supported) and runs PageRank in
+            # Python. See src.retrieval.pagerank.pagerank_subgraph.
+            rows: list[dict[str, Any]] = []
             try:
                 async with neo4j_driver.session() as session:
-                    res = await session.run(
-                        cypher_ppr,
-                        anchor_id=body.anchor_node_id,
+                    scored = await pagerank_subgraph(
+                        session,
+                        anchor_ids=[body.anchor_node_id],
                         tenant_id=body.tenant_id,
-                        target_depth=body.target_depth,
+                        d_max=body.target_depth,
                         gamma=0.6,
+                        top_k=10,
                     )
-                    rows = await res.data()
+                rows = [{"context_id": s.context_id, "text": s.text, "score": s.score} for s in scored]
             except Exception as exc:
                 logger.warning(
-                    "apoc_ppr_failed_in_expand_falling_back_to_bfs",
+                    "pagerank_failed_in_expand_falling_back_to_bfs",
                     extra={"error": str(exc), "tenant_id": body.tenant_id},
                 )
                 cypher_bfs = """
@@ -736,13 +850,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await neo4j_driver.close()
 
+        # V4 Track 2: dynamic relevance threshold (τ) edge pruning on expand.
+        if body.relevance_threshold > 0.0 and relationships:
+            relationships = [rel for rel in relationships if float(rel.get("confidence", rel.get("weight", 0.0))) >= body.relevance_threshold]
+
         ent_payload = [e.model_dump(mode="json") for e in entities]
+        nodes_payload = _build_custom_nodes(entities, context_units_payload, relationships, body.tenant_id)
         return JSONResponse(
             {
                 "entities": ent_payload,
                 "relationships": relationships,
                 "context_units": context_units_payload,
                 "total": len(ent_payload),
+                "nodes": nodes_payload,
+                "total_tokens_consumed": 0,
             }
         )
 

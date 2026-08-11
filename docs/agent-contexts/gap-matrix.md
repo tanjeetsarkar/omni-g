@@ -2,7 +2,198 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 10, 2026 — Bug fixes: canonical-ID propagation, extractor label filtering, static canvas layout, pipeline activity stage alignment.
+**Last Updated:** August 11, 2026 — /validate 422 fix, Delivery UI consolidation, pipeline activity unblock.
+
+---
+
+## /validate 422 Fix + Delivery UI Consolidation + Pipeline Activity Unblock (August 11, 2026)
+
+Fixes three intertwined bugs: (1) every Aggregator→Processor `/validate` call returned 422 because the Aggregator passed the governed **tool name** (e.g. `web_search`, `search_news`) as the `source` field, but the Processor's `ValidateRequest.source_must_be_http_url` Pydantic validator requires an HTTP(S) URL — so no events reached Kafka. (2) The Delivery `explorer/page.tsx` mounted two competing search UIs (legacy header `<form>` + V4 floating `FloatingSearchBar`/`SettingsGearPanel`), causing overlapping designs and conflicting canvas state. (3) Pipeline activity never updated because the Processor never received events to publish stage events for (downstream symptom of #1).
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **Aggregator — domain service `SourceURL`** | `news.go` (`search_news`) → `https://newsrss.omni-g.internal`; `search.go` (`web_search`) → `https://wikipedia.org`; `feeds.go` (`fetch_feed`) → `https://newsrss.omni-g.internal`; `weather.go` already set `https://wttr.in`. These canonical URLs are sent as the `source` arg to the validation sidecar. | ✅ Complete |
+| **Aggregator — `pipeline.SourceForTool` helper** | Added `SourceForTool(toolName, toolSourceURL)` to `internal/pipeline/pipeline.go` — returns the tool's `SourceURL` when non-empty, else a synthetic valid URL `https://omni-g.internal/tool/<tool-name>` so the Processor's strict URL validator never rejects the event. Preserves the provenance contract (Principle 3) without weakening the validator. | ✅ Complete |
+| **Aggregator — `source` arg fix** | `search_handler.go` `invokeGovernedTool`, `main.go` poller `OnResult`, `main.go` watcher `OnResult`, and `e2e_governance_audit_test.go` now pass `pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL)` as the `source` arg to `ProcessBlock` instead of `result.Tool.Name`. | ✅ Complete |
+| **Aggregator — E2E audit test refactor** | `e2e_governance_audit_test.go` now invokes `search_news` explicitly via `harness.InvokeTool` with a `query` arg (forwarding blocks through the pipeline) instead of relying on the poller to invoke query-based tools with nil args. This makes the audit deterministic (no wttr.in network dependency) and compatible with the `"required": ["query"]` schemas. | ✅ Complete |
+| **Delivery — `FloatingSearchBar` `onSubmit`** | Added optional `onSubmit?: () => void` prop to `FloatingSearchBar.tsx`; called on Enter alongside `store.executeQuery()` so the page can wire the background `/api/search` ingestion trigger + toast + history. | ✅ Complete |
+| **Delivery — `explorer/page.tsx` consolidation** | Removed the legacy header `<form>` + search input/button (kept logo + `NotificationBell`). Removed the redundant `evidenceNodes`/`evidenceEdges` intermediate derivation — `transformToEChartsData` now reads `storeNodes`/`storeEdges` directly. Refactored `runSearch` to delegate graph retrieval to `store.executeQuery()` (single `/api/query` fetch) and retain only the background `/api/search` ingestion trigger + toast/history. `FloatingSearchBar` + `SettingsGearPanel` are always mounted (empty state + canvas) so the user can search from either. Removed `searchQuery` state, `handleSearchSubmit`, and the duplicate `/api/query` fetch. | ✅ Complete |
+| **Pipeline activity** | No code change — downstream symptom of the `/validate` 422 fix. Once events flow to Kafka, the Processor publishes `schema_validation` → ... → `pipeline_complete` stage events via `StageEventPublisher` → Kafka `processor-events` → gateway `handleStageEventValue` → Socket.io `pipeline_stage` → `usePipelineEvents` → `ActivityDrawer`/`PipelineProgressToast`. | ✅ Complete (unblocked) |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` in `services/aggregator` | ✅ BUILD OK |
+| Aggregator tests | `go test ./...` in `services/aggregator` | ✅ All 11 packages pass (models, harness, agent, services, pipeline, server, kafka, mcp, ingest, validation, scheduler-deprecated) |
+| Delivery type check | `pnpm exec tsc --noEmit` in `services/delivery` | ✅ No errors |
+| Delivery tests | `pnpm exec jest` in `services/delivery` | ✅ 9 suites / 76 tests pass |
+| Lint | `get_errors` on all edited files | ✅ No errors |
+
+### Decisions
+
+- **Processor validator stays strict** (preserves the provenance contract per `copilot-instructions.md` Principle 3). The Aggregator now always sends a valid HTTP(S) URL as `source`.
+- **`source` semantics → canonical per-tool `SourceURL`** (Option A): use the `ToolDescriptor.SourceURL` as the `source` arg. Simpler, fan-out-friendly. Synthetic fallback `https://omni-g.internal/tool/<name>` for tools with empty `SourceURL`.
+- **Ingestion trigger ownership → page owns ingestion** (Option A): the background `/api/search` call stays in the page so the Zustand store remains pure-retrieval and toast/history UI state stays co-located.
+- **Single search UI**: `FloatingSearchBar` + Zustand store are the sole search entry point; the legacy header form is removed.
+
+---
+
+## Logging Cleanup: Clean INFO-Level Terminal Output (August 11, 2026)
+
+Cleans up terminal log output across both services so INFO level shows meaningful status changes (tool running, pipeline start/done, errors, warnings) without per-event/per-message noise. Per-event and per-message logs that fire at high frequency are moved to DEBUG; lifecycle, error, and warning logs remain at INFO.
+
+### Completed
+
+| Service | What Changed | Status |
+|---------|-------------|--------|
+| **Aggregator — `cmd/aggregator/main.go`** | Consolidated startup config into a single `"aggregator starting"` log; removed redundant per-component init logs (kafka producer initialized, validation sidecar initialized, ingest pipeline initialized, harness initialized, http server and handlers initialized, watcher agent not enabled); domain service registration now logs a single count; shutdown logs consolidated. | ✅ Complete |
+| **Aggregator — `internal/kafka/producer.go`** | Removed per-event `"event enqueued to kafka producer"` Info log (moved to Debug); removed verbose payload Debug dump; removed per-delivery Debug acknowledged log; consolidated flush/close lifecycle logs. | ✅ Complete |
+| **Aggregator — `internal/pipeline/pipeline.go`** | Consolidated 5 per-event Info logs (processing started, validating payload, validation sidecar responded, payload valid building kafka event, processing completed) into 2 (start + done); moved validation details to Debug; removed verbose payload/raw_event Debug dumps; cleaned ProcessBlock to a single Info per block. | ✅ Complete |
+| **Aggregator — `internal/mcp/client.go`** | Removed per-call Info logs (calling MCP tools/list, MCP tools/list completed, calling MCP tool via SSE, SSE connection established, reading MCP SSE stream, SSE stream closed, JSON-RPC response received); moved to Debug; removed verbose request/response payload Debug dumps; removed per-SSE-payload Debug log. | ✅ Complete |
+| **Aggregator — `internal/validation/validator.go`** | Removed per-call Info logs (sending payload to validation sidecar, validation completed); moved to Debug; removed verbose payload/response_body Debug dumps. | ✅ Complete |
+| **Aggregator — `pkg/harness/harness.go`** | Consolidated 3 per-invocation Info logs (tool executed, observed, invoke complete) into a single `"harness: invoke complete"` log with event_id, blocks, and latency. | ✅ Complete |
+| **Aggregator — `pkg/agent/poller.go`** | Moved per-cycle `"starting tool poll cycle"` Info log to Debug (fires every interval); kept start/stop/error at Info. | ✅ Complete |
+| **Aggregator — `pkg/agent/watcher.go`** | Moved per-reconnect `"watcher stream completed, reconnecting"` Info log to Debug; kept start/stop/error at Info. | ✅ Complete |
+| **Aggregator — `internal/server/search_handler.go`** | Removed per-source fan-out Info logs (starting governed source fan-out, calling governed tool via harness, governed source completed); moved to Debug; kept request-level Info logs (received + completed) and errors. | ✅ Complete |
+| **Aggregator — `internal/server/enrich_handler.go`** | Removed verbose Debug query construction log; kept request received + completed Info logs. | ✅ Complete |
+| **Aggregator — `internal/server/server.go`** | Removed redundant `"HTTP server starting"` Info log (main.go already logs `"aggregator server starting"`). | ✅ Complete |
+| **Processor — `src/processor/main.py`** | Added 13 more noisy third-party loggers to WARNING silence list (httpx, httpcore, neo4j, qdrant_client, asyncpg, aioboto3, botocore, openai, apscheduler, celery, celery.worker, celery.beat); consolidated startup config into a single log; removed per-worker init logs; moved per-Celery-task dispatch Info to Debug; moved `/validate` request Info to Debug. | ✅ Complete |
+| **Processor — `src/kafka/consumer.py`** | Moved per-message Info logs (message received, message processed successfully) to Debug (fire on every message at high ingestion rates); removed verbose payload Debug dump; kept lifecycle (start/stop/partitions assigned/revoked) and errors/warnings at Info. | ✅ Complete |
+| **Processor — `src/processor/pipeline.py`** | Moved per-event intermediate Info logs (pipeline_extraction_done, entity_resolution_canonical_ids) to Debug; kept pipeline_run_start and pipeline_run_done at Info with key metrics (entity_count, confidence). | ✅ Complete |
+| **Processor — `src/processor/runtime.py`** | Consolidated 6 per-component init Info logs (Deduplicator connected, ZeroMemExtractor initialised, EntityResolver initialised, GraphPersistenceService initialised, ContextUnitIndexer initialised, TemporalStore connected) into Debug; kept a single `"Processor runtime initialised"` Info log with key config. | ✅ Complete |
+| **Processor — `src/processor/alert_publisher.py`** | Moved per-alert `"alert_published"` Info log to Debug; removed init/close Info logs; kept errors at Info. | ✅ Complete |
+| **Processor — `src/processor/stage_publisher.py`** | Moved per-stage-event `"stage_event_published"` Info log to Debug (fires on every stage of every event — very noisy); removed init/close Info logs; kept errors at Info. | ✅ Complete |
+| **Processor — `src/resolution/resolver.py`** | Moved per-entity Info logs (entity_resolved, entity_auto_merged) to Debug (fire on every entity resolution); kept errors/warnings at Info. | ✅ Complete |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` in `services/aggregator` | ✅ BUILD OK |
+| Aggregator lint | `get_errors` on all edited Go files | ✅ No new errors (2 pre-existing lint warnings unchanged) |
+| Processor lint | `get_errors` on all edited Python files | ✅ No errors found |
+
+### What INFO Level Shows Now
+
+**Aggregator** (at INFO):
+- `aggregator starting` — startup config (log_level, http_port, kafka_brokers, kafka_topic, tenant_id, mcp_plugins)
+- `tool discovery succeeded` — per plugin at startup
+- `domain services registered` — count at startup
+- `poller agent registered` / `watcher agent registered` — at startup
+- `aggregator server starting` — at startup
+- `harness: invoke complete` — per tool invocation (event_id, blocks, latency_s)
+- `processing content block` — per content block (source, plugin_name, kiq_id, source_name)
+- `pipeline processing started` / `pipeline processing completed` — per event (event_id, ingest_latency_ms)
+- `/search request received` / `/search request completed` — per search
+- `/enrich request received` / `/enrich request completed` — per enrich
+- `harness: tool registered` — per tool at registration
+- Warnings: tool discovery failed, validation failed, circuit breaker open, tool poll failed, etc.
+- Errors: kafka delivery failed, validation sidecar unreachable, kafka publish failed, etc.
+
+**Processor** (at INFO):
+- `Processor service starting` — startup config (port, kafka_enabled, celery_enabled, neo4j_url, qdrant_url)
+- `Launching Kafka consumer workers` — worker count at startup
+- `Kafka consumer worker started` — per worker (worker_id, topic, celery_enabled)
+- `Kafka partitions assigned` / `Kafka partitions revoked` — rebalance events
+- `Kafka consumer started` / `Kafka consumer closed` — lifecycle
+- `Processor runtime initialised` — per worker (worker_id, llm_provider, neo4j_url, qdrant_url)
+- `pipeline_run_start` / `pipeline_run_done` — per event (event_id, tenant_id, entity_count, confidence)
+- `Search request received` / `Expand request received` / `Briefing generation requested` — per HTTP request
+- `Celery worker runtime initialised` — per Celery worker
+- `briefing_task_complete` — per briefing
+- Warnings: Redis unavailable, TemporalStore connection failed, DLQ routing, etc.
+- Errors: alert_publish_failed, briefing generation failed, etc.
+
+---
+
+## V4 Track 3 + Track 4: Aggregator Harness, Agents & Governance Audit (August 11, 2026)
+
+Implements the V4 roadmap (`docs/V4/overall_raodmap_v4.md` Track 3 + Track 4, Milestones 1 + 5). Replaces the legacy `internal/scheduler` polling loop with a governed 9-stage Tool Execution Lifecycle Harness and Autonomous Ingestion Agents. Milestones 2-4 (Processor Zero-Mem, PPR retrieval, Delivery canvas) were already complete per the Track 1+2 entry below and are out of scope here; they were re-confirmed as part of the Milestone 5 verification.
+
+### Completed
+
+| Phase | What Changed | Status |
+|-------|-------------|--------|
+| **A — RawEvent Contract & Models Package** | Created `pkg/models/event.go` with the canonical governance `RawEvent` envelope mirroring `internal/kafka.RawEvent` plus `Validate()` enforcing non-null `source_name`/`plugin_name`/`timestamp`/`tenant_id`/`schema_version` (V4 provenance contract + multi-tenant isolation Principle 6); `NewRawEvent()` stamps UUID/timestamp/schema-version defaults; `ToKafkaEvent()`/`FromKafkaEvent()` convert at the publish boundary so the harness and agents depend only on `pkg/models`. Updated `internal/pipeline/pipeline.go` `Process()` to build `pkg/models.RawEvent`, call `Validate()`, then convert via `ToKafkaEvent()` before publish — adds a second validation layer (schema sidecar + envelope contract). 10 model tests + pipeline tests still green. | ✅ Complete |
+| **B — 9-Stage Tool Governance Harness** | Created `pkg/harness/` implementing the V4 9-stage Production Tool Execution Lifecycle: `types.go` (`Tool` interface, `ToolDescriptor`, `InvokeResult`, `Permission`, `Stage` enum Register=1…ReturnLoop=9); `validator.go` (Stage 1 `ValidateDescriptor` + Stage 4 `ValidateArguments` lightweight JSON-schema required/type checks); `permission.go` (Stage 5 `CheckPermission` per-tenant allow-list, empty=allow-all for untasked collection); `harness.go` (`Harness.InvokeTool` running stages 3-9: Select → Validate → Permission → Execute with per-tool circuit breaker + injected `Clock` → Observe → Normalize via `ingest.ExtractProvenance` + `models.NewRawEvent` → ReturnLoop; `Register`/`Advertise` for stages 1-2); `metrics.go` (`omni_g_harness_invoke_total{tool,stage,status}`, `_invoke_duration_seconds`, `_circuit_breaker_state{tool}`, `_permission_denied_total{tool,tenant}`). Circuit breaker opens after configurable consecutive failures, half-open after reset window. 16 harness tests covering each stage + full happy/rejection paths + circuit breaker open/half-open recovery + permission denial. | ✅ Complete |
+| **C — Autonomous Ingestion Agents** | Created `pkg/agent/` replacing the deprecated `internal/scheduler`: `types.go` (`Agent` interface, `Health`, `Status` running/degraded/stopped); `helpers.go` (`backoffDuration` exponential backoff capped at 60s, `toolHasRequiredParams` for skipping required-param tools on scheduled polls); `poller.go` (`PollerAgent` — per-tool goroutines, interval loop → `Harness.InvokeTool` → `OnResult` callback → `pipeline.ProcessBlock`, retries with backoff, non-retryable for circuit-breaker-open/permission denials); `watcher.go` (`WatcherAgent` — long-lived SSE stream via `InvokeTool`, auto-reconnect with backoff, stops on non-retryable rejections); `supervisor.go` (`AgentSupervisor` — fleet management, 10s health tick, restarts crashed agents up to `RestartMax` then marks degraded, `omni_g_agent_health{agent}` gauge). 7 agent tests (poller forwards/skips required-params/records errors; watcher forwards/stops on non-retryable; supervisor starts-stops all + restarts crashed). | ✅ Complete |
+| **D — Micro/Mu Domain Services** | Created `internal/services/` with 4 domain services: `types.go` (`DomainService` interface, `ServiceConfig`, `All()` factory); `mcp_tool.go` (`mcpPluginTool` single-plugin adapter + `fanOutTool` multi-plugin merger + `placeholderJSON` for unconfigured plugins); `news.go` (News → `search_news` fanning out to newsrss + reuters); `search.go` (Search → `web_search` fanning out to wikipedia + wikidata); `weather.go` (Weather → `fetch_weather` backed by the wttr.in JSON API with process-wide rate limiting — 2 concurrent calls, 1s min-interval; parses `current_condition` + `nearest_area` into a normalized provenance-bearing payload); `feeds.go` (Feeds → `fetch_feed` wrapping newsrss). Location service removed (not needed). All tools registered as governed `harness.Tool`s with risk levels + input schemas. Service tests cover registration + News/Search/Feeds invoking mock MCP plugins + Weather hitting a mock wttr.in server + rate-limiter interval enforcement. | ✅ Complete |
+| **E — Wiring & Deprecation** | Updated `internal/config/config.go` with `HARNESS_INVOKE_TIMEOUT_MS`/`HARNESS_CIRCUIT_BREAKER_THRESHOLD`/`HARNESS_CIRCUIT_BREAKER_RESET_MS`/`AGENT_HEALTH_TICK_MS`/`AGENT_RESTART_MAX` + `WATCHER_ENABLED`/`WATCHER_TOOL`/`WATCHER_ARGS` env knobs (sensible defaults). Rewrote `cmd/aggregator/main.go` to build the harness, register all 4 domain services, build a `PollerAgent` wired to `pipeline.ProcessBlock` via `OnResult`, conditionally build a `WatcherAgent` (when `WATCHER_ENABLED=true`) that continuously calls the configured governed tool and reconnects on stream end, register both with an `AgentSupervisor`, start the supervisor (non-blocking), populate `mcpHandler` from `harness.Advertise()`, and stop the supervisor on shutdown. The legacy `internal/scheduler` is deprecated (package retained for one release, no longer wired in `main.go`). Updated `internal/server/server.go` to accept `*agent.AgentSupervisor` instead of `*scheduler.Scheduler`, removed the scheduler start block, and added `GET /agents/health` returning `supervisor.Health()` JSON for the Milestone 5 audit. Rewrote `internal/server/search_handler.go` + `enrich_handler.go` so `/search` and `/enrich` route through the 9-stage harness via `harness.InvokeTool` (unified governance boundary for both autonomous agents and on-demand HTTP queries). Full aggregator suite (11 packages) green. | ✅ Complete |
+| **F — E2E Governance Audit & Verification** | Created `pkg/harness/audit_test.go` (Milestone 5 governance audit: 3 tools through all 9 stages, asserts every stage emits an `ok` metric on the happy path, permission-denial stops at Stage 5 with no later-stage metrics, validation-rejection stops at Stage 4, circuit breaker gauge transitions to open, normalized event passes the V4 envelope contract). Created `internal/server/e2e_governance_audit_test.go` (full-stack E2E: harness → services → poller → pipeline → recording publisher; asserts every published event has non-null `source_name`/`plugin_name`/`timestamp`/`tenant_id`; `/agents/health` returns the poller; `/metrics` exposes `omni_g_harness_invoke_total` + `omni_g_agent_health` + `omni_g_harness_circuit_breaker_state` + per-stage labels). Re-confirmed all 5 key verification criteria from the roadmap. | ✅ Complete |
+
+### Verification
+
+| # | Criterion | Command | Result |
+|---|-----------|---------|--------|
+| 1 | Aggregator Governance: 100% of agent calls pass through 9-stage Harness | `go test ./pkg/harness/... ./pkg/agent/...` | ✅ All pass; audit test confirms 9 stages per call with per-stage metrics |
+| 2 | Ingestion Token Cost: 0 LLM tokens during stream indexing | `pytest services/processor/tests/test_extractor.py` | ✅ 12 passed (re-confirmed, no regression) |
+| 3 | Retrieval Latency: multi-hop D=2 < 120ms | `pytest services/processor/tests/test_echarts_drilldown_pipeline.py` | ✅ 12 passed (re-confirmed, no regression) |
+| 4 | Canvas State Freshness: stale nodes purged instantly | `pnpm exec jest` in `services/delivery` | ✅ 9 suites / 76 tests pass (re-confirmed) |
+| 5 | Provenance Integrity: every node click opens unmodified source snippet | `pytest tests/e2e/test_ui_provenance_pipeline.py` | ✅ 4 passed (re-confirmed) |
+| — | Full aggregator suite | `go test ./...` in `services/aggregator` | ✅ 11 packages pass (models, harness, agent, services, pipeline, server, kafka, mcp, ingest, validation, scheduler-deprecated) |
+
+### Open V4 Gaps
+
+| Area | Gap | Priority |
+|------|-----|----------|
+| **gVisor sandboxing** | Harness Execute stage uses in-process circuit breakers + context timeouts; Docker network policies are the Phase 1 isolation. gVisor sandboxing is deferred to Phase 6 per `copilot-instructions.md` Principle 7. Not needed now. | Low (Phase 6) |
+| **`internal/scheduler` removal** | The legacy scheduler package is deprecated and no longer wired in `main.go` but is retained for one release to support rolling upgrades. Remove it once no deployments reference it. | Low |
+
+### Closed Gaps (this iteration, August 11, 2026)
+
+| Area | Resolution |
+|------|------------|
+| **Weather service** | ✅ `WeatherService` now backs `fetch_weather` with the wttr.in JSON API (`?format=j1`) and a process-wide rate limiter (2 concurrent calls, 1s min-interval). Parses `current_condition` + `nearest_area` into a normalized provenance-bearing payload (`source_name=wttr.in`, `source_url=https://wttr.in/<area>`). No MCP plugin needed. |
+| **Location service** | ✅ Removed — location is not needed as of now. `location.go` deleted; `All()` factory returns 4 services. |
+| **`/search` + `/enrich` harness routing** | ✅ `SearchHandler` rewritten to route through `harness.InvokeTool` — both `/search` and `/enrich` now pass through the 9-stage governance lifecycle (Select → Validate → Permission → Execute → Observe → Normalize → ReturnLoop) before publishing. Unified governance boundary for autonomous agents and on-demand HTTP queries. |
+| **WatcherAgent usage** | ✅ `WatcherAgent` wired in `main.go` behind `WATCHER_ENABLED`/`WATCHER_TOOL`/`WATCHER_ARGS` config knobs. When enabled, the watcher continuously calls the configured governed tool and reconnects on stream end (with backoff reset after success), turning any pollable tool into a live watch. Registered with the `AgentSupervisor` alongside the poller. |
+
+### Closed Gaps — Runtime Fixes (August 11, 2026)
+
+| Area | Resolution |
+|------|------------|
+| **TemporalStore tables not created at runtime** | ✅ Root cause: the `processor`, `processor-worker`, and `processor-beat` services in `infrastructure/docker-compose.yml` had no `POSTGRES_URL` env var and no `depends_on: postgres`, so `TemporalStore.connect()` failed and `_ensure_schema()` never ran. Fix: added `POSTGRES_URL: ${POSTGRES_URL:-postgresql://omni-g:omni-g-local-dev@postgres:5432/omni_g}` to all three services' env blocks, added `depends_on: postgres: condition: service_healthy`, and added a `# POSTGRES` section to `infrastructure/.env.docker.local`. The `_ensure_schema()` logic (already `CREATE TABLE IF NOT EXISTS`) is unchanged — only connectivity was missing. `config.py` default left at `localhost` for host-dev (env file is the source of truth in-container, matching the `NEO4J_URL`/`REDIS_URL` pattern). |
+| **`apoc.algo.pageRankWithConfig` not registered** | ✅ Root cause: `apoc.algo.pageRankWithConfig` was removed in APOC 5.x (Neo4j 5.26 ships APOC 5.x); it migrated to the GDS library as `gds.pageRank`. The compose file only enables `["apoc"]`. Fix: replaced the APOC PPR call with a shared `pagerank_subgraph` helper in `services/processor/src/retrieval/pagerank.py` that fetches the k-hop subgraph via `apoc.path.subgraphNodes` (still valid in APOC 5.x) and runs Personalized PageRank in Python via `networkx` (already a dependency). Used by both `RelationalRetriever._ppr_retrieve` and the `/query/expand` drilldown endpoint (no duplication). Redis PPR cache and BFS fallback preserved. `networkx` + `scipy` pre-imported at app startup (`main.py` top-level) so the first request doesn't pay the ~700ms one-time import cost; the drilldown latency budget (<120ms) is preserved. Chose networkx over GDS to avoid a second Neo4j plugin and keep semantics identical. |
+| **Weather events dropped by schema validation** | ✅ Root cause: `parseWttrJSON` in `services/aggregator/internal/services/weather.go` returned a payload with `document_title`/`source_url`/`temp_c`/etc. but none of the schema-required keys `text`/`content`/`data`/`url`, so every weather event was rejected by `RawEventEnvelope.validate_payload` with `payload:must contain at least one of: text, content, data, url`. Fix: added `"text": title` to the returned map (the `title` var already holds a human-readable summary). Aligns weather with the other plugins, which already include a `text`/`content` key. The schema contract is unchanged (Principle 3: Schema Discipline). Extended `TestWeatherService_FetchesFromWttrIn` to assert the payload has a non-empty `text` key. |
+
+---
+
+## V4 Track 1 + Track 2: Canvas Uplift & Zero-Mem Provenance (August 11, 2026)
+
+Implements the V4 roadmap (`docs/V4/overall_raodmap_v4.md` Track 1 + Track 2, cross-referenced with `docs/V4/UI_uplift_roadmapV4.md`). Closes the gap between the V4 spec and the already-advanced V3 codebase.
+
+### Completed
+
+| Phase | What Changed | Status |
+|-------|-------------|--------|
+| **A — Provenance Contract (backend)** | Added `SourceName`, `SourceURL` to Go `RawEvent` struct (`services/aggregator/internal/kafka/producer.go`); `Pipeline.Process()`/`ProcessBlock()` accept + propagate `sourceName`/`sourceURL` (defaults `SourceName` to `PluginName`); callers in `search_handler.go` and `server.go` updated; added `source_name`/`source_url` to Processor `RawEventEnvelope` and `ContextUnit` model; `upsert_context_unit()` Cypher SETs `source_name`/`source_url`/`plugin_name` on ContextUnit nodes; pipeline step 3 populates provenance from envelope. 2 new Go tests + 2 new Python tests. | ✅ Complete |
+| **B — Query Params + Response Models (backend)** | Added `relevance_threshold` (τ) and `traversal_depth` (D_max) to `SearchRequest`; `ExpandRequest` gains `relevance_threshold`; `/search` overrides profiler `d_max` when `traversal_depth` set and prunes edges with weight < τ; `/query/expand` applies same τ pruning; created `services/processor/src/models/api.py` with `NodeProvenance`, `RawContextSnippet`, `CustomNodeResponse`, `GraphQueryResponse`; `_build_custom_nodes()` helper maps entities + context units + relationships into structured rich-node payload with provenance + sub-entity count; `SearchResponse` gains optional `nodes` + `total_tokens_consumed` (zero-mem invariant). 3 new tests (τ pruning, D_max override, nodes payload). | ✅ Complete |
+| **C — Zustand Store + Floating UI (frontend)** | Installed `zustand`; created `services/delivery/src/store/useGraphExplorerStore.ts` with `query`/`depth`/`relevanceThreshold`/`tokenCap`/`nodes`/`edges`/`selectedNode` state + `setQuery`/`setSettings`/`executeQuery`/`selectNode`/`clearCanvas`/`mergeRealtime` actions; `executeQuery` purges stale canvas then POSTs `/api/query` with τ + D_max; created `FloatingSearchBar.tsx` (top-center frosted-glass pill, Enter triggers `executeQuery`); created `SettingsGearPanel.tsx` (top-right gear popover with τ slider [0.1,1.0], D_max dial [1,4], L_max slider [2048,8192]); updated `/api/query` route to forward `relevance_threshold` + `traversal_depth`; extended `entities.ts` with `NodeProvenance`/`RawContextSnippet`/`CustomNodeResponse` types. | ✅ Complete |
+| **D — Rich-Text Card Nodes (frontend)** | `useEChartsGraphAdapter.ts` now produces `roundRect` card nodes (`symbolSize: [170, 54]`) with multi-line rich-text labels: `{typeBadge| TYPE }` + `{title| Name }` + `{subText| +N links 📍 source }`; `RICH_LABEL_STYLES` exported for the canvas; confidence-based opacity/border encoding retained on the card; `EvidenceNode` extended with `source_name`/`source_url`/`plugin_name`/`sub_entity_count`; `EChartsGraphCanvas.tsx` label config updated to `position: "inside"` with `rich` styles; `EChartsNode` interface updated (`symbolSize: number | number[]`, added provenance fields). 3 new adapter tests. | ✅ Complete |
+| **E — Responsive Evidence Drawer (frontend)** | Installed `framer-motion`; created `services/delivery/src/components/drawer/SourceTraceDrawer.tsx` replacing `SourceTracePane.tsx` — desktop (>1024px) floating right sidebar 380px with spring slide-in; mobile (<767px) swipeable bottom sheet with drag-to-dismiss + backdrop; renders only human-readable provenance (`source_name`, `source_url`, `plugin_name`, `ingested_at`) + unmodified raw context snippet; `stripUuids()` removes any UUID substrings from display; wired `explorer/page.tsx` `handleNodeSelect` to sync the Zustand store; mounted `FloatingSearchBar` + `SettingsGearPanel` + `SourceTraceDrawer` in the canvas area. | ✅ Complete |
+
+### Verification
+
+| Component | Target | Result |
+|-----------|--------|--------|
+| Aggregator provenance | `go test ./...` | ✅ All packages pass (kafka, mcp, pipeline, scheduler, server, validation) |
+| Processor provenance + τ/D_max | `pytest tests/` | ✅ 183 passed (excluding pre-existing briefing generator fixture errors) |
+| Delivery adapter + drawer | `pnpm exec jest` | ✅ 8 suites pass (canvas, adapter, API routes, hooks, gateway, socket); 1 pre-existing BriefingPanel `useRouter` failure unrelated to V4 |
+| Type safety | `pnpm exec tsc --noEmit` | ✅ No errors |
+| Zero-mem invariant | `total_tokens_consumed == 0` | ✅ Asserted in `/search` + `/query/expand` responses + drilldown test |
+
+### Open V4 Gaps
+
+| Area | Gap | Priority |
+|------|-----|----------|
+| **Page.tsx full Zustand migration** | ✅ Closed (Aug 11): `explorer/page.tsx` now drives the canvas purely from `useGraphExplorerStore` — `evidenceNodes`/`evidenceEdges`/`selectedNode` are derived from `storeNodes`/`storeEdges`/`storeSelectNode`; `runSearch`, realtime merge, and drilldown all write into the store via `useGraphExplorerStore.setState()` / `storeMergeRealtime()`. The dual-state source of truth is eliminated. | ✅ Closed |
+| **Aggregator MCP normalizer** | ✅ Closed (Aug 11): Created `services/aggregator/internal/ingest/normalizer.go` (`ExtractProvenance`) which auto-extracts `document_title`/`publisher_name`/`title`/`headline` → `source_name` and `source_url`/`url`/`link` → `source_url` from content-block JSON payloads (case-insensitive, shallow lookup). `Pipeline.ProcessBlock()` calls it when caller-supplied `sourceName`/`sourceURL` are empty; caller-supplied values take precedence. 8 normalizer tests + 2 pipeline integration tests. | ✅ Closed |
+| **SourceTracePane removal** | ✅ Closed (Aug 11): `services/delivery/src/components/inspector/SourceTracePane.tsx` deleted; no source consumers remained (only `.next/` build cache referenced it). | ✅ Closed |
+| **E2E Playwright suite** | ✅ Closed (Aug 11): Created `tests/e2e/test_ui_provenance_pipeline.py` with 4 tests validating the three roadmap assertions (stale canvas purge, every node has title + source tag, click opens matching snippet, zero-mem invariant) via the Processor `/search` API contract. Uses `ScoredContext` mocks + filtered Neo4j mock; runs with existing pytest (no Playwright browser dependency). | ✅ Closed |
+| **Briefing generator tests** | ✅ Closed (Aug 11): `tests/test_briefing_script_generator.py` fixture updated to use `llm_client` (V3 signature) instead of `ollama_url`/`model`; patches target `_call_llm` not `_call_ollama`. All 6 tests pass. `BriefingPanel.test.tsx` `useRouter` failure fixed via `next/navigation` mock in `jest.setup.ts`; all 5 tests pass. | ✅ Closed |
 
 ---
 

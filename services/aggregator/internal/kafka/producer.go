@@ -26,6 +26,13 @@ type RawEvent struct {
 	// this collection. Empty string means the event is untasked (general
 	// collection not bound to a specific KIQ).
 	KIQID string `json:"kiq_id,omitempty"`
+	// SourceName is the human-readable name of the originating source
+	// (e.g. "PubMed Central", "ClinicalTrials.gov"). Defaults to PluginName
+	// when the plugin does not supply a publisher/document title.
+	SourceName string `json:"source_name,omitempty"`
+	// SourceURL is the canonical human-facing URL of the source document
+	// (may differ from the MCP plugin URL stored in Source).
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 // Producer wraps confluent-kafka-go and exposes a high-level Publish method.
@@ -62,13 +69,6 @@ func NewProducer(brokers, topic string) (*Producer, error) {
 						Str("topic", *ev.TopicPartition.Topic).
 						Str("event_key", string(ev.Key)).
 						Msg("kafka delivery failed")
-				} else {
-					log.Debug().
-						Str("topic", *ev.TopicPartition.Topic).
-						Int32("partition", ev.TopicPartition.Partition).
-						Int64("offset", int64(ev.TopicPartition.Offset)).
-						Str("event_key", string(ev.Key)).
-						Msg("kafka delivery acknowledged")
 				}
 			}
 		}
@@ -89,12 +89,18 @@ func (pr *Producer) Publish(ctx context.Context, event *RawEvent) error {
 	if event.SchemaVersion == "" {
 		event.SchemaVersion = "1.0"
 	}
+	// Defensive fallback: default human-readable source name to the plugin
+	// name. Pipeline.Process() already applies this default before publish,
+	// but we keep it here so direct callers of Producer.Publish() still get
+	// non-empty provenance.
+	if event.SourceName == "" {
+		event.SourceName = event.PluginName
+	}
 
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	log.Debug().Str("topic", pr.topic).Str("event_id", event.ID).Str("payload", string(payload)).Msg("kafka publish payload prepared")
 
 	msg := &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &pr.topic, Partition: kafka.PartitionAny},
@@ -109,32 +115,24 @@ func (pr *Producer) Publish(ctx context.Context, event *RawEvent) error {
 		return fmt.Errorf("enqueue message: %w", err)
 	}
 
-	log.Info().
-		Str("topic", pr.topic).
-		Str("event_id", event.ID).
-		Str("source", event.Source).
-		Str("tenant_id", event.TenantID).
-		Msg("event enqueued to kafka producer")
+	log.Debug().Str("topic", pr.topic).Str("event_id", event.ID).Str("source", event.Source).Msg("event enqueued")
 
 	return nil
 }
 
 // Flush waits for all enqueued messages to be delivered or ctx to be cancelled.
 func (pr *Producer) Flush(ctx context.Context) error {
-	log.Info().Str("topic", pr.topic).Msg("flushing kafka producer queue")
 	remaining := pr.p.Flush(int(time.Until(deadline(ctx)).Milliseconds()))
 	if remaining > 0 {
 		return fmt.Errorf("%d messages not flushed before timeout", remaining)
 	}
-	log.Info().Str("topic", pr.topic).Msg("kafka producer queue flushed")
 	return nil
 }
 
 // Close flushes and closes the underlying producer.
 func (pr *Producer) Close(ctx context.Context) error {
-	log.Info().Str("topic", pr.topic).Msg("closing kafka producer")
 	if err := pr.Flush(ctx); err != nil {
-		log.Warn().Err(err).Msg("flush warning on close")
+		log.Warn().Err(err).Msg("kafka producer flush warning on close")
 	}
 	pr.p.Close()
 	log.Info().Str("topic", pr.topic).Msg("kafka producer closed")

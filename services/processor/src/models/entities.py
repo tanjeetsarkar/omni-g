@@ -72,6 +72,12 @@ class ContextUnit(BaseModel):
     turn_id: str | None = None
     created: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Human-readable provenance (V4 Track 2). Populated from the
+    # RawEventEnvelope so the UI can render source tags without exposing
+    # raw plugin URLs or database IDs.
+    source_name: str | None = None
+    source_url: str | None = None
+    plugin_name: str | None = None
 
 
 class ExtractionResult(BaseModel):

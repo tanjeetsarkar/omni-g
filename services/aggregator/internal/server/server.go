@@ -12,7 +12,7 @@ import (
 	"github.com/omni-g/aggregator/internal/mcp"
 	"github.com/omni-g/aggregator/internal/metrics"
 	"github.com/omni-g/aggregator/internal/pipeline"
-	"github.com/omni-g/aggregator/internal/scheduler"
+	"github.com/omni-g/aggregator/pkg/agent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,22 +28,22 @@ type Server struct {
 	mux           *http.ServeMux
 	httpSrv       *http.Server
 	pipeline      *pipeline.Pipeline
-	scheduler     *scheduler.Scheduler
+	supervisor    *agent.AgentSupervisor
 	mcpHandler    *mcp.Handler
 	searchHandler *SearchHandler
 }
 
 // New creates a configured Server.
 //
-// pipeline, sched, mcpHandler, and searchHandler may be nil (e.g. in
+// pipeline, supervisor, mcpHandler, and searchHandler may be nil (e.g. in
 // health-only tests); their routes are still registered but are no-ops in
 // that case.
-func New(cfg *config.Config, pl *pipeline.Pipeline, sched *scheduler.Scheduler, mcpHandler *mcp.Handler, searchHandler *SearchHandler) *Server {
+func New(cfg *config.Config, pl *pipeline.Pipeline, supervisor *agent.AgentSupervisor, mcpHandler *mcp.Handler, searchHandler *SearchHandler) *Server {
 	s := &Server{
 		cfg:           cfg,
 		mux:           http.NewServeMux(),
 		pipeline:      pl,
-		scheduler:     sched,
+		supervisor:    supervisor,
 		mcpHandler:    mcpHandler,
 		searchHandler: searchHandler,
 	}
@@ -62,6 +62,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /ready", s.handleReady)
 	s.mux.HandleFunc("GET /mcp/tools", s.handleMCPTools)
+	s.mux.HandleFunc("GET /agents/health", s.handleAgentsHealth)
 	s.mux.Handle("GET /metrics", metrics.Handler())
 	if s.searchHandler != nil {
 		s.mux.Handle("POST /search", s.searchHandler)
@@ -75,26 +76,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Start begins listening and blocks until ctx is cancelled.
-// The scheduler (if set) is started in a background goroutine wired to the
-// pipeline.
+//
+// V4 Track 3: the autonomous ingestion agents are started by the
+// AgentSupervisor in main.go (non-blocking) before Start is called. The
+// supervisor manages agent lifecycle; this method only runs the HTTP server.
 func (s *Server) Start(ctx context.Context) error {
-	if s.scheduler != nil && s.pipeline != nil {
-		go s.scheduler.Start(ctx, func(ctx context.Context, source string, block mcp.ContentBlock, tool mcp.Tool) error {
-			if block.Type != mcp.ContentTypeText || block.Text == "" {
-				return nil
-			}
-			version := tool.Version
-			if version == "" {
-				version = "unknown"
-			}
-			return s.pipeline.ProcessBlock(ctx, source, block.Text, tool.Name, version, "")
-		})
-	}
-
 	errCh := make(chan error, 1)
 
 	go func() {
-		log.Info().Str("addr", s.httpSrv.Addr).Msg("HTTP server starting")
 		if err := s.httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -125,6 +114,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ready", Service: "aggregator"})
+}
+
+// handleAgentsHealth returns the health of all autonomous ingestion agents.
+// Used by the Milestone 5 governance audit to verify all agents are running.
+func (s *Server) handleAgentsHealth(w http.ResponseWriter, _ *http.Request) {
+	if s.supervisor == nil {
+		writeJSON(w, http.StatusOK, map[string]agent.Health{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.supervisor.Health())
 }
 
 func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {

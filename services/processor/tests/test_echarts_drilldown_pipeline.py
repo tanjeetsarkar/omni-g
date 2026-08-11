@@ -23,22 +23,35 @@ def mock_neo4j_for_drilldown() -> MagicMock:
 
         # Determine query signature
         query_upper = query.upper()
-        if (
-            "APOC.PATH.SUBGRAPHNODES" in query_upper
-            or "APOC.ALGO.PAGERANKWITHCONFIG" in query_upper
-        ):
-            # Step 1 / 2: apoc pagerank query returning context unit nodes
+        if "APOC.PATH.SUBGRAPHNODES" in query_upper:
+            # pagerank_subgraph Step 1: fetch k-hop subgraph nodes.
+            # Returns node_id/labels/text rows (ContextUnit + Entity nodes).
             mock_result.data.return_value = [
                 {
-                    "context_id": "ctx_123",
+                    "node_id": "ctx_123",
+                    "labels": ["ContextUnit"],
+                    "node_tenant": "default",
                     "text": "This is raw context about Johns Hopkins Hospital.",
-                    "score": 0.99,
                 },
                 {
-                    "context_id": "ctx_456",
+                    "node_id": "ctx_456",
+                    "labels": ["ContextUnit"],
+                    "node_tenant": "default",
                     "text": "Dr. Smith works in the Oncology Dept.",
-                    "score": 0.85,
                 },
+                {
+                    "node_id": "hospital_123",
+                    "labels": ["Entity"],
+                    "node_tenant": "default",
+                    "text": "",
+                },
+            ]
+        elif "A.ID AS SRC" in query_upper and "B.ID AS DST" in query_upper:
+            # pagerank_subgraph Step 2: fetch CO_OCCURRED_IN edges between
+            # the returned subgraph nodes.
+            mock_result.data.return_value = [
+                {"src": "hospital_123", "dst": "ctx_123"},
+                {"src": "hospital_123", "dst": "ctx_456"},
             ]
         elif "CO_OCCURRED_IN" in query_upper and "COLLECT(E.ID)" in query_upper:
             # Step 3: fetch co-occurring entity IDs for those context units
@@ -169,6 +182,116 @@ def test_echarts_drilldown_pipeline(mock_neo4j_for_drilldown: MagicMock) -> None
         # Step 4: Verify zero indexing / LLM memory tokens were used or logged
         # Expansion queries run purely as traversal / non-generative.
         assert "token" not in data or data.get("tokens", 0) == 0
+        # V4 Track 2: explicit zero-token invariant on the response envelope.
+        assert data.get("total_tokens_consumed") == 0
 
         # Step 5: Assert backend expansion response latency remains < 120ms
         assert latency_ms < 120.0
+
+        # V4 Track 2: structured nodes payload carries provenance + sub-entity count.
+        nodes = data.get("nodes", [])
+        assert len(nodes) == len(entities)
+        hospital_node = next(n for n in nodes if n["id"] == "hospital_123")
+        assert hospital_node["entity_name"] == "Johns Hopkins Hospital"
+        assert hospital_node["entity_type"] == "FACILITY"
+        assert "source" in hospital_node
+        assert "source_name" in hospital_node["source"]
+        assert "sub_entity_count" in hospital_node
+
+
+def test_expand_relevance_threshold_prunes_low_weight_edges(
+    mock_neo4j_for_drilldown: MagicMock,
+) -> None:
+    """V4 Track 2: edges with confidence < relevance_threshold are pruned."""
+    settings = Settings(
+        LOG_LEVEL="debug",
+        HTTP_PORT=8001,
+        KAFKA_BROKERS="localhost:9092",
+        REDIS_URL="redis://localhost:6379",
+        NEO4J_URL="neo4j://localhost:7687",
+        NEO4J_USER="neo4j",
+        NEO4J_PASSWORD="test",  # noqa: S106
+        QDRANT_URL="http://localhost:6333",
+        OLLAMA_URL="http://localhost:11434",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    low_weight_rels = [
+        {"id": "r1", "source_ref": "hospital_123", "target_ref": "dr_smith", "confidence": 0.2},
+        {"id": "r2", "source_ref": "dr_smith", "target_ref": "trial_2025", "confidence": 0.9},
+    ]
+
+    with (
+        patch("neo4j.AsyncGraphDatabase.driver", return_value=mock_neo4j_for_drilldown),
+        patch("qdrant_client.AsyncQdrantClient", return_value=AsyncMock()),
+        patch("src.retrieval.relational.RelationalRetriever.retrieve", return_value=[]),
+        patch("src.retrieval.temporal.TemporalRetriever.retrieve", return_value=[]),
+        patch("src.indexers.vector.ContextUnitIndexer.encode", return_value=AsyncMock()),
+        patch(
+            "src.graph.persistence.GraphPersistenceService.fetch_relationships_for_entities",
+            return_value=low_weight_rels,
+        ),
+    ):
+        # τ = 0.5 should drop the 0.2-weight edge and keep the 0.9-weight edge.
+        response = client.post(
+            "/query/expand",
+            json={
+                "anchor_node_id": "hospital_123",
+                "current_depth": 1,
+                "target_depth": 2,
+                "tenant_id": "default",
+                "relevance_threshold": 0.5,
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        rels = data["relationships"]
+        assert len(rels) == 1
+        assert rels[0]["confidence"] == 0.9
+
+
+def test_search_traversal_depth_override(mock_neo4j_for_drilldown: MagicMock) -> None:
+    """V4 Track 2: explicit traversal_depth overrides the profiler's d_max."""
+    settings = Settings(
+        LOG_LEVEL="debug",
+        HTTP_PORT=8001,
+        KAFKA_BROKERS="localhost:9092",
+        REDIS_URL="redis://localhost:6379",
+        NEO4J_URL="neo4j://localhost:7687",
+        NEO4J_USER="neo4j",
+        NEO4J_PASSWORD="test",  # noqa: S106
+        QDRANT_URL="http://localhost:6333",
+        OLLAMA_URL="http://localhost:11434",
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    captured_d_max: dict[str, int] = {}
+
+    async def fake_retrieve(profile, tenant_id, d_max, limit):
+        captured_d_max["d_max"] = d_max
+        return []
+
+    with (
+        patch("neo4j.AsyncGraphDatabase.driver", return_value=mock_neo4j_for_drilldown),
+        patch("qdrant_client.AsyncQdrantClient", return_value=AsyncMock()),
+        patch("src.retrieval.relational.RelationalRetriever.retrieve", side_effect=fake_retrieve),
+        patch("src.retrieval.temporal.TemporalRetriever.retrieve", return_value=[]),
+        patch("src.indexers.vector.ContextUnitIndexer.encode", return_value=AsyncMock()),
+        patch("src.graph.persistence.GraphPersistenceService.search_entities", return_value=[]),
+        patch("src.graph.persistence.GraphPersistenceService.fetch_neighbor_entities", return_value=[]),
+        patch("src.graph.persistence.GraphPersistenceService.fetch_relationships_for_entities", return_value=[]),
+    ):
+        response = client.post(
+            "/search",
+            json={
+                "query": "Johns Hopkins Hospital",
+                "tenant_id": "default",
+                "limit": 10,
+                "traversal_depth": 4,
+            },
+        )
+        assert response.status_code == 200
+        # The override must reach the relational retriever.
+        assert captured_d_max.get("d_max") == 4

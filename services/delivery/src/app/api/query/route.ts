@@ -23,10 +23,27 @@ export async function POST(request: NextRequest) {
     query,
     tenant_id = "default",
     limit = 50,
-  } = (body as { query?: unknown; tenant_id?: unknown; limit?: unknown }) ?? {};
+    relevance_threshold = 0.0,
+    traversal_depth,
+  } = (body as {
+    query?: unknown;
+    tenant_id?: unknown;
+    limit?: unknown;
+    relevance_threshold?: unknown;
+    traversal_depth?: unknown;
+  }) ?? {};
 
   if (!query || typeof query !== "string") {
     return NextResponse.json({ error: "query is required" }, { status: 400 });
+  }
+
+  // V4 Track 2: forward τ / D_max to the Processor /search endpoint.
+  const payload: Record<string, unknown> = { query, tenant_id, limit };
+  if (typeof relevance_threshold === "number" && relevance_threshold > 0) {
+    payload.relevance_threshold = relevance_threshold;
+  }
+  if (typeof traversal_depth === "number") {
+    payload.traversal_depth = traversal_depth;
   }
 
   let response: Response;
@@ -34,7 +51,7 @@ export async function POST(request: NextRequest) {
     response = await fetch(`${PROCESSOR_URL}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, tenant_id, limit }),
+      body: JSON.stringify(payload),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Processor unreachable";

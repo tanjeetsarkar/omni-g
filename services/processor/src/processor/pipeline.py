@@ -112,6 +112,10 @@ class RawEventEnvelope(BaseModel):
     plugin_name: str | None = None
     plugin_version: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # Human-readable provenance (V4 Track 2). Aggregator stamps these on
+    # every RawEvent; source_name defaults to plugin_name upstream.
+    source_name: str | None = None
+    source_url: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -161,7 +165,7 @@ class ProcessingPipeline:
         self._stage_publisher = stage_publisher
 
     async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
-        logger.info("pipeline_run_start", extra={"event_id": event.get("id", "")})
+        logger.info("pipeline_run_start", extra={"event_id": event.get("id", ""), "tenant_id": event.get("tenant_id", "default")})
 
         # ── Step 1: Schema validation ──────────────────────────────────────
         if self._stage_publisher:
@@ -226,6 +230,9 @@ class ProcessingPipeline:
                 "plugin_version": envelope.plugin_version,
                 "source_event_id": envelope.id,
             },
+            source_name=envelope.source_name or envelope.plugin_name,
+            source_url=envelope.source_url or None,
+            plugin_name=envelope.plugin_name,
         )
 
         # Offload blocking spaCy + GLiNER calls to a thread pool so they
@@ -293,7 +300,7 @@ class ProcessingPipeline:
 
         if self._stage_publisher:
             self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "done")
-        logger.info(
+        logger.debug(
             "pipeline_extraction_done",
             extra={
                 "event_id": envelope.id,
@@ -378,7 +385,7 @@ class ProcessingPipeline:
                     "entity_context_weights": resolved_weights,
                 }
             )
-            logger.info(
+            logger.debug(
                 "entity_resolution_canonical_ids",
                 extra={
                     "event_id": envelope.id,
@@ -424,6 +431,7 @@ class ProcessingPipeline:
             extra={
                 "event_id": envelope.id,
                 "tenant_id": envelope.tenant_id,
+                "entity_count": len(extraction.entities),
                 "confidence": extraction.extraction_confidence,
             },
         )
