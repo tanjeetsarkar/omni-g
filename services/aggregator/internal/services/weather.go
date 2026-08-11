@@ -232,6 +232,11 @@ func parseWttrJSON(raw []byte, requestedLocation string) (map[string]any, error)
 	title := fmt.Sprintf("Weather: %s — %s, %s°C (feels %s°C)", areaName, desc, c.TempC, c.FeelsLikeC)
 
 	return map[string]any{
+		// `text` is required by the Processor schema validator
+		// (RawEventEnvelope.validate_payload requires at least one of
+		// text/content/data/url). Without it every weather event is
+		// dropped at the validation edge.
+		"text":             title,
 		"document_title":   title,
 		"source_name":      "wttr.in",
 		"source_url":       "https://wttr.in/" + url.PathEscape(areaName),

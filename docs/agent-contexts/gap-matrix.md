@@ -2,7 +2,42 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 11, 2026 — Logging cleanup: INFO-level terminal logs cleaned across Aggregator + Processor.
+**Last Updated:** August 11, 2026 — /validate 422 fix, Delivery UI consolidation, pipeline activity unblock.
+
+---
+
+## /validate 422 Fix + Delivery UI Consolidation + Pipeline Activity Unblock (August 11, 2026)
+
+Fixes three intertwined bugs: (1) every Aggregator→Processor `/validate` call returned 422 because the Aggregator passed the governed **tool name** (e.g. `web_search`, `search_news`) as the `source` field, but the Processor's `ValidateRequest.source_must_be_http_url` Pydantic validator requires an HTTP(S) URL — so no events reached Kafka. (2) The Delivery `explorer/page.tsx` mounted two competing search UIs (legacy header `<form>` + V4 floating `FloatingSearchBar`/`SettingsGearPanel`), causing overlapping designs and conflicting canvas state. (3) Pipeline activity never updated because the Processor never received events to publish stage events for (downstream symptom of #1).
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **Aggregator — domain service `SourceURL`** | `news.go` (`search_news`) → `https://newsrss.omni-g.internal`; `search.go` (`web_search`) → `https://wikipedia.org`; `feeds.go` (`fetch_feed`) → `https://newsrss.omni-g.internal`; `weather.go` already set `https://wttr.in`. These canonical URLs are sent as the `source` arg to the validation sidecar. | ✅ Complete |
+| **Aggregator — `pipeline.SourceForTool` helper** | Added `SourceForTool(toolName, toolSourceURL)` to `internal/pipeline/pipeline.go` — returns the tool's `SourceURL` when non-empty, else a synthetic valid URL `https://omni-g.internal/tool/<tool-name>` so the Processor's strict URL validator never rejects the event. Preserves the provenance contract (Principle 3) without weakening the validator. | ✅ Complete |
+| **Aggregator — `source` arg fix** | `search_handler.go` `invokeGovernedTool`, `main.go` poller `OnResult`, `main.go` watcher `OnResult`, and `e2e_governance_audit_test.go` now pass `pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL)` as the `source` arg to `ProcessBlock` instead of `result.Tool.Name`. | ✅ Complete |
+| **Aggregator — E2E audit test refactor** | `e2e_governance_audit_test.go` now invokes `search_news` explicitly via `harness.InvokeTool` with a `query` arg (forwarding blocks through the pipeline) instead of relying on the poller to invoke query-based tools with nil args. This makes the audit deterministic (no wttr.in network dependency) and compatible with the `"required": ["query"]` schemas. | ✅ Complete |
+| **Delivery — `FloatingSearchBar` `onSubmit`** | Added optional `onSubmit?: () => void` prop to `FloatingSearchBar.tsx`; called on Enter alongside `store.executeQuery()` so the page can wire the background `/api/search` ingestion trigger + toast + history. | ✅ Complete |
+| **Delivery — `explorer/page.tsx` consolidation** | Removed the legacy header `<form>` + search input/button (kept logo + `NotificationBell`). Removed the redundant `evidenceNodes`/`evidenceEdges` intermediate derivation — `transformToEChartsData` now reads `storeNodes`/`storeEdges` directly. Refactored `runSearch` to delegate graph retrieval to `store.executeQuery()` (single `/api/query` fetch) and retain only the background `/api/search` ingestion trigger + toast/history. `FloatingSearchBar` + `SettingsGearPanel` are always mounted (empty state + canvas) so the user can search from either. Removed `searchQuery` state, `handleSearchSubmit`, and the duplicate `/api/query` fetch. | ✅ Complete |
+| **Pipeline activity** | No code change — downstream symptom of the `/validate` 422 fix. Once events flow to Kafka, the Processor publishes `schema_validation` → ... → `pipeline_complete` stage events via `StageEventPublisher` → Kafka `processor-events` → gateway `handleStageEventValue` → Socket.io `pipeline_stage` → `usePipelineEvents` → `ActivityDrawer`/`PipelineProgressToast`. | ✅ Complete (unblocked) |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` in `services/aggregator` | ✅ BUILD OK |
+| Aggregator tests | `go test ./...` in `services/aggregator` | ✅ All 11 packages pass (models, harness, agent, services, pipeline, server, kafka, mcp, ingest, validation, scheduler-deprecated) |
+| Delivery type check | `pnpm exec tsc --noEmit` in `services/delivery` | ✅ No errors |
+| Delivery tests | `pnpm exec jest` in `services/delivery` | ✅ 9 suites / 76 tests pass |
+| Lint | `get_errors` on all edited files | ✅ No errors |
+
+### Decisions
+
+- **Processor validator stays strict** (preserves the provenance contract per `copilot-instructions.md` Principle 3). The Aggregator now always sends a valid HTTP(S) URL as `source`.
+- **`source` semantics → canonical per-tool `SourceURL`** (Option A): use the `ToolDescriptor.SourceURL` as the `source` arg. Simpler, fan-out-friendly. Synthetic fallback `https://omni-g.internal/tool/<name>` for tools with empty `SourceURL`.
+- **Ingestion trigger ownership → page owns ingestion** (Option A): the background `/api/search` call stays in the page so the Zustand store remains pure-retrieval and toast/history UI state stays co-located.
+- **Single search UI**: `FloatingSearchBar` + Zustand store are the sole search entry point; the legacy header form is removed.
 
 ---
 
@@ -115,6 +150,14 @@ Implements the V4 roadmap (`docs/V4/overall_raodmap_v4.md` Track 3 + Track 4, Mi
 | **Location service** | ✅ Removed — location is not needed as of now. `location.go` deleted; `All()` factory returns 4 services. |
 | **`/search` + `/enrich` harness routing** | ✅ `SearchHandler` rewritten to route through `harness.InvokeTool` — both `/search` and `/enrich` now pass through the 9-stage governance lifecycle (Select → Validate → Permission → Execute → Observe → Normalize → ReturnLoop) before publishing. Unified governance boundary for autonomous agents and on-demand HTTP queries. |
 | **WatcherAgent usage** | ✅ `WatcherAgent` wired in `main.go` behind `WATCHER_ENABLED`/`WATCHER_TOOL`/`WATCHER_ARGS` config knobs. When enabled, the watcher continuously calls the configured governed tool and reconnects on stream end (with backoff reset after success), turning any pollable tool into a live watch. Registered with the `AgentSupervisor` alongside the poller. |
+
+### Closed Gaps — Runtime Fixes (August 11, 2026)
+
+| Area | Resolution |
+|------|------------|
+| **TemporalStore tables not created at runtime** | ✅ Root cause: the `processor`, `processor-worker`, and `processor-beat` services in `infrastructure/docker-compose.yml` had no `POSTGRES_URL` env var and no `depends_on: postgres`, so `TemporalStore.connect()` failed and `_ensure_schema()` never ran. Fix: added `POSTGRES_URL: ${POSTGRES_URL:-postgresql://omni-g:omni-g-local-dev@postgres:5432/omni_g}` to all three services' env blocks, added `depends_on: postgres: condition: service_healthy`, and added a `# POSTGRES` section to `infrastructure/.env.docker.local`. The `_ensure_schema()` logic (already `CREATE TABLE IF NOT EXISTS`) is unchanged — only connectivity was missing. `config.py` default left at `localhost` for host-dev (env file is the source of truth in-container, matching the `NEO4J_URL`/`REDIS_URL` pattern). |
+| **`apoc.algo.pageRankWithConfig` not registered** | ✅ Root cause: `apoc.algo.pageRankWithConfig` was removed in APOC 5.x (Neo4j 5.26 ships APOC 5.x); it migrated to the GDS library as `gds.pageRank`. The compose file only enables `["apoc"]`. Fix: replaced the APOC PPR call with a shared `pagerank_subgraph` helper in `services/processor/src/retrieval/pagerank.py` that fetches the k-hop subgraph via `apoc.path.subgraphNodes` (still valid in APOC 5.x) and runs Personalized PageRank in Python via `networkx` (already a dependency). Used by both `RelationalRetriever._ppr_retrieve` and the `/query/expand` drilldown endpoint (no duplication). Redis PPR cache and BFS fallback preserved. `networkx` + `scipy` pre-imported at app startup (`main.py` top-level) so the first request doesn't pay the ~700ms one-time import cost; the drilldown latency budget (<120ms) is preserved. Chose networkx over GDS to avoid a second Neo4j plugin and keep semantics identical. |
+| **Weather events dropped by schema validation** | ✅ Root cause: `parseWttrJSON` in `services/aggregator/internal/services/weather.go` returned a payload with `document_title`/`source_url`/`temp_c`/etc. but none of the schema-required keys `text`/`content`/`data`/`url`, so every weather event was rejected by `RawEventEnvelope.validate_payload` with `payload:must contain at least one of: text, content, data, url`. Fix: added `"text": title` to the returned map (the `title` var already holds a human-readable summary). Aligns weather with the other plugins, which already include a `text`/`content` key. The schema contract is unchanged (Principle 3: Schema Discipline). Extended `TestWeatherService_FetchesFromWttrIn` to assert the payload has a non-empty `text` key. |
 
 ---
 

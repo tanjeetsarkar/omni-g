@@ -184,7 +184,7 @@ func (h *SearchHandler) invokeGovernedTool(
 		if block.Type != mcp.ContentTypeText || block.Text == "" {
 			continue
 		}
-		if err := h.pipeline.ProcessBlock(ctx, result.Tool.Name, block.Text,
+		if err := h.pipeline.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
 			result.Tool.Name, result.Tool.Version, kiqID, result.Tool.SourceName, result.Tool.SourceURL); err != nil {
 			logger.Warn().Err(err).Msg("pipeline.ProcessBlock error")
 			continue

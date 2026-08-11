@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +152,16 @@ func TestWeatherService_FetchesFromWttrIn(t *testing.T) {
 	assert.Contains(t, res.Blocks[0].Text, "Paris")
 	assert.Contains(t, res.Blocks[0].Text, "Clear")
 	assert.Contains(t, res.Blocks[0].Text, "19")
+
+	// The payload must include a `text` key so the event passes the
+	// Processor schema validator (RawEventEnvelope requires at least one
+	// of text/content/data/url). Without it every weather event is dropped.
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(res.Blocks[0].Text), &payload))
+	text, ok := payload["text"].(string)
+	require.True(t, ok, "weather payload must include a string `text` key")
+	assert.NotEmpty(t, text, "weather payload `text` must not be empty")
+	assert.Contains(t, text, "Paris")
 }
 
 func TestWeatherService_RateLimiterEnforcesInterval(t *testing.T) {
@@ -182,4 +193,100 @@ func TestFeedsService_InvokeReturnsBlocks(t *testing.T) {
 		harness.Permission{TenantID: "t"}, "", "t")
 	require.NoError(t, err)
 	assert.NotEmpty(t, res.Blocks)
+}
+
+// mockPluginError returns a test MCP plugin server that responds with
+// HTTP 400 "query argument required" on /sse (simulating a missing query
+// parameter) to test fan-out total-failure fallback behavior.
+func mockPluginError(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sse" {
+			http.Error(w, "query argument required", http.StatusBadRequest)
+			return
+		}
+		// tools/list
+		var req mcp.JSONRPCRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		result, _ := json.Marshal(mcp.ToolsListResult{Tools: []mcp.Tool{{Name: "search_news"}}})
+		resp := mcp.JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(result)}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+}
+
+// ─── Required-argument tests ────────────────────────────────────────────────
+
+func TestFeedsService_RequiresQuery(t *testing.T) {
+	cfg := ServiceConfig{}
+	h := harness.New(harness.DefaultConfig(), nil)
+	require.NoError(t, NewFeedsService(cfg).Register(h))
+
+	_, err := h.InvokeTool(context.Background(), "fetch_feed", nil,
+		harness.Permission{TenantID: "t"}, "", "t")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required argument")
+	assert.Contains(t, err.Error(), "query")
+}
+
+func TestNewsService_RequiresQuery(t *testing.T) {
+	cfg := ServiceConfig{}
+	h := harness.New(harness.DefaultConfig(), nil)
+	require.NoError(t, NewNewsService(cfg).Register(h))
+
+	_, err := h.InvokeTool(context.Background(), "search_news", nil,
+		harness.Permission{TenantID: "t"}, "", "t")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required argument")
+	assert.Contains(t, err.Error(), "query")
+}
+
+// ─── Fan-out failure tests ──────────────────────────────────────────────────
+
+func TestFanOutTool_EmitsPlaceholderWhenAllPluginsFail(t *testing.T) {
+	srv1 := mockPluginError(t)
+	defer srv1.Close()
+	srv2 := mockPluginError(t)
+	defer srv2.Close()
+
+	cfg := ServiceConfig{NewsRSSPluginURL: srv1.URL, ReutersPluginURL: srv2.URL}
+	h := harness.New(harness.DefaultConfig(), nil)
+	require.NoError(t, NewNewsService(cfg).Register(h))
+
+	res, err := h.InvokeTool(context.Background(), "search_news", map[string]any{"query": "test"},
+		harness.Permission{TenantID: "t"}, "", "t")
+	require.NoError(t, err)
+	require.Len(t, res.Blocks, 1)
+	assert.Contains(t, res.Blocks[0].Text, `"status":"unavailable"`)
+	assert.Contains(t, res.Blocks[0].Text, "all MCP plugins failed")
+}
+
+func TestFanOutTool_PartialFailureStillReturnsBlocks(t *testing.T) {
+	goodBlocks := []mcp.ContentBlock{{Type: mcp.ContentTypeText, Text: `{"title":"good","source_url":"https://ok/1"}`}}
+	goodSrv := mockPlugin(t, goodBlocks)
+	defer goodSrv.Close()
+	badSrv := mockPluginError(t)
+	defer badSrv.Close()
+
+	cfg := ServiceConfig{NewsRSSPluginURL: goodSrv.URL, ReutersPluginURL: badSrv.URL}
+	h := harness.New(harness.DefaultConfig(), nil)
+	require.NoError(t, NewNewsService(cfg).Register(h))
+
+	res, err := h.InvokeTool(context.Background(), "search_news", map[string]any{"query": "test"},
+		harness.Permission{TenantID: "t"}, "", "t")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(res.Blocks), 1)
+	// The good block should be present; no placeholder block.
+	hasGood := false
+	for _, b := range res.Blocks {
+		if b.Type == mcp.ContentTypeText && b.Text != "" {
+			if strings.Contains(b.Text, `"title":"good"`) {
+				hasGood = true
+			}
+			// Sanity-check: the placeholder fallback must not appear on
+			// partial failure.
+			assert.NotContains(t, b.Text, "all MCP plugins failed")
+		}
+	}
+	assert.True(t, hasGood, "expected at least one good block from the successful plugin")
 }

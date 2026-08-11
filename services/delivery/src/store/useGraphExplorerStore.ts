@@ -141,7 +141,7 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
       const contextUnits: ContextUnit[] = data.context_units ?? [];
 
       let nodes = customNodes;
-      let edges: CanvasEdge[] = relationships.map((r) => ({
+      const edges: CanvasEdge[] = relationships.map((r) => ({
         id: r.id,
         source: r.source_ref,
         target: r.target_ref,

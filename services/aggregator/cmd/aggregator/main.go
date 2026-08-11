@@ -126,7 +126,7 @@ func main() {
 				if block.Type != mcp.ContentTypeText || block.Text == "" {
 					continue
 				}
-				if err := pl.ProcessBlock(ctx, result.Tool.Name, block.Text,
+				if err := pl.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
 					result.Tool.Name, result.Tool.Version, "", result.Tool.SourceName, result.Tool.SourceURL); err != nil {
 					log.Warn().Str("tool", result.Tool.Name).Err(err).Msg("pipeline.ProcessBlock error from poller")
 				}
@@ -166,7 +166,7 @@ func main() {
 					if block.Type != mcp.ContentTypeText || block.Text == "" {
 						continue
 					}
-					if err := pl.ProcessBlock(ctx, result.Tool.Name, block.Text,
+					if err := pl.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
 						result.Tool.Name, result.Tool.Version, "", result.Tool.SourceName, result.Tool.SourceURL); err != nil {
 						log.Warn().Str("tool", result.Tool.Name).Err(err).Msg("pipeline.ProcessBlock error from watcher")
 					}

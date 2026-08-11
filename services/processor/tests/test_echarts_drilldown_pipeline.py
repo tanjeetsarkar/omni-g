@@ -23,19 +23,35 @@ def mock_neo4j_for_drilldown() -> MagicMock:
 
         # Determine query signature
         query_upper = query.upper()
-        if "APOC.PATH.SUBGRAPHNODES" in query_upper or "APOC.ALGO.PAGERANKWITHCONFIG" in query_upper:
-            # Step 1 / 2: apoc pagerank query returning context unit nodes
+        if "APOC.PATH.SUBGRAPHNODES" in query_upper:
+            # pagerank_subgraph Step 1: fetch k-hop subgraph nodes.
+            # Returns node_id/labels/text rows (ContextUnit + Entity nodes).
             mock_result.data.return_value = [
                 {
-                    "context_id": "ctx_123",
+                    "node_id": "ctx_123",
+                    "labels": ["ContextUnit"],
+                    "node_tenant": "default",
                     "text": "This is raw context about Johns Hopkins Hospital.",
-                    "score": 0.99,
                 },
                 {
-                    "context_id": "ctx_456",
+                    "node_id": "ctx_456",
+                    "labels": ["ContextUnit"],
+                    "node_tenant": "default",
                     "text": "Dr. Smith works in the Oncology Dept.",
-                    "score": 0.85,
                 },
+                {
+                    "node_id": "hospital_123",
+                    "labels": ["Entity"],
+                    "node_tenant": "default",
+                    "text": "",
+                },
+            ]
+        elif "A.ID AS SRC" in query_upper and "B.ID AS DST" in query_upper:
+            # pagerank_subgraph Step 2: fetch CO_OCCURRED_IN edges between
+            # the returned subgraph nodes.
+            mock_result.data.return_value = [
+                {"src": "hospital_123", "dst": "ctx_123"},
+                {"src": "hospital_123", "dst": "ctx_456"},
             ]
         elif "CO_OCCURRED_IN" in query_upper and "COLLECT(E.ID)" in query_upper:
             # Step 3: fetch co-occurring entity IDs for those context units

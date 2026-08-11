@@ -378,6 +378,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-omni-g-briefings}
       KOKORO_URL: ${KOKORO_URL:-http://kokoro-tts:8880}
       BRIEFING_PREFLIGHT_ENABLED: "true"
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://omni-g:omni-g-local-dev@postgres:5432/omni_g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -388,6 +389,8 @@ services:
       redis:
         condition: service_healthy
       neo4j:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
@@ -441,12 +444,15 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-omni-g-briefings}
       KOKORO_URL: ${KOKORO_URL:-http://kokoro-tts:8880}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://omni-g:omni-g-local-dev@postgres:5432/omni_g}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
       neo4j:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     profiles:
       - services
@@ -469,8 +475,11 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
       CELERY_TASK_ALWAYS_EAGER: "false"
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://omni-g:omni-g-local-dev@postgres:5432/omni_g}
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     profiles:
       - services

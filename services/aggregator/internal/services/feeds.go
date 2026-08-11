@@ -19,6 +19,7 @@ func (s *FeedsService) Name() string { return "feeds" }
 func (s *FeedsService) Register(h *harness.Harness) error {
 	schema := []byte(`{
 		"type": "object",
+		"required": ["query"],
 		"properties": {
 			"query": {"type": "string", "description": "Feed topic or source query"}
 		}
@@ -26,7 +27,7 @@ func (s *FeedsService) Register(h *harness.Harness) error {
 	tool := newMCPPluginTool(
 		"fetch_feed",
 		"RSS Feeds",
-		"",
+		"https://newsrss.omni-g.internal",
 		s.cfg.NewsRSSPluginURL,
 		"search_news",
 		harness.RiskLow,

@@ -7,11 +7,13 @@ import { useGraphExplorerStore } from "../../store/useGraphExplorerStore";
 /**
  * V4 Track 1: top-center floating frosted-glass search pill.
  *
- * Enter triggers `store.executeQuery()`, which purges stale canvas state and
- * issues a fresh /api/query request. The pill floats above the ECharts canvas
- * with a backdrop blur so the graph remains visible underneath.
+ * Enter triggers `store.executeQuery()` (graph retrieval via /api/query) and,
+ * when an `onSubmit` callback is provided, also notifies the parent page so
+ * it can fire the background /api/search ingestion trigger and manage the
+ * pipeline progress toast + search history. The pill floats above the
+ * ECharts canvas with a backdrop blur so the graph remains visible underneath.
  */
-export function FloatingSearchBar() {
+export function FloatingSearchBar({ onSubmit }: { onSubmit?: () => void }) {
   const query = useGraphExplorerStore((s) => s.query);
   const setQuery = useGraphExplorerStore((s) => s.setQuery);
   const executeQuery = useGraphExplorerStore((s) => s.executeQuery);
@@ -22,9 +24,10 @@ export function FloatingSearchBar() {
     (e: KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
         void executeQuery();
+        onSubmit?.();
       }
     },
-    [executeQuery],
+    [executeQuery, onSubmit],
   );
 
   return (

@@ -146,6 +146,21 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	return nil
 }
 
+// SourceForTool returns a valid HTTP(S) URL suitable for the validation
+// sidecar's `source` field. It prefers the tool descriptor's SourceURL; when
+// that is empty it falls back to a synthetic but valid URL keyed on the tool
+// name so the Processor's strict URL validator never rejects the event.
+//
+// The validation sidecar (Processor /validate) requires `source` to be a
+// valid HTTP(S) URL — passing the tool *name* (e.g. "web_search") causes a
+// 422 rejection and drops the event before it reaches Kafka.
+func SourceForTool(toolName, toolSourceURL string) string {
+	if toolSourceURL != "" {
+		return toolSourceURL
+	}
+	return "https://omni-g.internal/tool/" + toolName
+}
+
 // ProcessBlock parses a ContentBlock's text as a JSON payload and forwards it
 // to Process. Malformed JSON is dropped and logged.
 // kiqID is the optional Key Intelligence Question reference that tasked this

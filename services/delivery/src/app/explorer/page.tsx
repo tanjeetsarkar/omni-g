@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
-  Search,
   Loader,
   Hexagon,
   ShieldAlert,
@@ -19,14 +18,8 @@ import { SourceTraceDrawer } from "../../components/drawer/SourceTraceDrawer";
 import { FloatingSearchBar } from "../../components/controls/FloatingSearchBar";
 import { SettingsGearPanel } from "../../components/controls/SettingsGearPanel";
 import { useGraphExplorerStore } from "../../store/useGraphExplorerStore";
-import {
-  transformToEChartsData,
-  EvidenceNode,
-  EvidenceEdge,
-} from "../../components/canvas/useEChartsGraphAdapter";
+import { transformToEChartsData } from "../../components/canvas/useEChartsGraphAdapter";
 import type {
-  Entity,
-  Relationship,
   SearchResponse,
   ContextUnit,
   TrendingEntity,
@@ -51,40 +44,21 @@ export function ExplorerContent() {
   const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? "default";
 
   // V4 Track 1: canvas state lives in the Zustand store (single source of
-  // truth for nodes/edges/selectedNode). The page retains UI-only state
-  // (search input, toast, trending, history) that the store does not own.
+  // truth for query, nodes/edges/selectedNode). The page retains UI-only
+  // state (toast, trending, history, context units for BLUF) that the store
+  // does not own. The floating search bar reads/writes `store.query` and
+  // calls `store.executeQuery()` for graph retrieval; the page wires the
+  // background /api/search ingestion trigger + toast/history around it.
+  const storeQuery = useGraphExplorerStore((s) => s.query);
+  const storeSetQuery = useGraphExplorerStore((s) => s.setQuery);
+  const storeExecuteQuery = useGraphExplorerStore((s) => s.executeQuery);
   const storeNodes = useGraphExplorerStore((s) => s.nodes);
   const storeEdges = useGraphExplorerStore((s) => s.edges);
-  const storeClearCanvas = useGraphExplorerStore((s) => s.clearCanvas);
   const storeMergeRealtime = useGraphExplorerStore((s) => s.mergeRealtime);
   const storeSelectNode = useGraphExplorerStore((s) => s.selectNode);
   const storeSetTenantId = useGraphExplorerStore((s) => s.setTenantId);
-  const storeDepth = useGraphExplorerStore((s) => s.depth);
-  const storeThreshold = useGraphExplorerStore((s) => s.relevanceThreshold);
+  const storeIsLoading = useGraphExplorerStore((s) => s.isLoading);
 
-  // Derive EvidenceNode/EvidenceEdge arrays from the store for the adapter.
-  const evidenceNodes: EvidenceNode[] = storeNodes.map((n) => ({
-    id: n.id,
-    label: n.entity_name,
-    type: n.entity_type,
-    score: n.confidence_score,
-    depth: n.depth ?? 0,
-    raw_text: n.raw_context?.snippet_text,
-    source_id: n.source.source_url ?? undefined,
-    created_at: n.source.ingested_at,
-    source_name: n.source.source_name,
-    source_url: n.source.source_url ?? undefined,
-    plugin_name: n.source.mcp_plugin_name ?? undefined,
-    sub_entity_count: n.sub_entity_count,
-  }));
-  const evidenceEdges: EvidenceEdge[] = storeEdges.map((e) => ({
-    id: e.id,
-    source_id: e.source,
-    target_id: e.target,
-    weight: e.weight,
-  }));
-
-  const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [submitting, setSubmitting] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -180,6 +154,13 @@ export function ExplorerContent() {
     }
   }, [newEntities, newRelationships, storeMergeRealtime, clearNewEntities]);
 
+  // runSearch is the single entry point for a user-initiated search. It:
+  //   1. syncs the query into the store,
+  //   2. delegates graph retrieval to `store.executeQuery()` (/api/query),
+  //   3. fires the background /api/search ingestion trigger,
+  //   4. manages the pipeline progress toast + search history.
+  // The store owns the canvas state (nodes/edges/selectedNode); the page
+  // owns the ingestion trigger + toast/history UI state.
   const runSearch = useCallback(
     async (q: string) => {
       const trimmed = q.trim();
@@ -188,101 +169,37 @@ export function ExplorerContent() {
       setSearchError(null);
       setErrorDetail(null);
       setCurrentSearchQuery(trimmed);
+      storeSetQuery(trimmed);
 
-      // V4 Track 1: purge stale canvas state via the store before fetching.
-      storeClearCanvas();
+      // Delegate graph retrieval to the store (purges stale canvas + fetches
+      // /api/query). Await it so we can surface retrieval errors and know the
+      // node count for search history.
+      await storeExecuteQuery();
 
+      // Surface any store-level retrieval error.
+      const storeErr = useGraphExplorerStore.getState().error;
+      if (storeErr) {
+        setSearchError(storeErr);
+        setErrorDetail(storeErr);
+        setToastState("error");
+        setSubmitting(false);
+        return;
+      }
+
+      const nodeCount = useGraphExplorerStore.getState().nodes.length;
+
+      // Pull context units from the store for the BLUF strip.
+      setContextUnits(useGraphExplorerStore.getState().contextUnits);
+
+      // ── B4: Add to search history ──
+      addSearch(trimmed, nodeCount);
+
+      // Transition layout/toast to running state
+      setToastState("running");
+
+      // ── Active Tasked Synthesis: Trigger background on-demand ingestion ────────────────
+      // Sends search request to Aggregator to query remote MCP plugins and generate raw Kafka events.
       try {
-        const res = await fetch("/api/query", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: trimmed,
-            tenant_id: tenantId,
-            limit: 50,
-            relevance_threshold: storeThreshold,
-            traversal_depth: storeDepth,
-          }),
-        });
-
-        if (!res.ok) {
-          const err: { error?: string } = await res.json().catch(() => ({}));
-          const errMsg = err.error ?? `Graph query failed: HTTP ${res.status}`;
-          setSearchError(errMsg);
-          setErrorDetail(errMsg);
-          setToastState("error");
-          return;
-        }
-
-        const data: SearchResponse & { context_units?: ContextUnit[] } =
-          await res.json();
-        const ctxUnits = data.context_units || [];
-
-        // V4 Track 1: write results into the Zustand store. Prefer the
-        // structured `nodes` payload; fall back to mapping legacy entities.
-        const customNodes = (data.nodes ?? []).map((n: CustomNodeResponse) => ({
-          ...n,
-          depth: 0,
-        }));
-        const relationships = data.relationships || [];
-        const entities = data.entities || [];
-
-        let nodes = customNodes;
-        if (nodes.length === 0 && entities.length > 0) {
-          nodes = entities.map((e) => {
-            const ctx = ctxUnits.find((c) => c.entity_ids?.includes(e.id));
-            return {
-              id: e.id,
-              entity_name: e.name,
-              entity_type: e.type,
-              sub_entity_count: relationships.filter(
-                (r) => r.source_ref === e.id || r.target_ref === e.id,
-              ).length,
-              confidence_score: e.confidence,
-              source: {
-                source_name:
-                  ctx?.text?.slice(0, 40) || e.source_id || "unknown",
-                source_url: null,
-                ingested_at: e.created,
-                mcp_plugin_name: null,
-              },
-              raw_context: ctx
-                ? {
-                    snippet_text: ctx.text,
-                    char_offset_start: 0,
-                    char_offset_end: ctx.text.length,
-                    document_id: ctx.context_id,
-                  }
-                : null,
-              depth: 0,
-            };
-          });
-        }
-        const edges = relationships.map((r) => ({
-          id: r.id,
-          source: r.source_ref,
-          target: r.target_ref,
-          weight: r.confidence,
-        }));
-
-        useGraphExplorerStore.setState({
-          nodes,
-          edges,
-          entities,
-          relationships,
-          contextUnits: ctxUnits,
-          selectedNode: null,
-        });
-        setContextUnits(ctxUnits);
-
-        // ── B4: Add to search history ──
-        addSearch(trimmed, nodes.length);
-
-        // Transition layout/toast to running state
-        setToastState("running");
-
-        // ── Active Tasked Synthesis: Trigger background on-demand ingestion ────────────────
-        // Sends search request to Aggregator to query remote MCP plugins and generate raw Kafka events.
         const searchRes = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -292,22 +209,21 @@ export function ExplorerContent() {
         if (!searchRes.ok) {
           const searchErr = await searchRes.json().catch(() => ({}));
           const errMsg =
-            searchErr.error ??
+            (searchErr as { error?: string }).error ??
             `Background search failed: HTTP ${searchRes.status}`;
           setErrorDetail(errMsg);
           setToastState("error");
         }
       } catch (err) {
         const errMsg =
-          err instanceof Error ? err.message : "Graph query failed";
-        setSearchError(errMsg);
+          err instanceof Error ? err.message : "Background search failed";
         setErrorDetail(errMsg);
         setToastState("error");
       } finally {
         setSubmitting(false);
       }
     },
-    [tenantId, storeThreshold, storeDepth, storeClearCanvas, addSearch],
+    [storeSetQuery, storeExecuteQuery, addSearch],
   );
 
   const handleRefreshGraph = useCallback(() => {
@@ -329,13 +245,6 @@ export function ExplorerContent() {
       runSearch(initialQuery);
     }
   }, [initialQuery, runSearch]);
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    router.replace(`/explorer?q=${encodeURIComponent(searchQuery)}`);
-    runSearch(searchQuery);
-  };
 
   // Node Selection callback — V4 Track 1: selection lives in the Zustand store.
   const handleNodeSelect = (node: EChartsNode) => {
@@ -379,7 +288,7 @@ export function ExplorerContent() {
 
   // Double Click / Drill down dynamic expansion callback
   const handleNodeDrillDown = async (nodeId: string) => {
-    const existingNode = evidenceNodes.find((n) => n.id === nodeId);
+    const existingNode = storeNodes.find((n) => n.id === nodeId);
     const nextDepth = (existingNode?.depth ?? 0) + 1;
 
     try {
@@ -439,13 +348,37 @@ export function ExplorerContent() {
     }
   };
 
-  const { nodes, links } = transformToEChartsData(evidenceNodes, evidenceEdges);
+  // Transform store nodes/edges directly into ECharts format. The store is
+  // the single source of truth — no redundant intermediate derivation.
+  const { nodes, links } = transformToEChartsData(
+    storeNodes.map((n) => ({
+      id: n.id,
+      label: n.entity_name,
+      type: n.entity_type,
+      score: n.confidence_score,
+      depth: n.depth ?? 0,
+      raw_text: n.raw_context?.snippet_text,
+      source_id: n.source.source_url ?? undefined,
+      created_at: n.source.ingested_at,
+      source_name: n.source.source_name,
+      source_url: n.source.source_url ?? undefined,
+      plugin_name: n.source.mcp_plugin_name ?? undefined,
+      sub_entity_count: n.sub_entity_count,
+    })),
+    storeEdges.map((e) => ({
+      id: e.id,
+      source_id: e.source,
+      target_id: e.target,
+      weight: e.weight,
+    })),
+  );
 
   const hasResults = nodes.length > 0;
+  const showEmptyState = !hasResults && !submitting && !storeIsLoading;
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-slate-100 overflow-hidden">
-      {/* Header */}
+      {/* Header — logo + notification bell only. Search lives in the floating bar. */}
       <header className="flex items-center gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-800/80 shrink-0 select-none">
         <div
           className="flex items-center gap-2 cursor-pointer"
@@ -461,42 +394,7 @@ export function ExplorerContent() {
           </span>
         </div>
 
-        <div className="w-px h-5 bg-slate-800 shrink-0" />
-
-        <form
-          onSubmit={handleSearchSubmit}
-          className="flex items-center gap-1.5 flex-1 min-w-0"
-          aria-label="Search zero-mem graph"
-        >
-          <div className="relative flex-1 min-w-0 max-w-lg">
-            <Search
-              size={13}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
-            />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Query general intelligence topics directly..."
-              className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs
-                         placeholder-slate-500 rounded-lg pl-7 pr-3 py-1.5
-                         focus:outline-none focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/20"
-              disabled={submitting}
-              autoFocus
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={!searchQuery.trim() || submitting}
-            className="flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 transition-colors text-white font-medium text-xs rounded-lg px-3 py-1.5"
-          >
-            {submitting ? (
-              <Loader size={12} className="animate-spin text-slate-400" />
-            ) : (
-              "Explore"
-            )}
-          </button>
-        </form>
+        <div className="flex-1" />
 
         {/* ── B7: Notification bell ── */}
         <NotificationBell />
@@ -520,7 +418,12 @@ export function ExplorerContent() {
           </div>
         )}
 
-        {!hasResults && !submitting ? (
+        {/* V4 Track 1: floating Figma-style controls are always mounted so
+            the user can search from both the empty state and the canvas. */}
+        <FloatingSearchBar onSubmit={() => runSearch(storeQuery)} />
+        <SettingsGearPanel />
+
+        {showEmptyState ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-950 text-center space-y-3 z-0">
             <Layers size={36} className="text-slate-700 animate-bounce" />
             <h2 className="text-slate-300 font-semibold text-sm">
@@ -546,7 +449,6 @@ export function ExplorerContent() {
                     <button
                       key={`${entry.query}-${entry.timestamp}`}
                       onClick={() => {
-                        setSearchQuery(entry.query);
                         router.replace(
                           `/explorer?q=${encodeURIComponent(entry.query)}`,
                         );
@@ -575,7 +477,6 @@ export function ExplorerContent() {
                     <button
                       key={entity.id}
                       onClick={() => {
-                        setSearchQuery(entity.name);
                         router.replace(
                           `/explorer?q=${encodeURIComponent(entity.name)}`,
                         );
@@ -604,9 +505,6 @@ export function ExplorerContent() {
           </div>
         ) : (
           <div className="flex-1 h-full w-full relative">
-            {/* V4 Track 1: floating Figma-style controls */}
-            <FloatingSearchBar />
-            <SettingsGearPanel />
             <EChartsGraphCanvas
               nodes={nodes}
               links={links}

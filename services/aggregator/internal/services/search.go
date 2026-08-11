@@ -27,7 +27,7 @@ func (s *SearchService) Register(h *harness.Harness) error {
 	tool := newFanOutTool(
 		"web_search",
 		"Web Search",
-		"",
+		"https://wikipedia.org",
 		harness.RiskLow,
 		schema,
 		mcpPluginTarget{pluginURL: s.cfg.WikipediaPluginURL, toolName: "fetch_wikipedia_article"},

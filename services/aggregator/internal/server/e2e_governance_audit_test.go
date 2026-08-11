@@ -112,7 +112,7 @@ func TestE2EGovernanceAudit_AggregatorPipeline(t *testing.T) {
 				if block.Type != mcp.ContentTypeText || block.Text == "" {
 					continue
 				}
-				_ = pl.ProcessBlock(ctx, result.Tool.Name, block.Text,
+				_ = pl.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
 					result.Tool.Name, result.Tool.Version, "", result.Tool.SourceName, result.Tool.SourceURL)
 			}
 			return nil
@@ -133,10 +133,31 @@ func TestE2EGovernanceAudit_AggregatorPipeline(t *testing.T) {
 	// Give the server a moment to bind.
 	time.Sleep(100 * time.Millisecond)
 
-	// ── Wait for the poller to publish at least one event ────────────────
+	// ── Invoke a query-based governed tool explicitly to drive an event ──
+	// The poller only polls tools without required params (fetch_weather),
+	// which calls the real wttr.in API and is flaky in CI. To make the audit
+	// deterministic, invoke search_news (a fan-out tool backed by the mock
+	// plugin) directly through the 9-stage harness with a query argument,
+	// then forward the resulting blocks through the pipeline.
+	go func() {
+		res, err := h.InvokeTool(ctx, "search_news", map[string]any{"query": "audit"},
+			harness.Permission{TenantID: "audit-tenant"}, "", "audit-tenant")
+		if err != nil {
+			return
+		}
+		for _, block := range res.Blocks {
+			if block.Type != mcp.ContentTypeText || block.Text == "" {
+				continue
+			}
+			_ = pl.ProcessBlock(ctx, pipeline.SourceForTool(res.Tool.Name, res.Tool.SourceURL), block.Text,
+				res.Tool.Name, res.Tool.Version, "", res.Tool.SourceName, res.Tool.SourceURL)
+		}
+	}()
+
+	// ── Wait for the explicit invocation to publish at least one event ────
 	require.Eventually(t, func() bool {
 		return len(pub.events) > 0
-	}, 700*time.Millisecond, 50*time.Millisecond, "poller should have published at least one event")
+	}, 700*time.Millisecond, 50*time.Millisecond, "explicit tool invocation should have published at least one event")
 
 	cancel()
 	_ = supervisor.Stop()

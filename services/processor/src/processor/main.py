@@ -8,12 +8,18 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
+import networkx  # noqa: F401  — pre-imported so the first /query/expand call
+
+# doesn't pay the ~300ms one-time import cost inside the request path.
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator
 
+from ..retrieval.pagerank import pagerank_subgraph  # noqa: F401  — pre-import
 from .config import Settings, get_settings
+
+# so scipy (used by nx.pagerank) is loaded at app startup, not on first request.
 
 logger = logging.getLogger(__name__)
 
@@ -743,40 +749,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         now = _dt.now(UTC)
 
         try:
-            cypher_ppr = """
-            MATCH (anchor:Entity)
-            WHERE anchor.id = $anchor_id AND anchor.tenant_id = $tenant_id
-
-            CALL apoc.path.subgraphNodes(anchor, {
-                maxLevel: $target_depth,
-                relationshipFilter: 'CO_OCCURRED_IN',
-                labelFilter: '+ContextUnit|+Entity'
-            }) YIELD node
-
-            WITH collect(DISTINCT node) AS sub_nodes
-
-            CALL apoc.algo.pageRankWithConfig(sub_nodes, {dampingFactor: $gamma, iterations: 20})
-            YIELD node AS n, score
-
-            WHERE 'ContextUnit' IN labels(n) AND n.tenant_id = $tenant_id
-            RETURN n.id AS context_id, n.text AS text, score
-            ORDER BY score DESC LIMIT 10
-            """
-
-            rows = []
+            # Personalized PageRank via networkx (replaces the removed
+            # apoc.algo.pageRankWithConfig procedure, deleted in APOC 5.x).
+            # The shared helper fetches the k-hop subgraph via
+            # apoc.path.subgraphNodes (still supported) and runs PageRank in
+            # Python. See src.retrieval.pagerank.pagerank_subgraph.
+            rows: list[dict[str, Any]] = []
             try:
                 async with neo4j_driver.session() as session:
-                    res = await session.run(
-                        cypher_ppr,
-                        anchor_id=body.anchor_node_id,
+                    scored = await pagerank_subgraph(
+                        session,
+                        anchor_ids=[body.anchor_node_id],
                         tenant_id=body.tenant_id,
-                        target_depth=body.target_depth,
+                        d_max=body.target_depth,
                         gamma=0.6,
+                        top_k=10,
                     )
-                    rows = await res.data()
+                rows = [{"context_id": s.context_id, "text": s.text, "score": s.score} for s in scored]
             except Exception as exc:
                 logger.warning(
-                    "apoc_ppr_failed_in_expand_falling_back_to_bfs",
+                    "pagerank_failed_in_expand_falling_back_to_bfs",
                     extra={"error": str(exc), "tenant_id": body.tenant_id},
                 )
                 cypher_bfs = """

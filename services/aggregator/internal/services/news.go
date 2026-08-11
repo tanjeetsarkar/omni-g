@@ -19,6 +19,7 @@ func (s *NewsService) Name() string { return "news" }
 func (s *NewsService) Register(h *harness.Harness) error {
 	schema := []byte(`{
 		"type": "object",
+		"required": ["query"],
 		"properties": {
 			"query": {"type": "string", "description": "News search query"}
 		}
@@ -26,7 +27,7 @@ func (s *NewsService) Register(h *harness.Harness) error {
 	tool := newFanOutTool(
 		"search_news",
 		"News RSS",
-		"",
+		"https://newsrss.omni-g.internal",
 		harness.RiskLow,
 		schema,
 		mcpPluginTarget{pluginURL: s.cfg.NewsRSSPluginURL, toolName: "search_news"},

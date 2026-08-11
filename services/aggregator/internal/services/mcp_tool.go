@@ -106,12 +106,14 @@ func (t *fanOutTool) Invoke(ctx context.Context, args map[string]any) (<-chan mc
 	ch := make(chan mcp.ContentBlock, 32)
 	go func() {
 		defer close(ch)
+		emitted := 0
 		for _, p := range t.plugins {
 			if p.pluginURL == "" {
 				ch <- mcp.ContentBlock{
 					Type: mcp.ContentTypeText,
 					Text: placeholderJSON(t.descriptor.Name, "MCP plugin not configured"),
 				}
+				emitted++
 				continue
 			}
 			client := mcp.NewClient(p.pluginURL)
@@ -124,9 +126,19 @@ func (t *fanOutTool) Invoke(ctx context.Context, args map[string]any) (<-chan mc
 			for block := range stream {
 				select {
 				case ch <- block:
+					emitted++
 				case <-ctx.Done():
 					return
 				}
+			}
+		}
+		// If no plugin produced any content, emit a placeholder gap block
+		// so the harness normalize stage produces a valid event instead of
+		// failing with "no content blocks to normalize".
+		if emitted == 0 {
+			ch <- mcp.ContentBlock{
+				Type: mcp.ContentTypeText,
+				Text: placeholderJSON(t.descriptor.Name, "all MCP plugins failed or returned no content"),
 			}
 		}
 	}()

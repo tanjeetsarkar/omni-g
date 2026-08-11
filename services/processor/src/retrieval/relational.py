@@ -156,9 +156,7 @@ class RelationalRetriever:
     # Step 1: Entity alignment via Qdrant cosine
     # ------------------------------------------------------------------
 
-    async def _align_entities(
-        self, profile: QueryProfile, tenant_id: str, top_k: int = 10
-    ) -> list[str]:
+    async def _align_entities(self, profile: QueryProfile, tenant_id: str, top_k: int = 10) -> list[str]:
         """Find anchor Entity IDs via cosine similarity in the entities Qdrant collection."""
         anchor_texts = profile.anchor_texts or [profile.query]
         collection_name = f"entities_{tenant_id}"
@@ -185,11 +183,7 @@ class RelationalRetriever:
                 query_vector=vector,
                 limit=top_k,
             )
-            return [
-                str(h.payload["entity_id"])
-                for h in hits
-                if h.payload and h.payload.get("entity_id")
-            ]
+            return [str(h.payload["entity_id"]) for h in hits if h.payload and h.payload.get("entity_id")]
         except Exception:
             logger.exception("entity_alignment_failed", extra={"tenant_id": tenant_id})
             return []
@@ -246,45 +240,24 @@ class RelationalRetriever:
             extra={"cache_key": cache_key, "tenant_id": tenant_id},
         )
 
-        # ── Compute PPR via APOC ───────────────────────────────────────────
-        cypher = """
-        MATCH (anchor:Entity)
-        WHERE anchor.id IN $anchor_ids AND anchor.tenant_id = $tenant_id
+        # ── Compute PPR via networkx (replaces removed APOC procedure) ────
+        # apoc.algo.pageRankWithConfig was deleted in APOC 5.x; we now fetch
+        # the k-hop subgraph via apoc.path.subgraphNodes (still supported) and
+        # run Personalized PageRank in Python via networkx. See
+        # src.retrieval.pagerank.pagerank_subgraph for the shared helper.
+        from .pagerank import pagerank_subgraph
 
-        CALL apoc.path.subgraphNodes(anchor, {
-            maxLevel: $d_max,
-            relationshipFilter: 'CO_OCCURRED_IN',
-            labelFilter: '+ContextUnit|+Entity'
-        }) YIELD node
-
-        WITH collect(DISTINCT node) AS sub_nodes
-
-        CALL apoc.algo.pageRankWithConfig(sub_nodes, {dampingFactor: $gamma, iterations: 20})
-        YIELD node AS n, score
-
-        WHERE 'ContextUnit' IN labels(n) AND n.tenant_id = $tenant_id
-        RETURN n.id AS context_id, n.text AS text, score
-        ORDER BY score DESC LIMIT $top_k
-        """
         async with self._driver.session() as session:
-            result = await session.run(
-                cypher,
+            rows = await pagerank_subgraph(
+                session,
                 anchor_ids=anchor_ids,
                 tenant_id=tenant_id,
                 d_max=d_max,
                 gamma=0.6,
                 top_k=top_k,
             )
-            rows = await result.data()
 
-        results = [
-            ScoredContext(
-                context_id=row["context_id"],
-                score=float(row["score"]),
-                text=row.get("text") or "",
-            )
-            for row in rows
-        ]
+        results = rows
 
         # ── Store in Redis cache ───────────────────────────────────────────
         if redis_client is not None and results:
