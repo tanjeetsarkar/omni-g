@@ -17,18 +17,6 @@ type Config struct {
 	KafkaBatchTimeoutMs  int      `mapstructure:"KAFKA_BATCH_TIMEOUT_MS"`
 	ValidationServiceURL string   `mapstructure:"VALIDATION_SERVICE_URL"`
 
-	// MCP / Scheduler
-	// MCPPluginURLs is the comma-separated list of MCP plugin server base URLs
-	// the scheduler will poll (e.g. "http://echo:8090,http://shodan:8091").
-	MCPPluginURLs       []string `mapstructure:"MCP_PLUGIN_URLS"`
-	SchedulerIntervalMs int      `mapstructure:"SCHEDULER_INTERVAL_MS"`
-
-	// OSINT search plugin URLs (used by SearchHandler for on-demand queries).
-	WikipediaPluginURL string `mapstructure:"WIKIPEDIA_PLUGIN_URL"`
-	WikidataPluginURL  string `mapstructure:"WIKIDATA_PLUGIN_URL"`
-	NewsRSSPluginURL   string `mapstructure:"NEWSRSS_PLUGIN_URL"`
-	ReutersPluginURL   string `mapstructure:"REUTERS_PLUGIN_URL"`
-
 	// DLQTopic is the Kafka topic for dead-lettered events.
 	// Unused in M3.1; wired in M3.4.
 	DLQTopic string `mapstructure:"KAFKA_DLQ_TOPIC"`
@@ -60,6 +48,26 @@ type Config struct {
 	// WatcherArgs is an optional JSON-encoded argument map passed to the
 	// watcher tool on each (re)connect (e.g. {"query":"breaking news"}).
 	WatcherArgs string `mapstructure:"WATCHER_ARGS"`
+
+	// ── Mu / Agentic Router ──────────────────────────────────────────────
+	// MuMCPURL is the MCP endpoint of the micro/mu sidecar.
+	MuMCPURL string `mapstructure:"MU_MCP_URL"`
+	// MuEnabled controls whether mu tool discovery runs on startup.
+	MuEnabled bool `mapstructure:"MU_ENABLED"`
+	// ToolsConfigPath is the path to the YAML/JSON tool registry config.
+	ToolsConfigPath string `mapstructure:"TOOLS_CONFIG_PATH"`
+	// OpenRouterAPIKey is the API key for OpenRouter (used by AgenticRouter).
+	OpenRouterAPIKey string `mapstructure:"OPENROUTER_API_KEY"`
+	// OpenRouterModel is the model used for tool selection routing.
+	OpenRouterModel string `mapstructure:"OPENROUTER_MODEL"`
+	// RouterMaxTools caps the number of tools the router can select per query.
+	RouterMaxTools int `mapstructure:"ROUTER_MAX_TOOLS"`
+	// RouterTimeoutMs caps the router LLM call duration.
+	RouterTimeoutMs int `mapstructure:"ROUTER_TIMEOUT_MS"`
+	// AgentQueries is a comma-separated list of standing queries for QueryAgent.
+	AgentQueries string `mapstructure:"AGENT_QUERIES"`
+	// AgentQueryIntervalMs is the interval between QueryAgent query cycles.
+	AgentQueryIntervalMs int `mapstructure:"AGENT_QUERY_INTERVAL_MS"`
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -73,14 +81,8 @@ func Load() (*Config, error) {
 	v.SetDefault("KAFKA_PRODUCER_BATCH_SIZE", 100)
 	v.SetDefault("KAFKA_BATCH_TIMEOUT_MS", 1000)
 	v.SetDefault("VALIDATION_SERVICE_URL", "http://localhost:8001")
-	v.SetDefault("MCP_PLUGIN_URLS", "")
-	v.SetDefault("SCHEDULER_INTERVAL_MS", 30000)
 	v.SetDefault("KAFKA_DLQ_TOPIC", "raw-feed.dlq")
 	v.SetDefault("TENANT_ID", "default")
-	v.SetDefault("WIKIPEDIA_PLUGIN_URL", "")
-	v.SetDefault("WIKIDATA_PLUGIN_URL", "")
-	v.SetDefault("NEWSRSS_PLUGIN_URL", "")
-	v.SetDefault("REUTERS_PLUGIN_URL", "")
 
 	// V4 Track 3: harness & agent defaults.
 	v.SetDefault("HARNESS_INVOKE_TIMEOUT_MS", 30000)
@@ -94,6 +96,17 @@ func Load() (*Config, error) {
 	v.SetDefault("WATCHER_TOOL", "search_news")
 	v.SetDefault("WATCHER_ARGS", "")
 
+	// ── Mu / Agentic Router defaults ────────────────────────────────────
+	v.SetDefault("MU_MCP_URL", "http://localhost:8080/mcp")
+	v.SetDefault("MU_ENABLED", true)
+	v.SetDefault("TOOLS_CONFIG_PATH", "tools.yaml")
+	v.SetDefault("OPENROUTER_API_KEY", "")
+	v.SetDefault("OPENROUTER_MODEL", "openrouter/free")
+	v.SetDefault("ROUTER_MAX_TOOLS", 5)
+	v.SetDefault("ROUTER_TIMEOUT_MS", 30000)
+	v.SetDefault("AGENT_QUERIES", "")
+	v.SetDefault("AGENT_QUERY_INTERVAL_MS", 300000) // 5 min default
+
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
@@ -106,19 +119,6 @@ func Load() (*Config, error) {
 	if len(cfg.KafkaBrokers) == 1 && strings.Contains(cfg.KafkaBrokers[0], ",") {
 		cfg.KafkaBrokers = strings.Split(cfg.KafkaBrokers[0], ",")
 	}
-
-	// MCP_PLUGIN_URLS may arrive as a comma-separated string from env.
-	if len(cfg.MCPPluginURLs) == 1 && strings.Contains(cfg.MCPPluginURLs[0], ",") {
-		cfg.MCPPluginURLs = strings.Split(cfg.MCPPluginURLs[0], ",")
-	}
-	// Filter empty strings (e.g. when the env var is unset / "").
-	filtered := cfg.MCPPluginURLs[:0]
-	for _, u := range cfg.MCPPluginURLs {
-		if u != "" {
-			filtered = append(filtered, u)
-		}
-	}
-	cfg.MCPPluginURLs = filtered
 
 	return cfg, nil
 }

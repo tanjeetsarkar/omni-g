@@ -97,6 +97,12 @@ CONTEXT_UNIT_PERSIST_FAILURES_TOTAL = Counter(
     "ContextUnit graph persistence failures (fail-open — pipeline continues without context node)",
 )
 
+ENTITIES_DROPPED_NO_PROVENANCE = Counter(
+    "processor_entities_dropped_no_provenance_total",
+    "Entities dropped because source_id is missing or empty (Phase 4 provenance enforcement)",
+    ["tenant_id"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Event envelope schema
@@ -116,6 +122,9 @@ class RawEventEnvelope(BaseModel):
     # every RawEvent; source_name defaults to plugin_name upstream.
     source_name: str | None = None
     source_url: str | None = None
+    # V4: search correlation ID that binds this event to a user-initiated
+    # /search or /enrich request. Empty for autonomous collection events.
+    search_id: str | None = None
 
     model_config = {"extra": "allow"}
 
@@ -164,7 +173,7 @@ class ProcessingPipeline:
         self._alert_publisher = alert_publisher
         self._stage_publisher = stage_publisher
 
-    async def process(self, event: dict[str, Any]) -> ExtractionResult | None:
+    async def process(self, event: dict[str, Any], search_id: str | None = None) -> ExtractionResult | None:
         logger.info("pipeline_run_start", extra={"event_id": event.get("id", ""), "tenant_id": event.get("tenant_id", "default")})
 
         # ── Step 1: Schema validation ──────────────────────────────────────
@@ -174,6 +183,7 @@ class ProcessingPipeline:
                 event.get("tenant_id", "default"),
                 "schema_validation",
                 "active",
+                search_id=search_id,
             )
         t0 = time.monotonic()
         try:
@@ -187,11 +197,11 @@ class ProcessingPipeline:
             raise SchemaViolationError(str(exc)) from exc
         PIPELINE_STAGE_DURATION.labels(stage="schema_validation").observe(time.monotonic() - t0)
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "schema_validation", "done")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "schema_validation", "done", search_id=search_id)
 
         # ── Step 2: Deduplication ──────────────────────────────────────────
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "deduplication", "active")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "deduplication", "active", search_id=search_id)
         t0 = time.monotonic()
         dedup_result = await self._deduplicator.check_and_set(envelope.tenant_id, event)
         PIPELINE_STAGE_DURATION.labels(stage="deduplication").observe(time.monotonic() - t0)
@@ -203,11 +213,11 @@ class ProcessingPipeline:
             )
             return None
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "deduplication", "done")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "deduplication", "done", search_id=search_id)
 
         # ── Step 3: ZeroMem extraction ─────────────────────────────────────
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "active")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "active", search_id=search_id)
         t0 = time.monotonic()
         text: str = str(envelope.payload.get("text") or envelope.payload.get("content", ""))
         now = datetime.now(UTC)
@@ -246,6 +256,14 @@ class ProcessingPipeline:
                 "plugin_version": envelope.plugin_version,
             }
         )
+
+        # ── V4: Propagate provenance from envelope to every extracted entity ──
+        # ZeroMemExtractor does not set source_id (it has no access to the
+        # envelope).  We stamp every entity with the envelope's source URL
+        # so the provenance gate and downstream consumers have a valid reference.
+        source_id = envelope.source or envelope.source_url or envelope.plugin_name or ""
+        if source_id:
+            extraction = extraction.model_copy(update={"entities": [e.model_copy(update={"source_id": source_id}) for e in extraction.entities]})
         PIPELINE_STAGE_DURATION.labels(stage="ner_extraction").observe(time.monotonic() - t0)
         EXTRACTION_CONFIDENCE.observe(extraction.extraction_confidence)
 
@@ -299,7 +317,7 @@ class ProcessingPipeline:
                 )
 
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "done")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "ner_extraction", "done", search_id=search_id)
         logger.debug(
             "pipeline_extraction_done",
             extra={
@@ -314,7 +332,7 @@ class ProcessingPipeline:
         # ── Step 4: Entity resolution ──────────────────────────────────────
         if self._resolver is not None:
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "entity_resolution", "active")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "entity_resolution", "active", search_id=search_id)
             t0 = time.monotonic()
             # Map original NER-generated entity IDs → canonical graph IDs from the resolver.
             # The resolver's persist_entity may return a different ID for AUTO_MERGE
@@ -377,7 +395,7 @@ class ProcessingPipeline:
 
             PIPELINE_STAGE_DURATION.labels(stage="entity_resolution").observe(time.monotonic() - t0)
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "entity_resolution", "done")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "entity_resolution", "done", search_id=search_id)
             extraction = extraction.model_copy(
                 update={
                     "entities": resolved_entities,
@@ -396,20 +414,65 @@ class ProcessingPipeline:
                 },
             )
 
+        # ── Phase 4: Provenance enforcement ───────────────────────────────
+        # Drop any entity that lacks a non-empty source_id before it reaches
+        # graph persistence.  This is a hard requirement: every entity MUST
+        # carry a provenance reference (plugin URL, source URI, etc.).
+        # Operate on extraction.entities (which may have been canonicalised
+        # by the resolution step above, or are raw extractor output if the
+        # resolver is disabled).
+        provenance_ok: list[Entity] = []
+        provenance_dropped = 0
+        for entity in extraction.entities:
+            if entity.has_provenance():
+                provenance_ok.append(entity)
+            else:
+                provenance_dropped += 1
+                logger.warning(
+                    "entity_dropped_no_provenance",
+                    extra={
+                        "entity_id": entity.id,
+                        "entity_name": entity.name,
+                        "entity_type": entity.type,
+                        "tenant_id": envelope.tenant_id,
+                        "event_id": envelope.id,
+                    },
+                )
+        if provenance_dropped:
+            ENTITIES_DROPPED_NO_PROVENANCE.labels(tenant_id=envelope.tenant_id).inc(provenance_dropped)
+            logger.info(
+                "provenance_filter_applied",
+                extra={
+                    "event_id": envelope.id,
+                    "tenant_id": envelope.tenant_id,
+                    "dropped": provenance_dropped,
+                    "survived": len(provenance_ok),
+                },
+            )
+            # Update extraction with only provenance-valid entities.
+            # Also update entity_context_weights to only reference survivors.
+            survived_ids = {e.id for e in provenance_ok}
+            extraction = extraction.model_copy(
+                update={
+                    "entities": provenance_ok,
+                    "entity_context_weights": {k: v for k, v in extraction.entity_context_weights.items() if k in survived_ids},
+                }
+            )
+
         # ── Step 5: Graph persistence ──────────────────────────────────────
         if self._graph_persistence is not None:
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "graph_persistence", "active")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "graph_persistence", "active", search_id=search_id)
             t0 = time.monotonic()
             await self._graph_persistence.persist_extraction(extraction, envelope.tenant_id)
             PIPELINE_STAGE_DURATION.labels(stage="graph_persistence").observe(time.monotonic() - t0)
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "graph_persistence", "done")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "graph_persistence", "done", search_id=search_id)
 
         # ── Step 6: Alert publishing ───────────────────────────────────────
         if self._alert_publisher is not None and extraction.extraction_confidence > 0.5:
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "alert_publishing", "active")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "alert_publishing", "active", search_id=search_id)
             t0 = time.monotonic()
             n = len(extraction.entities)
             alert = AnalystAlert(
@@ -418,14 +481,15 @@ class ProcessingPipeline:
                 summary=f"{n} {'entity' if n == 1 else 'entities'} extracted",
                 confidence=extraction.extraction_confidence,
                 source_event_id=envelope.id,
+                search_id=search_id,
             )
             await self._alert_publisher.publish(alert)
             PIPELINE_STAGE_DURATION.labels(stage="alert_publishing").observe(time.monotonic() - t0)
             if self._stage_publisher:
-                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "alert_publishing", "done")
+                self._stage_publisher.publish(envelope.id, envelope.tenant_id, "alert_publishing", "done", search_id=search_id)
 
         if self._stage_publisher:
-            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "pipeline_complete", "done")
+            self._stage_publisher.publish(envelope.id, envelope.tenant_id, "pipeline_complete", "done", search_id=search_id)
         logger.info(
             "pipeline_run_done",
             extra={

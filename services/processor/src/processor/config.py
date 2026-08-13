@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
     dedup_ttl_seconds: int = Field(default=86400, alias="DEDUP_TTL_SECONDS")
+    query_cache_ttl_seconds: int = Field(default=3600, alias="QUERY_CACHE_TTL")
 
     # Neo4j
     neo4j_url: str = Field(default="neo4j://localhost:7687", alias="NEO4J_URL")

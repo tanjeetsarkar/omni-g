@@ -22,11 +22,13 @@ export async function POST(request: NextRequest) {
     current_depth = 1,
     target_depth = 2,
     tenant_id = "default",
+    search_id,
   } = (body as {
     anchor_node_id?: unknown;
     current_depth?: unknown;
     target_depth?: unknown;
     tenant_id?: unknown;
+    search_id?: unknown;
   }) ?? {};
 
   if (!anchor_node_id || typeof anchor_node_id !== "string") {
@@ -38,15 +40,19 @@ export async function POST(request: NextRequest) {
 
   let response: Response;
   try {
+    const payload: Record<string, unknown> = {
+      anchor_node_id,
+      current_depth,
+      target_depth,
+      tenant_id,
+    };
+    if (typeof search_id === "string") {
+      payload.search_id = search_id;
+    }
     response = await fetch(`${PROCESSOR_URL}/query/expand`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        anchor_node_id,
-        current_depth,
-        target_depth,
-        tenant_id,
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Processor unreachable";

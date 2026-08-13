@@ -11,11 +11,14 @@ interface AlertPayload {
 interface UseRealtimeNodesOptions {
   tenantId: string;
   enabled?: boolean;
+  /** V4: only process alerts that match this search_id. */
+  searchId?: string;
 }
 
 export function useRealtimeNodes({
   tenantId,
   enabled = true,
+  searchId,
 }: UseRealtimeNodesOptions) {
   const [newEntities, setNewEntities] = useState<Entity[]>([]);
   const [newRelationships, setNewRelationships] = useState<Relationship[]>([]);
@@ -70,6 +73,14 @@ export function useRealtimeNodes({
     const socket = getSocket();
 
     const handleAlert = (payload: AlertPayload) => {
+      // V4: skip alerts that don't belong to the current search_id, if one is set.
+      if (
+        searchId &&
+        typeof payload.search_id === "string" &&
+        payload.search_id !== searchId
+      ) {
+        return;
+      }
       const ids = payload.entity_ids ?? [];
       if (ids.length > 0) {
         fetchEntities(ids);
@@ -81,7 +92,7 @@ export function useRealtimeNodes({
     return () => {
       socket.off("alert", handleAlert);
     };
-  }, [enabled, fetchEntities]);
+  }, [enabled, fetchEntities, searchId]);
 
   const clearNewEntities = useCallback(() => {
     setNewEntities([]);

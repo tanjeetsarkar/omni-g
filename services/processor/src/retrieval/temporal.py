@@ -97,6 +97,9 @@ class TemporalRetriever:
                     score=score,
                     text=ctx.get("text") or "",
                     entity_ids=ctx.get("entity_ids") or [],
+                    source_name=ctx.get("source_name"),
+                    source_url=ctx.get("source_url"),
+                    plugin_name=ctx.get("plugin_name"),
                 )
             )
         return result[:top_k]
@@ -110,7 +113,10 @@ class TemporalRetriever:
                     WHERE ctx.id IN $ids AND ctx.tenant_id = $tenant_id
                     OPTIONAL MATCH (entity:Entity)-[:CO_OCCURRED_IN]->(ctx)
                     RETURN ctx.id AS context_id, ctx.text AS text,
-                           collect(DISTINCT entity.id) AS entity_ids
+                           collect(DISTINCT entity.id) AS entity_ids,
+                           ctx.source_name AS source_name,
+                           ctx.source_url AS source_url,
+                           ctx.plugin_name AS plugin_name
                     """,
                     ids=ids,
                     tenant_id=tenant_id,
@@ -131,7 +137,10 @@ class TemporalRetriever:
                     OPTIONAL MATCH (entity:Entity)-[:CO_OCCURRED_IN]->(ctx)
                     RETURN ctx.id AS context_id, ctx.text AS text,
                            collect(DISTINCT entity.id) AS entity_ids,
-                           ctx.created AS created
+                           ctx.created AS created,
+                           ctx.source_name AS source_name,
+                           ctx.source_url AS source_url,
+                           ctx.plugin_name AS plugin_name
                     ORDER BY created DESC LIMIT $top_k
                     """,
                     tenant_id=tenant_id,
@@ -148,6 +157,9 @@ class TemporalRetriever:
                 score=0.5,
                 text=row.get("text") or "",
                 entity_ids=row.get("entity_ids") or [],
+                source_name=row.get("source_name"),
+                source_url=row.get("source_url"),
+                plugin_name=row.get("plugin_name"),
             )
             for row in rows
         ]

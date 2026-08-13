@@ -33,6 +33,10 @@ type RawEvent struct {
 	// SourceURL is the canonical human-facing URL of the source document
 	// (may differ from the MCP plugin URL stored in Source).
 	SourceURL string `json:"source_url,omitempty"`
+	// SearchID is the optional search correlation ID that binds this event
+	// to a user-initiated /search or /enrich request. Empty for autonomous
+	// (polled/watched) collection events.
+	SearchID string `json:"search_id,omitempty"`
 }
 
 // Producer wraps confluent-kafka-go and exposes a high-level Publish method.

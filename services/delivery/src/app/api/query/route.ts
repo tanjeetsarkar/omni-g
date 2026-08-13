@@ -25,12 +25,14 @@ export async function POST(request: NextRequest) {
     limit = 50,
     relevance_threshold = 0.0,
     traversal_depth,
+    search_id,
   } = (body as {
     query?: unknown;
     tenant_id?: unknown;
     limit?: unknown;
     relevance_threshold?: unknown;
     traversal_depth?: unknown;
+    search_id?: unknown;
   }) ?? {};
 
   if (!query || typeof query !== "string") {
@@ -44,6 +46,9 @@ export async function POST(request: NextRequest) {
   }
   if (typeof traversal_depth === "number") {
     payload.traversal_depth = traversal_depth;
+  }
+  if (typeof search_id === "string") {
+    payload.search_id = search_id;
   }
 
   let response: Response;

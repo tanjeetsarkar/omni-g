@@ -8,52 +8,47 @@ import (
 	"github.com/google/uuid"
 	"github.com/omni-g/aggregator/internal/mcp"
 	"github.com/omni-g/aggregator/internal/pipeline"
+	"github.com/omni-g/aggregator/pkg/agent"
 	"github.com/omni-g/aggregator/pkg/harness"
 	"github.com/rs/zerolog/log"
 )
 
-// sourceTool maps a logical source name (as used in /search and /enrich
-// request bodies) to the governed harness tool name that backs it.
-type sourceTool struct {
-	toolName string
-}
-
 // SearchHandler handles POST /search and POST /enrich — on-demand search and
-// enrichment across the governed domain-service tools. All tool calls route
-// through the 9-stage Tool Governance Harness so on-demand queries are subject
-// to the same validation, permission, circuit-breaker, and observability
-// guarantees as autonomous agent ingestion.
+// enrichment across mu-discovered tools. All tool calls route through the
+// 9-stage Tool Governance Harness so on-demand queries are subject to the
+// same validation, permission, circuit-breaker, and observability guarantees
+// as autonomous agent ingestion.
+//
+// V6: The AgenticRouter is the sole tool selection mechanism. The legacy
+// hardcoded source→tool fan-out has been removed. Mu provides all tools
+// (web_search, news_search, weather_forecast, markets_list, etc.).
 type SearchHandler struct {
-	// sourceTools maps logical source name → governed tool name.
-	sourceTools map[string]string
-	// defaultSources is the order of sources used when a request omits the
-	// sources/plugins list.
-	defaultSources []string
-	harness        *harness.Harness
-	pipeline       *pipeline.Pipeline
-	tenantID       string
+	harness  *harness.Harness
+	pipeline *pipeline.Pipeline
+	tenantID string
+	// router is the AgenticRouter for intelligent tool selection.
+	// Must be set via SetRouter() before the server starts.
+	router *agent.AgenticRouter
 }
 
 // NewSearchHandler constructs a SearchHandler backed by the harness.
-// sourceTools maps logical source name (e.g. "wikipedia", "newsrss") →
-// governed harness tool name (e.g. "web_search", "search_news").
+// The router must be injected via SetRouter() before use.
 func NewSearchHandler(
-	sourceTools map[string]string,
 	pl *pipeline.Pipeline,
 	h *harness.Harness,
 	tenantID string,
 ) *SearchHandler {
-	defaults := make([]string, 0, len(sourceTools))
-	for name := range sourceTools {
-		defaults = append(defaults, name)
-	}
 	return &SearchHandler{
-		sourceTools:    sourceTools,
-		defaultSources: defaults,
-		harness:        h,
-		pipeline:       pl,
-		tenantID:       tenantID,
+		harness:  h,
+		pipeline: pl,
+		tenantID: tenantID,
 	}
+}
+
+// SetRouter injects the AgenticRouter for intelligent tool selection.
+// Must be called before the server starts accepting requests.
+func (h *SearchHandler) SetRouter(r *agent.AgenticRouter) {
+	h.router = r
 }
 
 // searchRequest is the JSON body expected by POST /search.
@@ -89,10 +84,15 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	searchID := uuid.New().String()
 	log.Info().Str("search_id", searchID).Str("query", req.Query).Msg("/search request received")
 
-	sources := h.resolveSources(req.Sources)
-	perm := harness.Permission{TenantID: h.tenantID} // allow-all for on-demand queries
+	// V6: Always use AgenticRouter for intelligent tool selection.
+	// If no router is set, return an error — the router is mandatory.
+	if h.router == nil {
+		log.Error().Str("search_id", searchID).Msg("no router configured for /search")
+		http.Error(w, `{"error":"search router not configured"}`, http.StatusInternalServerError)
+		return
+	}
 
-	total, bySource := h.fanOutThroughHarness(r.Context(), searchID, sources, req.Query, perm, "")
+	total, bySource := h.routeThroughRouter(r.Context(), searchID, req.Query)
 
 	writeJSON(w, http.StatusAccepted, searchResponse{
 		SearchID:       searchID,
@@ -102,95 +102,62 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Str("search_id", searchID).Int("events_queued", total).Msg("/search request completed")
 }
 
-// resolveSources returns the source list to use, defaulting to all configured
-// sources when the request omits it.
-func (h *SearchHandler) resolveSources(requested []string) []string {
-	if len(requested) > 0 {
-		return requested
-	}
-	return h.defaultSources
-}
-
-// fanOutThroughHarness invokes the governed tool for each source in parallel
-// and forwards the resulting blocks to the pipeline. Returns the total block
-// count and per-source counts. kiqID is optional (empty for untasked).
-func (h *SearchHandler) fanOutThroughHarness(
-	parentCtx context.Context,
-	correlationID string,
-	sources []string,
+// routeThroughRouter uses the AgenticRouter to intelligently select and invoke
+// tools for the query. Returns total blocks queued and per-tool counts.
+func (h *SearchHandler) routeThroughRouter(
+	ctx context.Context,
+	searchID string,
 	query string,
-	perm harness.Permission,
-	kiqID string,
 ) (int, []sourceResultCount) {
-	type result struct {
-		source string
-		count  int
-	}
-	resultCh := make(chan result, len(sources))
-	bgCtx := context.Background()
+	logger := log.With().Str("search_id", searchID).Str("query", query).Logger()
+	logger.Info().Msg("routing /search through AgenticRouter")
 
-	for _, source := range sources {
-		toolName, ok := h.sourceTools[source]
-		if !ok {
-			log.Warn().Str("source", source).Str("correlation_id", correlationID).
-				Msg("no governed tool configured for source")
-			resultCh <- result{source: source, count: 0}
-			continue
-		}
-
-		go func(src, tool string) {
-			count := h.invokeGovernedTool(bgCtx, correlationID, src, tool, query, perm, kiqID)
-			resultCh <- result{source: src, count: count}
-		}(source, toolName)
+	result, err := h.router.Route(ctx, query, "", searchID)
+	if err != nil {
+		logger.Error().Err(err).Msg("router.Route failed")
+		return 0, nil
 	}
 
 	total := 0
-	bySource := make([]sourceResultCount, 0, len(sources))
-	for range sources {
-		r := <-resultCh
-		total += r.count
-		bySource = append(bySource, sourceResultCount{Source: r.source, BlocksQueued: r.count})
+	bySource := make([]sourceResultCount, 0, len(result.Results))
+
+	for _, invokeResult := range result.Results {
+		count := 0
+		for _, block := range invokeResult.Blocks {
+			if block.Type != mcp.ContentTypeText || block.Text == "" {
+				continue
+			}
+			if err := h.pipeline.ProcessBlock(ctx,
+				pipeline.SourceForTool(invokeResult.Tool.Name, invokeResult.Tool.SourceURL),
+				block.Text,
+				invokeResult.Tool.Name,
+				invokeResult.Tool.Version,
+				"",
+				invokeResult.Tool.SourceName,
+				invokeResult.Tool.SourceURL,
+				searchID,
+			); err != nil {
+				logger.Warn().Str("tool", invokeResult.Tool.Name).Err(err).Msg("pipeline.ProcessBlock error")
+				continue
+			}
+			count++
+		}
+		total += count
+		bySource = append(bySource, sourceResultCount{
+			Source:       invokeResult.Tool.Name,
+			BlocksQueued: count,
+		})
 	}
+
+	// Log router errors.
+	for _, e := range result.Errors {
+		logger.Warn().Err(e).Msg("router tool error")
+	}
+
+	logger.Info().
+		Int("total_blocks", total).
+		Strs("selected_tools", result.SelectedTools).
+		Msg("router /search completed")
+
 	return total, bySource
-}
-
-// invokeGovernedTool calls a single governed tool through the 9-stage harness
-// and forwards each resulting block into the pipeline. Returns the number of
-// blocks successfully queued.
-func (h *SearchHandler) invokeGovernedTool(
-	ctx context.Context,
-	correlationID string,
-	sourceName string,
-	toolName string,
-	query string,
-	perm harness.Permission,
-	kiqID string,
-) int {
-	logger := log.With().Str("correlation_id", correlationID).Str("source", sourceName).Str("tool", toolName).Logger()
-
-	args := map[string]any{}
-	if query != "" {
-		args["query"] = query
-	}
-
-	result, err := h.harness.InvokeTool(ctx, toolName, args, perm, kiqID, h.tenantID)
-	if err != nil {
-		logger.Warn().Err(err).Msg("governed tool invocation failed")
-		return 0
-	}
-
-	count := 0
-	for _, block := range result.Blocks {
-		if block.Type != mcp.ContentTypeText || block.Text == "" {
-			continue
-		}
-		if err := h.pipeline.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
-			result.Tool.Name, result.Tool.Version, kiqID, result.Tool.SourceName, result.Tool.SourceURL); err != nil {
-			logger.Warn().Err(err).Msg("pipeline.ProcessBlock error")
-			continue
-		}
-		count++
-	}
-	logger.Debug().Int("blocks_queued", count).Msg("governed source completed")
-	return count
 }

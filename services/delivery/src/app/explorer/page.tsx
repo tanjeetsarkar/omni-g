@@ -13,12 +13,13 @@ import {
 import {
   EChartsGraphCanvas,
   EChartsNode,
+  EChartsLink,
 } from "../../components/canvas/EChartsGraphCanvas";
 import { SourceTraceDrawer } from "../../components/drawer/SourceTraceDrawer";
 import { FloatingSearchBar } from "../../components/controls/FloatingSearchBar";
 import { SettingsGearPanel } from "../../components/controls/SettingsGearPanel";
 import { useGraphExplorerStore } from "../../store/useGraphExplorerStore";
-import { transformToEChartsData } from "../../components/canvas/useEChartsGraphAdapter";
+import { transformToRadialTreeData } from "../../components/canvas/useEChartsGraphAdapter";
 import type {
   SearchResponse,
   ContextUnit,
@@ -26,13 +27,9 @@ import type {
   CustomNodeResponse,
 } from "../../types/entities";
 import { getSocket, joinTenant } from "../../lib/socket";
-import { usePipelineEvents } from "../../hooks/usePipelineEvents";
 import { useRealtimeNodes } from "../../hooks/useRealtimeNodes";
 import { useSearchHistory } from "../../hooks/useSearchHistory";
-import PipelineProgressToast, {
-  ToastState,
-} from "../../components/graph/PipelineProgressToast";
-import ActivityDrawer from "../../components/graph/ActivityDrawer";
+import { PipelineIndicator } from "../../components/graph/PipelineIndicator";
 import { BlufStrip } from "../../components/synthesis/BlufStrip";
 import { NotificationBell } from "../../components/notifications/NotificationBell";
 
@@ -58,6 +55,8 @@ export function ExplorerContent() {
   const storeSelectNode = useGraphExplorerStore((s) => s.selectNode);
   const storeSetTenantId = useGraphExplorerStore((s) => s.setTenantId);
   const storeIsLoading = useGraphExplorerStore((s) => s.isLoading);
+  const storeSearchId = useGraphExplorerStore((s) => s.searchId);
+  const storeSummary = useGraphExplorerStore((s) => s.summary);
 
   const [submitting, setSubmitting] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -71,17 +70,15 @@ export function ExplorerContent() {
   );
   const [trendingLoading, setTrendingLoading] = useState(false);
 
-  // Ingestion progress toast states
-  const [toastState, setToastState] = useState<ToastState>("idle");
-  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  // V4 Phase 6: current search query for PipelineIndicator
   const [currentSearchQuery, setCurrentSearchQuery] = useState(initialQuery);
 
   const socket = getSocket();
-  const { stageStatuses } = usePipelineEvents(socket);
 
   const { newEntities, newRelationships, clearNewEntities } = useRealtimeNodes({
     tenantId,
     enabled: true,
+    searchId: storeSearchId ?? undefined,
   });
 
   // Search history (B4)
@@ -97,32 +94,6 @@ export function ExplorerContent() {
   useEffect(() => {
     joinTenant(tenantId);
   }, [tenantId]);
-
-  // Synchronize toastState when pipeline completes.  We watch both
-  // alert_publishing (highest-confidence pipelines) and the pipeline_complete
-  // synthetic stage that the processor always emits regardless of confidence.
-  useEffect(() => {
-    if (toastState !== "running") return;
-    if (
-      stageStatuses.alert_publishing === "done" ||
-      stageStatuses.pipeline_complete === "done"
-    ) {
-      setToastState("done");
-    }
-  }, [
-    toastState,
-    stageStatuses.alert_publishing,
-    stageStatuses.pipeline_complete,
-  ]);
-
-  // 90-second safety fallback timeout for the running toast
-  useEffect(() => {
-    if (toastState !== "running") return;
-    const timer = setTimeout(() => {
-      setToastState("done");
-    }, 90000); // 90 seconds
-    return () => clearTimeout(timer);
-  }, [toastState]);
 
   // Fetch trending entities on mount (B8)
   useEffect(() => {
@@ -158,18 +129,22 @@ export function ExplorerContent() {
   //   1. syncs the query into the store,
   //   2. delegates graph retrieval to `store.executeQuery()` (/api/query),
   //   3. fires the background /api/search ingestion trigger,
-  //   4. manages the pipeline progress toast + search history.
+  //   4. manages search history.
   // The store owns the canvas state (nodes/edges/selectedNode); the page
-  // owns the ingestion trigger + toast/history UI state.
+  // owns the ingestion trigger + history UI state.
+  // V4 Phase 6: pipeline progress is now shown by PipelineIndicator (driven
+  // by live socket events), not by the removed toast/drawer state machine.
   const runSearch = useCallback(
     async (q: string) => {
       const trimmed = q.trim();
       if (!trimmed) return;
       setSubmitting(true);
       setSearchError(null);
-      setErrorDetail(null);
       setCurrentSearchQuery(trimmed);
       storeSetQuery(trimmed);
+
+      // V4 Phase 7: clear any realtime entities from the previous search.
+      clearNewEntities();
 
       // Delegate graph retrieval to the store (purges stale canvas + fetches
       // /api/query). Await it so we can surface retrieval errors and know the
@@ -180,8 +155,6 @@ export function ExplorerContent() {
       const storeErr = useGraphExplorerStore.getState().error;
       if (storeErr) {
         setSearchError(storeErr);
-        setErrorDetail(storeErr);
-        setToastState("error");
         setSubmitting(false);
         return;
       }
@@ -193,9 +166,6 @@ export function ExplorerContent() {
 
       // ── B4: Add to search history ──
       addSearch(trimmed, nodeCount);
-
-      // Transition layout/toast to running state
-      setToastState("running");
 
       // ── Active Tasked Synthesis: Trigger background on-demand ingestion ────────────────
       // Sends search request to Aggregator to query remote MCP plugins and generate raw Kafka events.
@@ -211,33 +181,18 @@ export function ExplorerContent() {
           const errMsg =
             (searchErr as { error?: string }).error ??
             `Background search failed: HTTP ${searchRes.status}`;
-          setErrorDetail(errMsg);
-          setToastState("error");
+          setSearchError(errMsg);
         }
       } catch (err) {
         const errMsg =
           err instanceof Error ? err.message : "Background search failed";
-        setErrorDetail(errMsg);
-        setToastState("error");
+        setSearchError(errMsg);
       } finally {
         setSubmitting(false);
       }
     },
-    [storeSetQuery, storeExecuteQuery, addSearch],
+    [storeSetQuery, storeExecuteQuery, addSearch, clearNewEntities],
   );
-
-  const handleRefreshGraph = useCallback(() => {
-    runSearch(currentSearchQuery);
-    setToastState("idle");
-  }, [runSearch, currentSearchQuery]);
-
-  const handleDismissToast = useCallback(() => {
-    setToastState("idle");
-  }, []);
-
-  const handleRetrySearch = useCallback(() => {
-    runSearch(currentSearchQuery);
-  }, [runSearch, currentSearchQuery]);
 
   // Trigger search on init if query is present
   useEffect(() => {
@@ -348,9 +303,12 @@ export function ExplorerContent() {
     }
   };
 
-  // Transform store nodes/edges directly into ECharts format. The store is
-  // the single source of truth — no redundant intermediate derivation.
-  const { nodes, links } = transformToEChartsData(
+  // Transform store nodes/edges into radial tree data for ECharts.
+  const {
+    treeData,
+    nodes: rawNodes,
+    links: rawLinks,
+  } = transformToRadialTreeData(
     storeNodes.map((n) => ({
       id: n.id,
       label: n.entity_name,
@@ -373,7 +331,7 @@ export function ExplorerContent() {
     })),
   );
 
-  const hasResults = nodes.length > 0;
+  const hasResults = rawNodes.length > 0;
   const showEmptyState = !hasResults && !submitting && !storeIsLoading;
 
   return (
@@ -400,12 +358,13 @@ export function ExplorerContent() {
         <NotificationBell />
       </header>
 
-      {/* ── B1: BLUF / Synthesis Strip (only when results exist) ── */}
-      {hasResults && contextUnits.length > 0 && (
+      {/* ── B1: BLUF / Synthesis Strip — shown when results or pipeline is active ── */}
+      {(hasResults || storeSummary?.pipeline_running) && (
         <BlufStrip
           contextUnits={contextUnits}
           query={currentSearchQuery}
           tenantId={tenantId}
+          summary={storeSummary}
         />
       )}
 
@@ -422,6 +381,9 @@ export function ExplorerContent() {
             the user can search from both the empty state and the canvas. */}
         <FloatingSearchBar onSubmit={() => runSearch(storeQuery)} />
         <SettingsGearPanel />
+
+        {/* V4 Phase 6: Inline pipeline indicator below search bar */}
+        <PipelineIndicator socket={socket} query={currentSearchQuery} />
 
         {showEmptyState ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-950 text-center space-y-3 z-0">
@@ -506,8 +468,9 @@ export function ExplorerContent() {
         ) : (
           <div className="flex-1 h-full w-full relative">
             <EChartsGraphCanvas
-              nodes={nodes}
-              links={links}
+              nodes={rawNodes as EChartsNode[]}
+              links={rawLinks as EChartsLink[]}
+              treeData={treeData}
               onNodeSelect={handleNodeSelect}
               onNodeDrillDown={handleNodeDrillDown}
             />
@@ -516,20 +479,6 @@ export function ExplorerContent() {
 
         {/* V4 Track 1: responsive evidence drawer (desktop side panel / mobile bottom sheet) */}
         <SourceTraceDrawer />
-
-        {/* Floating live ingestion progress toast (M6 UX) */}
-        <PipelineProgressToast
-          query={currentSearchQuery}
-          toastState={toastState}
-          errorDetail={errorDetail}
-          socket={socket}
-          onRefreshGraph={handleRefreshGraph}
-          onDismiss={handleDismissToast}
-          onRetry={handleRetrySearch}
-        />
-
-        {/* Always-visible pipeline activity drawer */}
-        <ActivityDrawer socket={socket} />
       </div>
     </div>
   );

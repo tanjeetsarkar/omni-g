@@ -13,7 +13,6 @@ import (
 	kafkainternal "github.com/omni-g/aggregator/internal/kafka"
 	"github.com/omni-g/aggregator/internal/mcp"
 	"github.com/omni-g/aggregator/internal/pipeline"
-	"github.com/omni-g/aggregator/internal/services"
 	"github.com/omni-g/aggregator/internal/validation"
 	"github.com/omni-g/aggregator/pkg/agent"
 	"github.com/omni-g/aggregator/pkg/harness"
@@ -40,26 +39,26 @@ func (okValidator) Validate(_ context.Context, _ string, _ map[string]any) (*val
 	return &validation.ValidationResult{Valid: true}, nil
 }
 
-// mockPlugin returns a test MCP plugin server that streams one content block.
+// mockPlugin returns a test MCP plugin server that responds to tools/list and
+// tools/call with JSON-RPC over POST (mu's actual transport).
 func mockPlugin(t *testing.T, blockText string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sse" {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
-			flusher, ok := w.(http.Flusher)
-			require.True(t, ok)
-			block := mcp.ContentBlock{Type: mcp.ContentTypeText, Text: blockText}
-			data, _ := json.Marshal(block)
-			_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
-			flusher.Flush()
-			_, _ = w.Write([]byte("data: [DONE]\n\n"))
-			flusher.Flush()
-			return
-		}
 		var req mcp.JSONRPCRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		result, _ := json.Marshal(mcp.ToolsListResult{Tools: []mcp.Tool{{Name: "search_news"}}})
+
+		var result json.RawMessage
+		switch req.Method {
+		case "tools/list":
+			result, _ = json.Marshal(mcp.ToolsListResult{Tools: []mcp.Tool{{Name: "search_news"}}})
+		case "tools/call":
+			result, _ = json.Marshal(mcp.ToolCallResult{
+				Content: []mcp.ContentBlock{{Type: mcp.ContentTypeText, Text: blockText}},
+			})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		resp := mcp.JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(result)}
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(resp))
@@ -91,15 +90,10 @@ func TestE2EGovernanceAudit_AggregatorPipeline(t *testing.T) {
 		CircuitBreakerReset:     30 * time.Second,
 	}, nil)
 
-	svcCfg := services.ServiceConfig{
-		NewsRSSPluginURL:   pluginSrv.URL,
-		ReutersPluginURL:   pluginSrv.URL,
-		WikipediaPluginURL: pluginSrv.URL,
-		WikidataPluginURL:  pluginSrv.URL,
-	}
-	for _, svc := range services.All(svcCfg) {
-		require.NoError(t, svc.Register(h))
-	}
+	// Register a mock tool directly with the harness (replaces legacy services.All()).
+	// The mock tool wraps the test MCP plugin server.
+	mockTool := newMockMCPTool("search_news", "News Search", pluginSrv.URL, "search_news")
+	require.NoError(t, h.Register(mockTool))
 
 	poller := agent.NewPollerAgent(agent.PollerConfig{
 		Name:       "poller-audit",
@@ -113,7 +107,7 @@ func TestE2EGovernanceAudit_AggregatorPipeline(t *testing.T) {
 					continue
 				}
 				_ = pl.ProcessBlock(ctx, pipeline.SourceForTool(result.Tool.Name, result.Tool.SourceURL), block.Text,
-					result.Tool.Name, result.Tool.Version, "", result.Tool.SourceName, result.Tool.SourceURL)
+					result.Tool.Name, result.Tool.Version, "", result.Tool.SourceName, result.Tool.SourceURL, "")
 			}
 			return nil
 		},
@@ -150,7 +144,7 @@ func TestE2EGovernanceAudit_AggregatorPipeline(t *testing.T) {
 				continue
 			}
 			_ = pl.ProcessBlock(ctx, pipeline.SourceForTool(res.Tool.Name, res.Tool.SourceURL), block.Text,
-				res.Tool.Name, res.Tool.Version, "", res.Tool.SourceName, res.Tool.SourceURL)
+				res.Tool.Name, res.Tool.Version, "", res.Tool.SourceName, res.Tool.SourceURL, "")
 		}
 	}()
 
@@ -211,6 +205,36 @@ func testConfig() *config.Config {
 		TenantID:   "audit-tenant",
 		LogLevel:   "error",
 	}
+}
+
+// mockMCPTool is a harness.Tool that wraps a test MCP plugin server.
+// Replaces the deleted internal/services package for E2E tests.
+type mockMCPTool struct {
+	descriptor harness.ToolDescriptor
+	pluginURL  string
+	toolName   string
+}
+
+func newMockMCPTool(name, sourceName, pluginURL, mcpToolName string) *mockMCPTool {
+	return &mockMCPTool{
+		descriptor: harness.ToolDescriptor{
+			Name:        name,
+			Description: "Mock tool for E2E testing",
+			Version:     "1.0",
+			Risk:        harness.RiskLow,
+			SourceName:  sourceName,
+			SourceURL:   pluginURL,
+		},
+		pluginURL: pluginURL,
+		toolName:  mcpToolName,
+	}
+}
+
+func (t *mockMCPTool) Descriptor() harness.ToolDescriptor { return t.descriptor }
+
+func (t *mockMCPTool) Invoke(ctx context.Context, args map[string]any) (<-chan mcp.ContentBlock, error) {
+	client := mcp.NewClient(t.pluginURL)
+	return client.CallTool(ctx, t.toolName, args)
 }
 
 // Ensure strings import is used.

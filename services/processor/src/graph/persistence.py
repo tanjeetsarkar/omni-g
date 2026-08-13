@@ -246,7 +246,22 @@ class GraphPersistenceService:
         """MERGE entity node by id and SET all properties.
 
         Returns the canonical entity id of the persisted node.
+
+        Phase 4: Entities without provenance are rejected with a warning.
+        The pipeline should have already dropped them, so this is a safety net.
         """
+        if not entity.has_provenance():
+            logger.warning(
+                "entity_skipped_no_provenance",
+                extra={
+                    "entity_id": entity.id,
+                    "entity_name": entity.name,
+                    "entity_type": entity.type,
+                    "tenant_id": tenant_id,
+                },
+            )
+            return entity.id
+
         t0 = time.perf_counter()
         label = _safe_label(entity.type)
         tenant_label = _safe_label(tenant_id)
@@ -383,6 +398,21 @@ class GraphPersistenceService:
                 async with await session.begin_transaction() as tx:
                     # Persist all entity nodes first
                     for entity in result.entities:
+                        # Phase 4 safety net: skip entities without provenance.
+                        # The pipeline should have already dropped them, but
+                        # we check again here to keep the graph clean.
+                        if not entity.has_provenance():
+                            logger.warning(
+                                "entity_skipped_no_provenance_tx",
+                                extra={
+                                    "entity_id": entity.id,
+                                    "entity_name": entity.name,
+                                    "entity_type": entity.type,
+                                    "tenant_id": tenant_id,
+                                },
+                            )
+                            continue
+
                         label = _safe_label(entity.type)
                         props = _props_from_entity(entity, tenant_id)
                         cypher = (
@@ -486,6 +516,7 @@ class GraphPersistenceService:
                     """
                     MATCH (e:Entity)
                     WHERE e.tenant_id = $tenant_id
+                      AND e.source_id IS NOT NULL AND e.source_id <> ''
                     RETURN e
                     ORDER BY e.modified DESC
                     LIMIT $limit
@@ -539,6 +570,8 @@ class GraphPersistenceService:
                     """
                     MATCH (src:Entity)-[r]->(tgt:Entity)
                     WHERE src.id IN $entity_ids AND tgt.id IN $entity_ids
+                      AND src.source_id IS NOT NULL AND src.source_id <> ''
+                      AND tgt.source_id IS NOT NULL AND tgt.source_id <> ''
                     RETURN
                         coalesce(r.id, '') AS id,
                         type(r)            AS type,
@@ -576,6 +609,64 @@ class GraphPersistenceService:
             )
         return rels
 
+    async def fetch_context_units_for_entities(
+        self,
+        entity_ids: list[str],
+        tenant_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return ContextUnits linked to any of *entity_ids* via CO_OCCURRED_IN.
+
+        Used as a provenance fallback in /search when the retrieval path
+        returned no calibrated contexts but entities were still resolved.
+        Each returned dict carries text + human-readable provenance so the
+        UI can render source tags and raw-context snippets.
+        """
+        if not entity_ids:
+            return []
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (e:Entity)-[:CO_OCCURRED_IN]->(ctx:ContextUnit)
+                    WHERE e.id IN $entity_ids AND ctx.tenant_id = $tenant_id
+                    RETURN
+                        ctx.id          AS context_id,
+                        ctx.text        AS text,
+                        ctx.source_name AS source_name,
+                        ctx.source_url  AS source_url,
+                        ctx.plugin_name AS plugin_name,
+                        collect(DISTINCT e.id) AS entity_ids,
+                        ctx.created     AS created
+                    ORDER BY ctx.created DESC
+                    LIMIT 200
+                    """,
+                    entity_ids=entity_ids,
+                    tenant_id=tenant_id,
+                )
+                rows = await result.data()
+        except Exception:
+            logger.exception(
+                "fetch_context_units_failed",
+                extra={"entity_count": len(entity_ids)},
+            )
+            return []
+
+        contexts: list[dict[str, Any]] = []
+        for row in rows:
+            contexts.append(
+                {
+                    "context_id": row.get("context_id", ""),
+                    "score": 0.0,
+                    "text": row.get("text") or "",
+                    "entity_ids": row.get("entity_ids") or [],
+                    "source_name": row.get("source_name"),
+                    "source_url": row.get("source_url"),
+                    "plugin_name": row.get("plugin_name"),
+                    "created": row.get("created"),
+                }
+            )
+        return contexts
+
     async def fetch_neighbor_entities(
         self,
         entity_ids: list[str],
@@ -596,6 +687,7 @@ class GraphPersistenceService:
                     MATCH (src:Entity)-[]->(tgt:Entity)
                     WHERE src.id IN $entity_ids AND NOT tgt.id IN $entity_ids
                       AND tgt.tenant_id = $tenant_id
+                      AND tgt.source_id IS NOT NULL AND tgt.source_id <> ''
                     RETURN DISTINCT tgt AS e
                     LIMIT 100
                     """,

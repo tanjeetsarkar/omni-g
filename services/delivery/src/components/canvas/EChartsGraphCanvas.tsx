@@ -15,6 +15,9 @@ export interface EChartsNode {
   symbolSize: number | number[];
   category: string;
   value: number;
+  x?: number;
+  y?: number;
+  collapsed?: boolean;
   itemStyle: {
     color: string;
     opacity?: number;
@@ -40,8 +43,6 @@ export interface EChartsLink {
   lineStyle?: { width: number; opacity: number };
 }
 
-export type LayoutType = "force" | "circular" | "none";
-
 interface EChartsFormatterParams {
   dataType?: string;
   name?: string;
@@ -57,6 +58,9 @@ interface EChartsFormatterParams {
     confidence?: number;
     source?: string;
     target?: string;
+    sourceName?: string;
+    pluginName?: string;
+    subEntityCount?: number;
   };
 }
 
@@ -69,27 +73,23 @@ interface EChartsDblClickParams {
   dataType?: string;
   data: {
     id: string;
+    name?: string;
+    collapsed?: boolean;
   };
 }
 
 interface EChartsGraphCanvasProps {
   nodes: EChartsNode[];
   links: EChartsLink[];
+  treeData?: Record<string, unknown> | null;
   onNodeSelect: (node: EChartsNode) => void;
   onNodeDrillDown: (nodeId: string) => void;
-}
-
-const LAYOUT_STORAGE_KEY = "omni-g-layout-type";
-
-function loadLayoutPreference(): LayoutType {
-  if (typeof window === "undefined") return "force";
-  const saved = sessionStorage.getItem(LAYOUT_STORAGE_KEY);
-  return saved === "circular" || saved === "none" ? saved : "force";
 }
 
 export function EChartsGraphCanvas({
   nodes,
   links,
+  treeData,
   onNodeSelect,
   onNodeDrillDown,
 }: EChartsGraphCanvasProps) {
@@ -119,35 +119,9 @@ export function EChartsGraphCanvas({
     });
   }, [uniqueCategories.join(",")]);
 
-  // ── B5: Layout switcher ───────────────────────────────────────────────────
-  const [layoutType, setLayoutType] =
-    useState<LayoutType>(loadLayoutPreference);
-
-  // Persist layout selection
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem(LAYOUT_STORAGE_KEY, layoutType);
-    }
-  }, [layoutType]);
-
-  const handleLayoutChange = useCallback((layout: LayoutType) => {
-    setLayoutType(layout);
-  }, []);
-
   const seriesCategories = uniqueCategories.map((cat) => ({
     name: cat,
   }));
-
-  // Filter nodes and links based on legend selection
-  const visibleNodes = nodes.filter(
-    (n) => selectedCategories[n.category] !== false,
-  );
-  const visibleNodeIds = new Set(visibleNodes.map((n) => n.id));
-  const visibleLinks = links.filter(
-    (l) =>
-      visibleNodeIds.has(String(l.source)) &&
-      visibleNodeIds.has(String(l.target)),
-  );
 
   const option = {
     backgroundColor: "transparent",
@@ -155,12 +129,31 @@ export function EChartsGraphCanvas({
       trigger: "item",
       formatter: (params: unknown) => {
         const p = params as EChartsFormatterParams;
-        if (p.dataType === "node") {
+        if (p.dataType === "node" || p.dataType === "treeNode") {
           const displayLabel = p.data.label || p.data.name;
           const conf = p.data.confidence ?? p.data.value ?? 0;
-          // ── B3: Confidence shown as visual bar ──
           const confBar = formatConfidenceBar(conf);
-          return `${displayLabel} [${p.data.category}]<br/>Confidence: ${confBar} ${(conf * 100).toFixed(0)}%`;
+          const sourceBadge = (p.data as Record<string, unknown>).sourceName
+            ? ` 📍 ${(p.data as Record<string, unknown>).sourceName}`
+            : "";
+          const pluginIcon = (p.data as Record<string, unknown>).pluginName
+            ? ` 🔌 ${(p.data as Record<string, unknown>).pluginName}`
+            : "";
+          const subCount =
+            (p.data as Record<string, unknown>).subEntityCount ?? 0;
+          const cat = p.data.category ?? "Unknown";
+          return [
+            `${displayLabel} [${cat}]`,
+            `Confidence: ${confBar} ${(conf * 100).toFixed(0)}%`,
+            `Links: ${subCount}${sourceBadge}${pluginIcon}`,
+          ].join("<br/>");
+        }
+        // Tree edges: p.data is the child node, not {source, target}.
+        // Show a meaningful transition label instead of "undefined → undefined".
+        if (p.dataType === "edge" || (!p.dataType && p.data?.name)) {
+          const childName = p.data?.label || p.data?.name || "?";
+          const weight = p.data?.value ?? 0;
+          return `→ ${childName}<br/>Weight: ${Number(weight).toFixed(2)}`;
         }
         return `${p.data.source} → ${p.data.target}<br/>Weight: ${Number(p.data.value).toFixed(2)}`;
       },
@@ -180,51 +173,36 @@ export function EChartsGraphCanvas({
     ],
     series: [
       {
-        type: "graph",
-        layout: layoutType,
-        data: visibleNodes,
-        links: visibleLinks,
-        categories: seriesCategories,
+        type: "tree",
+        data: treeData ? [treeData] : [],
+        layout: "radial",
+        symbol: "circle",
+        symbolSize: 12,
         roam: true,
-        // ── B3 + V4 Track 1: Rich-text card labels on roundRect nodes ──
+        expandAndCollapse: true,
+        initialTreeDepth: 3,
+        animationDuration: 500,
+        animationDurationUpdate: 300,
         label: {
           show: true,
-          position: "inside",
+          position: "right",
           formatter: (params: any) => {
-            // Only show labels for nodes with confidence > 0.3
             if (params.data.labelEnabled === false) return "";
-            // V4 Track 1: rich-text multi-line label (type badge + title + links/source)
             return params.data.label || params.name;
           },
           color: "#F8FAFC",
           fontSize: 12,
           rich: RICH_LABEL_STYLES,
         },
-        ...(layoutType === "force"
-          ? {
-              force: {
-                repulsion: 250,
-                gravity: 0.1,
-                edgeLength: 90,
-                friction: 0.6,
-              },
-            }
-          : layoutType === "circular"
-            ? {
-                circular: {
-                  rotateLabel: true,
-                },
-              }
-            : {}),
         emphasis: {
-          focus: "adjacency",
+          focus: "descendant",
           lineStyle: {
             width: 4,
           },
         },
         lineStyle: {
           color: "#475569",
-          curveness: 0.1,
+          curveness: 0.3,
         },
       },
     ],
@@ -232,14 +210,56 @@ export function EChartsGraphCanvas({
 
   const onEvents = {
     click: (params: unknown) => {
-      const p = params as EChartsClickParams;
-      if (p.dataType === "node") {
-        onNodeSelect(p.data);
+      const p = params as Record<string, unknown>;
+      // ECharts tree series uses 'treeNode' as seriesType, not 'node' as dataType.
+      // The node data is nested under p.data for tree clicks.
+      const nodeData = (p.data ?? p) as Record<string, unknown>;
+      const nodeId = nodeData.id ?? nodeData.name;
+      if (nodeId && typeof nodeId === "string") {
+        // Build an EChartsNode-compatible object from the tree node data
+        const echartsNode: EChartsNode = {
+          id: nodeId,
+          name: (nodeData.name as string) ?? "",
+          label: (nodeData.label as string) ?? (nodeData.name as string) ?? "",
+          category:
+            (nodeData.category as string) ??
+            (nodeData.entity_type as string) ??
+            "Unknown",
+          symbolSize: (nodeData.symbolSize as number) ?? 12,
+          value:
+            (nodeData.value as number) ??
+            (nodeData.confidence_score as number) ??
+            0.5,
+          itemStyle: (nodeData.itemStyle as EChartsNode["itemStyle"]) ?? {
+            color: "#6366f1",
+          },
+          confidence:
+            (nodeData.confidence as number) ??
+            (nodeData.confidence_score as number),
+          sourceName:
+            (nodeData.sourceName as string) ?? (nodeData.source_name as string),
+          sourceUrl:
+            (nodeData.sourceUrl as string) ?? (nodeData.source_url as string),
+          pluginName:
+            (nodeData.pluginName as string) ?? (nodeData.plugin_name as string),
+          subEntityCount:
+            (nodeData.subEntityCount as number) ??
+            (nodeData.sub_entity_count as number),
+          rawContext:
+            (nodeData.rawContext as string) ?? (nodeData.raw_context as string),
+          sourceId:
+            (nodeData.sourceId as string) ?? (nodeData.source_id as string),
+          timestamp:
+            (nodeData.timestamp as string) ?? (nodeData.ingested_at as string),
+        };
+        onNodeSelect(echartsNode);
       }
     },
     dblclick: (params: unknown) => {
       const p = params as EChartsDblClickParams;
       if (p.dataType === "node") {
+        // Toggle expand/collapse on double-click (expandAndCollapse handles this
+        // visually), and also trigger drilldown for dynamic expansion.
         onNodeDrillDown(p.data.id);
       }
     },
@@ -247,34 +267,6 @@ export function EChartsGraphCanvas({
 
   return (
     <div className="relative w-full h-full">
-      {/* ── B5: Layout switcher (floating top-right) ── */}
-      <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-slate-900/80 border border-slate-700 rounded-lg p-0.5 shadow-lg">
-        {(["force", "circular", "none"] as LayoutType[]).map((layout) => (
-          <button
-            key={layout}
-            onClick={() => handleLayoutChange(layout)}
-            className={`px-2 py-1 text-[10px] font-medium rounded-md transition-colors ${
-              layoutType === layout
-                ? "bg-indigo-600 text-white"
-                : "text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-            title={
-              layout === "force"
-                ? "Force-directed layout"
-                : layout === "circular"
-                  ? "Circular layout"
-                  : "Static layout (data positions)"
-            }
-          >
-            {layout === "force"
-              ? "Force"
-              : layout === "circular"
-                ? "Circular"
-                : "Static"}
-          </button>
-        ))}
-      </div>
-
       <ReactECharts
         option={option}
         onEvents={onEvents}

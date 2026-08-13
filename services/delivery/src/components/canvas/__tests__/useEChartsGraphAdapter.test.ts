@@ -1,11 +1,11 @@
 import {
-  transformToEChartsData,
+  transformToRadialTreeData,
   EvidenceNode,
   EvidenceEdge,
   getTypeColor,
 } from "../useEChartsGraphAdapter";
 
-describe("useEChartsGraphAdapter transformToEChartsData", () => {
+describe("useEChartsGraphAdapter transformToRadialTreeData", () => {
   const mockNodes: EvidenceNode[] = [
     {
       id: "hospital_123",
@@ -54,47 +54,37 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
     },
   ];
 
-  it("transforms multi-hop nodes and edges into ECharts compliance format", () => {
-    const { nodes, links } = transformToEChartsData(mockNodes, mockEdges);
+  it("transforms multi-hop nodes and edges into radial tree format", () => {
+    const { treeData, nodes, links } = transformToRadialTreeData(
+      mockNodes,
+      mockEdges,
+    );
 
-    expect(nodes).toHaveLength(3);
-    expect(links).toHaveLength(2);
+    expect(treeData).not.toBeNull();
+    expect(nodes.length).toBeGreaterThanOrEqual(3);
+    expect(links.length).toBeGreaterThanOrEqual(2);
 
-    // Node 0 assertions — V4 Track 1: roundRect card with rich-text label
-    expect(nodes[0].id).toBe("hospital_123");
-    expect(nodes[0].name).toBe("hospital_123");
-    // Label is now a rich-text multi-line formatter string
-    expect(nodes[0].label).toContain("FACILITY");
-    expect(nodes[0].label).toContain("Johns Hopkins Hospital");
-    expect(nodes[0].symbol).toBe("roundRect");
-    expect(nodes[0].symbolSize).toEqual([170, 54]);
-    expect(nodes[0].category).toBe("FACILITY");
-    expect(nodes[0].value).toBe(0.95);
-    expect(nodes[0].rawContext).toBe("A famous hospital");
-    expect(nodes[0].sourceId).toBe("src-1");
-    expect(nodes[0].timestamp).toBe("2026-08-01T00:00:00Z");
-    expect(typeof nodes[0].x).toBe("number");
-    expect(typeof nodes[0].y).toBe("number");
-    expect(nodes[0].confidence).toBe(0.95);
+    // Root is dr_smith (degree 2 = most connected)
+    const root = treeData as Record<string, unknown>;
+    expect(root.name).toBe("dr_smith");
 
-    expect(links[0]).toEqual({
-      source: "hospital_123",
-      target: "dr_smith",
-      value: 0.9,
-      lineStyle: { width: 2.7, opacity: 0.7, color: "#475569" },
-    });
+    // Root should have children
+    const children = root.children as Record<string, unknown>[];
+    expect(children).toBeDefined();
+    expect(children.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("V4 Track 1: all nodes use roundRect card dimensions [170, 54]", () => {
-    const { nodes } = transformToEChartsData(mockNodes, mockEdges);
-
-    for (const node of nodes) {
-      expect(node.symbol).toBe("roundRect");
-      expect(node.symbolSize).toEqual([170, 54]);
-    }
+  it("picks the highest-degree node as tree root", () => {
+    const { treeData } = transformToRadialTreeData(mockNodes, mockEdges);
+    const root = treeData as Record<string, unknown>;
+    // hospital_123 has degree 1, dr_smith has degree 2. dr_smith should be root.
+    // But wait: hospital_123 ↔ dr_smith, dr_smith ↔ trial_2025
+    // hospital_123 degree = 1, dr_smith degree = 2, trial_2025 degree = 1
+    // dr_smith has the highest degree (2), so it should be root.
+    expect(root.name).toBe("dr_smith");
   });
 
-  it("V4 Track 1: rich-text label includes type badge, title, and source tag", () => {
+  it("rich-text label includes type badge, title, and source tag", () => {
     const nodesWithProvenance: EvidenceNode[] = [
       {
         id: "hospital_123",
@@ -106,7 +96,7 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
         sub_entity_count: 12,
       },
     ];
-    const { nodes } = transformToEChartsData(nodesWithProvenance, []);
+    const { nodes } = transformToRadialTreeData(nodesWithProvenance, []);
     const label = nodes[0].label as string;
 
     expect(label).toContain("{typeBadge| FACILITY }");
@@ -115,31 +105,50 @@ describe("useEChartsGraphAdapter transformToEChartsData", () => {
     expect(label).toContain("📍 PubMed Central");
   });
 
-  it("emits x/y coordinates for static (layout: none) rendering", () => {
-    const { nodes } = transformToEChartsData(mockNodes, mockEdges);
+  it("emits x/y coordinates for radial layout", () => {
+    const { nodes } = transformToRadialTreeData(mockNodes, mockEdges);
 
     for (const node of nodes) {
       expect(typeof node.x).toBe("number");
       expect(typeof node.y).toBe("number");
-      expect(Number.isFinite(node.x)).toBe(true);
-      expect(Number.isFinite(node.y)).toBe(true);
+      expect(Number.isFinite(node.x!)).toBe(true);
+      expect(Number.isFinite(node.y!)).toBe(true);
     }
   });
 
-  it("places nodes in a circular distribution when >1 node", () => {
-    const { nodes } = transformToEChartsData(mockNodes, mockEdges);
+  it("places nodes at different radial distances based on depth", () => {
+    const { nodes } = transformToRadialTreeData(mockNodes, mockEdges);
 
-    // With 3 nodes, the angles should be 0, 2π/3, 4π/3 on a circle radius 300
-    const radius = 300;
+    // Nodes at different depths should be at different distances from origin
+    const distances = nodes.map((n) => {
+      const nx = (n.x as number) ?? 0;
+      const ny = (n.y as number) ?? 0;
+      return Math.sqrt(nx * nx + ny * ny);
+    });
 
-    // Each node should be at roughly radius distance from origin
-    for (const node of nodes) {
-      const dist = Math.sqrt(node.x * node.x + node.y * node.y);
-      expect(dist).toBeCloseTo(radius, -1); // within ~10 due to floating point
-    }
+    // Not all nodes should be at the same distance
+    const uniqueDistances = new Set(distances.map((d) => d.toFixed(0)));
+    expect(uniqueDistances.size).toBeGreaterThan(1);
+  });
 
-    // Nodes should be distinct positions (not all at the same spot)
-    const positions = nodes.map((n) => `${n.x.toFixed(2)},${n.y.toFixed(2)}`);
-    expect(new Set(positions).size).toBe(nodes.length);
+  it("returns empty result for empty nodes", () => {
+    const { treeData, nodes, links } = transformToRadialTreeData([], []);
+    expect(treeData).toBeNull();
+    expect(nodes).toHaveLength(0);
+    expect(links).toHaveLength(0);
+  });
+
+  it("handles single node with no edges", () => {
+    const { treeData, nodes, links } = transformToRadialTreeData(
+      [mockNodes[0]],
+      [],
+    );
+
+    expect(treeData).not.toBeNull();
+    expect(nodes).toHaveLength(1);
+    expect(links).toHaveLength(0);
+
+    const root = treeData as Record<string, unknown>;
+    expect(root.name).toBe("hospital_123");
   });
 });

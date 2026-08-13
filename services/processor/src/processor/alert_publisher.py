@@ -43,6 +43,7 @@ class AnalystAlert(BaseModel):
     confidence: float
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     source_event_id: str
+    search_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

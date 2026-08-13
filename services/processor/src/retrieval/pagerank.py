@@ -70,7 +70,10 @@ async def pagerank_subgraph(
         n.id AS node_id,
         labels(n) AS labels,
         n.tenant_id AS node_tenant,
-        n.text AS text
+        n.text AS text,
+        n.source_name AS source_name,
+        n.source_url AS source_url,
+        n.plugin_name AS plugin_name
     """
     node_result = await session.run(
         subgraph_cypher,
@@ -143,6 +146,9 @@ async def pagerank_subgraph(
             context_id=row["node_id"],
             score=float(scores.get(row["node_id"], 0.0)),
             text=row.get("text") or "",
+            source_name=row.get("source_name"),
+            source_url=row.get("source_url"),
+            plugin_name=row.get("plugin_name"),
         )
         for row in context_rows
     ]

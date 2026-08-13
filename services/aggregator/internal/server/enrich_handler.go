@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/omni-g/aggregator/pkg/harness"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,10 +39,7 @@ type enrichResponse struct {
 // structured entity metadata and builds a focused query string from it so
 // the governed tools can return content specifically about that entity.
 //
-// The handler fans out only to the sources named in the request (or all
-// configured sources when the list is empty) and publishes results to Kafka
-// via the same harness-backed path used by /search. All tool calls route
-// through the 9-stage Tool Governance Harness.
+// V6: Uses the AgenticRouter for intelligent tool selection, same as /search.
 func (h *SearchHandler) HandleEnrich(w http.ResponseWriter, r *http.Request) {
 	var req enrichRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -62,14 +58,15 @@ func (h *SearchHandler) HandleEnrich(w http.ResponseWriter, r *http.Request) {
 		Str("entity_type", req.Entity.Type).
 		Msg("/enrich request received")
 
-	// Build a focused query string from entity metadata.
 	query := buildEnrichQuery(req.Entity)
 
-	// Resolve which sources to use (defaults to all configured sources).
-	sources := h.resolveSources(req.Plugins)
-	perm := harness.Permission{TenantID: h.tenantID} // allow-all for on-demand
+	if h.router == nil {
+		log.Error().Str("enrichment_id", enrichmentID).Msg("no router configured for /enrich")
+		http.Error(w, `{"error":"enrich router not configured"}`, http.StatusInternalServerError)
+		return
+	}
 
-	total, bySource := h.fanOutThroughHarness(r.Context(), enrichmentID, sources, query, perm, "")
+	total, bySource := h.routeThroughRouter(r.Context(), enrichmentID, query)
 
 	writeJSON(w, http.StatusAccepted, enrichResponse{
 		EnrichmentID:   enrichmentID,

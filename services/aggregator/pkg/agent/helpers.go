@@ -15,8 +15,7 @@ const (
 )
 
 // backoffDuration returns the exponential backoff for the given attempt
-// number, capped at maxBackoff. Mirrors the logic in the deprecated
-// internal/scheduler so agents inherit the same retry cadence.
+// number, capped at maxBackoff.
 func backoffDuration(attempt int) time.Duration {
 	d := time.Duration(math.Pow(2, float64(attempt))) * 500 * time.Millisecond
 	if d > maxBackoff {

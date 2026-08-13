@@ -2,7 +2,249 @@
 
 **Purpose:** living delta between the business-plan vision, the milestone roadmap, and the current Aggregator/Processor implementation.
 
-**Last Updated:** August 11, 2026 — /validate 422 fix, Delivery UI consolidation, pipeline activity unblock.
+**Last Updated:** August 13, 2026 — V6.2 Mu Transport Fix & Scheduler Removal.
+
+---
+
+## V6.2 Mu Transport Fix & Scheduler Removal (August 13, 2026)
+
+Fixes the `unexpected sse status 404` error that broke every `tools/call` against mu. Mu (via go-micro's `gateway/mcp` `httpjsonrpc.go`) serves a single `POST /mcp` route and returns one `application/json` JSON-RPC response whose `result.content[]` carries the text blocks — there is no SSE endpoint for tool calls. The aggregator's `mcp.Client.CallTool()` was hardcoding a `/sse` suffix (`{baseURL}/sse` → `http://mu:8080/mcp/sse` → 404). Also removes the dead `internal/scheduler` package and `MCP_PLUGIN_URLS` plumbing so the aggregator is unambiguously mu-only.
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **MCP client transport** | Rewrote `mcp.Client.CallTool()` to POST the JSON-RPC `tools/call` envelope to the base URL (mu's `/mcp`) and decode the `ToolCallResult.content[]` into `ContentBlock`s. Removed the `/sse` suffix and `text/event-stream` Accept header. Preserved the `<-chan ContentBlock` contract so `harness.drain()` and all callers are unchanged. | ✅ |
+| **SSE parser deleted** | Removed `parseSSE()` and the `bufio` import from `client.go`. No longer needed after the transport rewrite. | ✅ |
+| **mu `isError` handling** | Tool-level failures (mu returns `result.isError=true` with a text block, e.g. "Search query required") are delivered as `ContentBlock`s, not converted to Go errors, so the harness circuit breaker does not trip on legitimate tool refusals. Protocol-level failures (non-200, JSON-RPC error object) still return errors. | ✅ |
+| **Scheduler package deleted** | Deleted `internal/scheduler/` (scheduler.go + scheduler_test.go). No production code imported it (`main.go` never called `scheduler.New`); only its own test and stale comments referenced it. | ✅ |
+| **Scheduler metric removed** | Removed `SchedulerPollTotal` from `internal/metrics/metrics.go` (only used by the deleted scheduler). | ✅ |
+| **Plugin config removed** | Removed `MCPPluginURLs` and `SchedulerIntervalMs` fields, defaults, and the comma-split/filter block from `internal/config/config.go`. | ✅ |
+| **main.go log field** | Removed the `Int("mcp_plugins", len(cfg.MCPPluginURLs))` field from the startup log line. | ✅ |
+| **Docker Compose cleanup** | Removed `MCP_PLUGIN_URLS` env from the aggregator service. Deleted the commented-out OSINT plugin blocks (mcp-echo, mcp-wikipedia, mcp-wikidata, mcp-newsrss, mcp-reuters). | ✅ |
+| **Echo plugin deleted** | Deleted `mcp-plugins/echo/` directory (last legacy plugin artifact). | ✅ |
+| **README updated** | Updated responsibilities, directory structure (removed scheduler, fixed client.go comment), and config table (removed `MCP_PLUGIN_URLS`/`SCHEDULER_INTERVAL_MS` rows). | ✅ |
+| **Tests updated** | Rewrote `TestClient_CallTool_SSEStream`→`_JSONRPC`, `_SendsHeaders`, `_ContextCancel` (sync semantics). Added `_RPCError` and `_IsError` tests. Updated `fakeMCPServer` and `mockPlugin` to respond with JSON-RPC `application/json` instead of SSE. | ✅ |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` | ✅ |
+| Aggregator vet | `go vet ./...` | ✅ Clean |
+| Aggregator tests | `go test -timeout 60s ./...` | ✅ All 11 packages pass |
+| No legacy refs | `grep -rn "MCP_PLUGIN_URLS\|SCHEDULER_INTERVAL\|internal/scheduler\|parseSSE\|mcp-echo\|SchedulerPollTotal" services/aggregator/ infrastructure/docker-compose.yml` | ✅ No hits |
+| No SSE refs | `grep -rn "/sse\b\|text/event-stream" services/aggregator/` | ✅ Only a doc comment in client_test.go + transitive go.sum entry |
+
+### Design Decisions
+
+- **JSON-RPC over POST, not Streamable HTTP:** Mu serves go-micro's `httpjsonrpc.go` at `/mcp` with no session handshake. The simpler JSON-RPC-over-POST shape (one request, one response) is what mu actually speaks. Streamable HTTP (`streamable.go`, GET-based, `Mcp-Session-Id`-gated) is a separate transport mu does not mount.
+- **Channel contract preserved:** `CallTool` still returns `<-chan ContentBlock` (buffered, closed after delivery) so `harness.drain()`, `registry.mcpTool.Invoke`, and every test that drains a channel are unchanged. The channel is now closed synchronously after decoding rather than after an SSE stream ends.
+- **`isError` delivered, not errored:** mu signals tool-level failures with `result.isError=true` + a text block. Converting these to Go errors would trip the harness circuit breaker on legitimate "tool refused" responses (e.g. "Search query required"). Delivering the block lets `harness.normalize` and downstream handle the text naturally.
+- **`mcp.Client` stays transport-agnostic:** No mu-specific imports. The change is "stop assuming SSE; speak JSON-RPC over the base URL" — the correct MCP-over-HTTP shape that matches mu and any go-micro gateway/mcp server.
+- **Scheduler removed, not refactored:** The scheduler was dead code (no `scheduler.New()` call in `main.go`). The PollerAgent (`pkg/agent/poller.go`) replaced it and routes through the 9-stage harness. Keeping dead code would contradict "aggregator should only use mu tools."
+
+### Resolves
+
+| Area | What | Status |
+|------|------|--------|
+| **V6.1 Streamable HTTP transport** | "Mu uses Streamable HTTP (single `POST /mcp`), but our `CallTool` POSTs to `/mcp/sse`. This works for the echo plugin but would 404 against mu." | ✅ Resolved — `CallTool` now POSTs to the base URL (`/mcp`) and parses the JSON-RPC response. |
+
+### Further Considerations
+
+| Area | What | Status |
+|------|------|--------|
+| **Streamable HTTP future-proofing** | If a future mu version mounts `streamable.go` and requires `Mcp-Session-Id` handshakes, this client would need an `initialize` step. Not needed today (mu serves `httpjsonrpc.go` at `/mcp` with no session). | ⏳ Future |
+| **mu cold start** | First startup populates RSS cache and search index. Aggregator should retry tool discovery if mu isn't ready. | ⏳ Future (carried from V6) |
+
+---
+
+## V6.1 Mu Token & Transport Integration (August 13, 2026)
+
+Fixes two gaps in the mu MCP integration: missing auth header support (mu requires `Authorization: Bearer <token>` for authenticated access) and dead code cleanup.
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **MCP client headers** | Added `headers http.Header` field to `mcp.Client`. Added `NewClientWithHeaders(baseURL, headers)` constructor. `NewClient` delegates with nil. Headers applied in both `call()` (tools/list) and `CallTool()` (tools/call). | ✅ |
+| **Registry config headers** | Added `Headers map[string]string` to `MCPServerConfig`. Env-expanded via `expandEnvWithDefaults`. Built into `http.Header` (skipping empty values). Threaded through `mcpTool` so `Invoke` reuses headers. | ✅ |
+| **tools.yaml headers** | Added `headers:` block with `Authorization: "Bearer ${MU_TOKEN:-}"`. Documented `MU_TOKEN` and `X-Micro-Token` alternative. | ✅ |
+| **Docker Compose** | Aggregator env: added `MU_TOKEN: ${MU_TOKEN:-}`. | ✅ |
+| **.env.docker.local** | Added `MU_TOKEN=` with comment explaining it's optional for self-hosted read-only. | ✅ |
+| **Dead code removal** | Deleted `internal/mu/client.go` (zero importers; registry uses `mcp.Client` directly). Removed empty `internal/mu/` directory. | ✅ |
+| **Tests** | Added `TestClient_ListTools_SendsHeaders`, `TestClient_CallTool_SendsHeaders` to `mcp/client_test.go`. Added `TestRegistryConfigLoadWithHeaders`, `TestRegistryConfigLoadWithHeadersEnvExpansion`, `TestRegistryConfigLoadWithHeadersEmptyToken`, `TestRegistryRegisterServerWithHeaders` to `registry_test.go`. | ✅ |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` | ✅ |
+| Aggregator tests | `go test ./...` | ✅ All 11 packages pass |
+| Go vet | `go vet ./...` | ✅ Clean |
+
+### Design Decisions
+
+- **Generic headers map (not single token field)**: Future-proof for other MCP servers with different auth schemes (API keys, custom headers, etc.).
+- **Token optional**: Self-hosted mu works without it for read-only tools; token lifts guest rate limits and enables account-scoped tools.
+- **Env expansion on header values**: `${MU_TOKEN:-}` in `tools.yaml` means the token can be set via environment without editing the YAML file.
+- **Empty header values skipped**: When `MU_TOKEN` is unset, `"Bearer "` is expanded but skipped during `http.Header` construction (empty value → no header sent). This prevents sending a malformed `Authorization: Bearer ` header.
+
+### Further Considerations
+
+| Area | What | Status |
+|------|------|--------|
+| **Streamable HTTP transport** | Mu uses Streamable HTTP (single `POST /mcp`), but our `CallTool` POSTs to `/mcp/sse`. This works for the echo plugin but would 404 against mu. Needs a follow-up to make the SSE suffix configurable or detect Streamable HTTP. | ✅ Resolved in V6.2 — `CallTool` now POSTs to the base URL (`/mcp`) and parses the JSON-RPC response. |
+| **Mu token bootstrap** | Self-hosted mu needs a first account (admin) before tokens can be created. Consider documenting `MU_ADMIN` env var flow or adding a bootstrap script. | ⏳ Future |
+
+---
+
+## V6 Mu-Only Dynamic Tool Architecture (August 13, 2026)
+
+Completes the Phase 6 follow-up from V5: removes all legacy MCP plugins and Go service wrappers, making mu the sole tool provider. Enhances the AgenticRouter with mu-inspired intelligence patterns (query classification, category-tagged tools, few-shot examples, freshness awareness, smart fallback classifier).
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **Remove legacy MCP plugins** | Deleted `mcp-plugins/newsrss/`, `reuters/`, `wikipedia/`, `wikidata/` directories. | ✅ |
+| **Remove legacy Docker services** | Removed `mcp-wikipedia`, `mcp-wikidata`, `mcp-newsrss`, `mcp-reuters` from `infrastructure/docker-compose.yml`. | ✅ |
+| **Remove legacy plugin env vars** | Removed `WIKIPEDIA_PLUGIN_URL`, `WIKIDATA_PLUGIN_URL`, `NEWSRSS_PLUGIN_URL`, `REUTERS_PLUGIN_URL` from aggregator config and docker-compose. | ✅ |
+| **Remove legacy Go services** | Deleted `internal/services/` package (7 files: types.go, search.go, news.go, feeds.go, weather.go, mcp_tool.go, services_test.go). | ✅ |
+| **Strip legacy registration from main.go** | Removed `services.ServiceConfig`, `services.All()` loop, and `internal/services` import. | ✅ |
+| **Simplify SearchHandler** | Removed `sourceTools` map and `defaultSources`. Constructor now takes only `(pl, h, tenantID)`. Router is mandatory. | ✅ |
+| **Update /enrich handler** | `/enrich` now uses AgenticRouter instead of hardcoded fan-out. | ✅ |
+| **Enhanced router system prompt** | Added query classification (news/factual/location/markets/travel), tool selection rules per category, freshness awareness, confidence/grounding instructions, and 5 few-shot examples. | ✅ |
+| **Category-tagged tool list** | `buildToolList()` now tags each tool with `[web]`, `[news]`, `[weather]`, `[markets]`, `[places]`, `[travel]`, `[video]`, `[media]`, `[content]`, `[comm]`, `[utility]` with capability hints. | ✅ |
+| **Smart fallback classifier** | `fallbackFanOut()` now uses keyword-based query classification instead of blind fan-out to all tools. Detects news, weather, location, markets, travel, and video queries. Falls back to `web_search` only. | ✅ |
+| **Updated tools.yaml** | Documented all mu tool categories with descriptions. Simplified to mu-only. | ✅ |
+| **Updated tests** | Fixed `TestRouterFallbackFanOut` and `TestQueryAgentRunsQueries` for new classifier behavior. Added `mockMCPTool` to e2e test replacing deleted `services` package. | ✅ |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` | ✅ |
+| Aggregator tests | `go test ./...` | ✅ All 11 packages pass |
+| Go vet | `go vet ./...` | ✅ Clean |
+| No legacy references | `grep -r "newsrss\|reuters\|wikipedia\|wikidata\|internal/services" services/aggregator/` | ✅ No results |
+
+### Design Decisions
+
+- **Mu stays as sidecar, not embedded**: Mu is a full Go application with its own HTTP server, auth, billing, and data persistence. Embedding would mean vendoring 50+ packages. The MCP sidecar pattern gives full dynamic discovery with proper sandboxing (Principle 7).
+- **Router is mandatory for /search and /enrich**: No more hardcoded fan-out fallback. If the router isn't configured, the endpoints return 500. This ensures all queries go through intelligent tool selection.
+- **Fallback classifier uses keyword matching**: When no OpenRouter API key is set, a lightweight keyword classifier selects relevant tools instead of blind fan-out to all 30+. Much better signal-to-noise ratio.
+- **Weather moves to mu**: The wttr.in direct HTTP client in the deleted `weather.go` is replaced by mu's `weather_forecast` tool.
+
+### Further Considerations
+
+| Area | What | Status |
+|------|------|--------|
+| **Brave Search API key** | Mu's `web_search` requires `BRAVE_API_KEY`. Without it, web search returns "not configured". Consider a health check warning. | ⏳ Future |
+| **Mu cold start** | First startup populates RSS cache and search index. Aggregator should retry tool discovery if mu isn't ready. | ⏳ Future |
+| **WatcherAgent tool names** | Tool names changed (e.g., `news_headlines` instead of `search_news`). Update `WATCHER_TOOL` env var docs. | ⏳ Future |
+
+---
+
+## V5 Agentic Aggregator: Mu Tools & OpenRouter (August 13, 2026)
+
+Replaces the hardcoded MCP plugin architecture with a configuration-driven tool registry backed by micro/mu as a sidecar MCP server. Adds an AgenticRouter that uses OpenRouter's LLM to intelligently select which mu tools to call per query, then invokes them through the existing 9-stage harness. Removes legacy RSS/news plugins.
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **Mu sidecar** | Added `mu` service to `infrastructure/docker-compose.yml` (profiles: ai, services, all). Mu exposes 30+ tools via MCP at `/mcp`. | ✅ |
+| **Mu client** | Created `internal/mu/client.go` — thin adapter wrapping `mcp.Client` for mu's `/mcp` endpoint. | ✅ |
+| **Config-driven registry** | Created `internal/registry/` package. Reads `tools.yaml`, discovers tools from configured MCP servers, wraps each as `harness.Tool`, registers with harness. Adding a new tool source is a config change — no Go code. | ✅ |
+| **tools.yaml** | Created declarative tool config at `services/aggregator/tools.yaml`. Lists MCP servers with optional tool filters. | ✅ |
+| **AgenticRouter** | Created `pkg/agent/router.go` — uses OpenRouter LLM to select relevant tools per query. Falls back to fan-out-all when no API key. | ✅ |
+| **OpenRouter client** | Created `pkg/agent/router_openrouter.go` — OpenAI-compatible HTTP client for OpenRouter chat completions. | ✅ |
+| **QueryAgent** | Created `pkg/agent/query_agent.go` — autonomous agent that runs standing queries through the router on an interval. Replaces PollerAgent's blind approach. | ✅ |
+| **SearchHandler router integration** | Added `SetRouter()` to `SearchHandler`. When router is set, `/search` uses intelligent tool selection instead of hardcoded fan-out. | ✅ |
+| **Router metrics** | Added `omni_g_router_calls_total`, `omni_g_router_tools_selected`, `omni_g_router_latency_seconds` Prometheus metrics. | ✅ |
+| **Config additions** | Added `MU_MCP_URL`, `MU_ENABLED`, `TOOLS_CONFIG_PATH`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ROUTER_MAX_TOOLS`, `ROUTER_TIMEOUT_MS`, `AGENT_QUERIES`, `AGENT_QUERY_INTERVAL_MS` to config. | ✅ |
+| **Docker Compose updates** | Aggregator now has mu/OpenRouter env vars. Legacy plugin URLs default to empty. Added `mu_data` volume. | ✅ |
+| **Tests** | Added `router_test.go` (5 tests: fallback fan-out, empty harness, parse tool selection, parse queries, query agent lifecycle) and `registry_test.go` (4 tests: config load, missing config, register server, tool filter). | ✅ |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` | ✅ |
+| Aggregator tests | `go test ./...` | ✅ All 11 packages pass |
+| Go vet | `go vet ./...` | ✅ Clean |
+
+### Design Decisions
+
+- **Mu as MCP sidecar, not embedded**: Mu runs as a separate Docker container. Aggregator connects via existing MCP client protocol. Keeps mu isolated (Principle 7: sandboxing).
+- **Router only selects tools, doesn't synthesize**: Aggregator stays focused on collection orchestration; synthesis is Processor's job (Principle 2: event-driven, Principle 8: queue-oriented).
+- **Config-driven extensibility**: New tools = edit `tools.yaml`, no Go code. Satisfies "make it extensible."
+- **9-stage harness preserved**: All tool calls still go through validation, permission, circuit breaker, observability.
+- **Legacy services kept for transition**: `internal/services/` still registers alongside the registry. Will be removed in a follow-up once mu is fully validated in production.
+- **OpenRouter API key optional**: Without it, router falls back to fan-out-all-tools (backward compatible).
+
+### Remaining (Phase 6 follow-up) — ALL COMPLETED IN V6
+
+| Area | What | Status |
+|------|------|--------|
+| **Remove legacy plugins** | Delete `internal/services/`, `mcp-plugins/newsrss/`, `reuters/`, `wikipedia/`, `wikidata/` | ✅ Completed V6 |
+| **Remove plugin config vars** | Clean up `NEWSRSS_PLUGIN_URL`, `REUTERS_PLUGIN_URL`, etc. | ✅ Completed V6 |
+| **Remove plugin docker-compose services** | Clean up `mcp-newsrss`, `mcp-reuters`, `mcp-wikipedia`, `mcp-wikidata` | ✅ Completed V6 |
+
+---
+
+## Search Relevance & Live Pipeline Fix (August 13, 2026)
+
+Fixes four interconnected issues: (1) `/search` fan-out included `fetch_weather` and `fetch_feed` — tools with no semantic relevance to user queries — polluting Neo4j and the query cache with irrelevant entities (e.g., "Calcutta" for "Sundar Pichai"). (2) `search_id` was never propagated from Aggregator → Kafka → Processor → stage events, so the Delivery UI's `PipelineIndicator` couldn't correlate pipeline activity with the user's query. (3) Empty BLUF/sources was a downstream symptom of #1. (4) DLQ was working correctly but lacked an observability endpoint.
+
+### Completed
+
+| Area | What Changed | Status |
+|------|-------------|--------|
+| **Aggregator — search fan-out scoping** | Removed `"feeds": "fetch_feed"` and `"weather": "fetch_weather"` from the `SearchHandler` source→tool map in `main.go`. These are polling-only collection tools with no semantic relevance to user queries. The PollerAgent continues to collect them in the background. | ✅ |
+| **Aggregator — `SearchID` on event envelope** | Added `SearchID` field to `pkg/models/event.go` (`RawEvent`) and `internal/kafka/producer.go` (`RawEvent`). Propagated through `ToKafkaEvent()` and `FromKafkaEvent()`. | ✅ |
+| **Aggregator — `searchID` through pipeline** | Added `searchID string` parameter to `Pipeline.Process()` and `Pipeline.ProcessBlock()`. Threaded from `SearchHandler.invokeGovernedTool()` (passing `correlationID`). PollerAgent and WatcherAgent callbacks pass `""` (autonomous collection). | ✅ |
+| **Aggregator — test updates** | Updated all 12 call sites in `pipeline_test.go` and 2 call sites in `e2e_governance_audit_test.go` to pass the new `searchID` parameter. All tests pass (`go test ./internal/pipeline/... ./internal/server/...`). | ✅ |
+| **Processor — `search_id` on `RawEventEnvelope`** | Added `search_id: str | None = None` field to `RawEventEnvelope` in `pipeline.py`. The envelope already uses `model_config = {"extra": "allow"}`, so this is backward-compatible. | ✅ |
+| **Processor — `search_id` threading** | `ProcessorRuntime.process_event()` now extracts `search_id` from the event dict and passes it to `ProcessingPipeline.process(search_id=...)`. The pipeline already passes `search_id` to `StageEventPublisher.publish()` and `AnalystAlert` — no pipeline changes needed. | ✅ |
+| **Processor — DLQ observability** | Added `GET /dlq/stats` endpoint returning `total_dlq_events`, `dlq_by_reason`, `schema_violations`, and `dlq_topic` from Prometheus metrics. Includes a note explaining DLQ only receives failed events, not irrelevant ones. | ✅ |
+
+### Verification
+
+| Component | Command | Result |
+|-----------|---------|--------|
+| Aggregator build | `go build ./...` | ✅ |
+| Aggregator tests | `go test ./internal/pipeline/... ./internal/server/...` | ✅ All pass |
+| Processor model | `RawEventEnvelope.model_validate({..., 'search_id':'srch-123'})` | ✅ `search_id: srch-123` |
+| Processor DLQ route | `'/dlq/stats' in [r.path for r in app.routes]` | ✅ True |
+
+### Design Decisions
+
+- **Weather & feeds excluded from `/search` fan-out**: These are polling-only collection tools. They have no semantic relevance to user queries. The PollerAgent continues to collect them in the background for graph enrichment.
+- **`search_id` propagated via event envelope, not Kafka headers**: Simpler to add a field to the existing JSON envelope. The `RawEventEnvelope` already uses `model_config = {"extra": "allow"}`, so adding a field is backward-compatible.
+- **DLQ is working correctly**: No code change needed for DLQ routing — only observability enhancements. The user's expectation that irrelevant results should go to DLQ is a misunderstanding of DLQ purpose (DLQ = malformed events, not irrelevant ones).
+
+---
+
+## V4 UX & Pipeline Overhaul (August 13, 2026)
+
+Comprehensive 10-phase overhaul spanning Processor, Delivery, and Gateway. Full details in session memory at `/memories/session/plan.md`.
+
+| Phase | What | Status |
+|-------|------|--------|
+| P1 | `search_id` end-to-end binding (Processor → Kafka → Gateway → Delivery) | ✅ |
+| P2 | 3-tier result cache (exact SHA-256 / fuzzy RediSearch / semantic Qdrant, 1h TTL) | ✅ |
+| P3 | Server-side fuzzy history matching endpoint + Delivery API proxy | ✅ |
+| P4 | Strict provenance enforcement (drop entities without `source_id` at write + read) | ✅ |
+| P5 | Radial tree layout replacing force/circular graph (`type:"tree"`, `layout:"radial"`) | ✅ |
+| P6 | Inline `PipelineIndicator` replacing ActivityDrawer + PipelineProgressToast | ✅ |
+| P7 | Query-scoped realtime nodes via `searchId` filtering + NotificationBell queue | ✅ |
+| P8 | Entity dedup: same-type+same-name auto-merge, retrieval-time grouping, UI safety net | ✅ |
+| P9 | BLUF summary in response + enhanced BlufStrip component | ✅ |
+| P10 | Zustand store integration, Docker Compose env, mock cleanup | ✅ |
+
+Verification: `pnpm exec tsc --noEmit` → EXIT_CODE=0, `pnpm exec jest` → 9 suites/78 tests pass, all 7 Processor files syntax OK.
 
 ---
 

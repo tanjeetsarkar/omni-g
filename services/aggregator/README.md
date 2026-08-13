@@ -4,7 +4,7 @@ The **Aggregator** is the edge ingestion layer of Omni-G. It receives raw events
 
 ## Responsibilities
 
-- **MCP Host** — discovers and polls registered MCP plugin servers (Phase M3.1)
+- **MCP Host** — discovers tools from mu via the config-driven registry (V6)
 - **Schema Validation** — delegates payload validation to the Processor sidecar before producing
 - **Kafka Producer** — delivers validated events to the `raw-feed` topic with retry and batching
 - **Observability** — exposes Prometheus metrics at `/metrics` (Phase M3.1)
@@ -23,14 +23,12 @@ aggregator/
 │   │   └── producer.go      # Kafka producer wrapper
 │   ├── mcp/
 │   │   ├── types.go         # JSON-RPC 2.0 + MCP protocol types
-│   │   ├── client.go        # HTTP+SSE MCP plugin client
+│   │   ├── client.go        # JSON-RPC over HTTP MCP client (mu)
 │   │   └── handler.go       # GET /mcp/tools discovery endpoint
 │   ├── metrics/
 │   │   └── metrics.go       # Prometheus counters / histograms
 │   ├── pipeline/
 │   │   └── pipeline.go      # Validate → publish processing step
-│   ├── scheduler/
-│   │   └── scheduler.go     # Agentic per-plugin polling scheduler
 │   ├── server/
 │   │   └── server.go        # HTTP server (health, metrics, MCP)
 │   └── validation/
@@ -53,8 +51,6 @@ All configuration is provided via environment variables.
 | `KAFKA_PRODUCER_BATCH_SIZE` | `100`                     | Max messages per batch               |
 | `KAFKA_BATCH_TIMEOUT_MS` | `1000`                       | Batch flush timeout (ms)             |
 | `VALIDATION_SERVICE_URL` | `http://localhost:8001`      | Processor sidecar URL                |
-| `MCP_PLUGIN_URLS`        | *(empty)*                    | Comma-separated MCP plugin base URLs |
-| `SCHEDULER_INTERVAL_MS`  | `30000`                      | Poll interval per plugin (ms)        |
 | `KAFKA_DLQ_TOPIC`        | `raw-feed.dlq`               | Dead-letter topic (wired in M3.4)    |
 
 ## Running Locally

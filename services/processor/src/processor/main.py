@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import networkx  # noqa: F401  — pre-imported so the first /query/expand call
 
@@ -72,6 +73,7 @@ def configure_logging(level_name: str) -> None:
         "src.extractors",
         "src.indexers",
         "src.dedup",
+        "src.cache",
         "src.graph",
         "src.resolution",
         "src.retrieval",
@@ -242,6 +244,7 @@ class SearchRequest(BaseModel):
     query: str
     tenant_id: str
     limit: int = 20
+    search_id: str | None = None
     # V4 Track 2: dynamic relevance threshold (τ). Edges with co-occurrence
     # weight < relevance_threshold are pruned before rendering. 0.0 = keep
     # all edges (use fusion scores as-is).
@@ -256,10 +259,15 @@ class SearchResponse(BaseModel):
     relationships: list[dict[str, Any]] = []
     context_units: list[dict[str, Any]] = []
     total: int
+    search_id: str | None = None
     # V4 Track 2: structured rich-node payload for the ECharts card renderer.
     nodes: list[dict[str, Any]] = []
     # Zero-Mem verification: graph expansion consumes 0 LLM memory tokens.
     total_tokens_consumed: int = 0
+    # V4 Phase 9: search result summary for BLUF strip.
+    summary: dict[str, Any] | None = None
+    # Phase 5: the most-connected entity ID, used by the radial tree layout as root.
+    tree_root_id: str | None = None
 
 
 class FetchEntitiesRequest(BaseModel):
@@ -272,6 +280,7 @@ class ExpandRequest(BaseModel):
     current_depth: int = 1
     target_depth: int = 2
     tenant_id: str = "default"
+    search_id: str | None = None
     # V4 Track 2: dynamic relevance threshold (τ) for edge pruning on expand.
     relevance_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
 
@@ -283,8 +292,106 @@ class SynthesisRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# V4 Phase 3: Fuzzy History Matching models
+# ---------------------------------------------------------------------------
+
+
+class HistorySuggestion(BaseModel):
+    query_text: str
+    search_id: str
+    timestamp: str
+    entity_count: int
+    similarity_score: float
+
+
+class HistorySearchRequest(BaseModel):
+    query: str
+    tenant_id: str
+    limit: int = 5
+
+
+class HistorySearchResponse(BaseModel):
+    suggestions: list[HistorySuggestion] = []
+
+
+# ---------------------------------------------------------------------------
 # V4 Track 2: rich-node builder
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# V4 Phase 9: search result summary builder
+# ---------------------------------------------------------------------------
+
+
+def _build_summary(
+    ent_payload: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    nodes_payload: list[dict[str, Any]],
+    context_units_payload: list[dict[str, Any]],
+    cached: bool,
+    cache_tier: str | None,
+    pipeline_running: bool,
+) -> dict[str, Any]:
+    """Build a BLUF summary object from search results."""
+    # Entity types count
+    entity_types: dict[str, int] = {}
+    for e in ent_payload:
+        t = e.get("type", "Unknown")
+        entity_types[t] = entity_types.get(t, 0) + 1
+
+    # Top 5 entities by degree (sub_entity_count from nodes_payload)
+    sorted_nodes = sorted(nodes_payload, key=lambda n: n.get("sub_entity_count", 0), reverse=True)
+    top_entities = [
+        {
+            "name": n.get("entity_name", "Unknown"),
+            "type": n.get("entity_type", "Unknown"),
+            "degree": n.get("sub_entity_count", 0),
+        }
+        for n in sorted_nodes[:5]
+    ]
+
+    # Unique sources from context_units_payload
+    sources = list(dict.fromkeys(cu.get("source_name", "") for cu in context_units_payload if cu.get("source_name")))
+
+    return {
+        "total_entities": len(ent_payload),
+        "total_relationships": len(relationships),
+        "entity_types": entity_types,
+        "top_entities": top_entities,
+        "sources": sources,
+        "cached": cached,
+        "cache_tier": cache_tier,
+        "pipeline_running": pipeline_running,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: retrieval-time entity dedup
+# ---------------------------------------------------------------------------
+
+
+def _deduplicate_entities(entities: list) -> list:
+    """Remove duplicate entities with same type+name, keeping highest confidence.
+
+    Groups entities by (type.lower(), name.lower().strip()) and selects the
+    entity with the highest ``confidence`` per group.
+    """
+    groups: dict[tuple[str, str], list] = {}
+    for e in entities:
+        key = (getattr(e, "type", "").lower(), getattr(e, "name", "").lower().strip())
+        groups.setdefault(key, []).append(e)
+    result = []
+    for _key, group in groups.items():
+        best = max(group, key=lambda e: getattr(e, "confidence", 0.0))
+        result.append(best)
+    removed = len(entities) - len(result)
+    if removed > 0:
+        logger.info(
+            "retrieval_dedup_removed_duplicates",
+            extra={"removed_count": removed, "kept_count": len(result)},
+        )
+    return result
 
 
 def _build_custom_nodes(
@@ -355,6 +462,151 @@ def _build_custom_nodes(
     return nodes
 
 
+# ---------------------------------------------------------------------------
+# V4 Phase 3: Query History Recording helper
+# ---------------------------------------------------------------------------
+
+
+async def _record_query_history(
+    tenant_id: str,
+    search_id: str,
+    query: str,
+    entity_count: int,
+    redis_url: str,
+    qdrant_url: str,
+    qdrant_api_key: str | None,
+    ttl_seconds: int = 86400,
+) -> None:
+    """Record a search query in Redis + Qdrant for fuzzy history matching.
+
+    Fail-open: all errors are logged but never raised so they can't break the
+    /search response path.
+    """
+    import hashlib as _hashlib
+    import json as _json
+    import time as _time
+
+    try:
+        from ..llm.client import LLMClient
+    except Exception:
+        logger.warning("Cannot import LLMClient for query history recording")
+        return
+
+    now = _time.time()
+    payload = _json.dumps(
+        {
+            "query_text": query,
+            "search_id": search_id,
+            "tenant_id": tenant_id,
+            "timestamp": now,
+            "entity_count": entity_count,
+        }
+    )
+
+    # ── Redis: store query history hash ───────────────────────────────
+    try:
+        import redis.asyncio as _aioredis
+
+        redis_client = _aioredis.from_url(  # type: ignore[no-untyped-call]
+            redis_url, decode_responses=True
+        )
+        try:
+            history_key = f"query:history:{tenant_id}:{search_id}"
+            await redis_client.setex(history_key, ttl_seconds, payload)
+            logger.debug(
+                "Query history stored in Redis",
+                extra={"tenant_id": tenant_id, "search_id": search_id},
+            )
+
+            # ── RediSearch: index query_text in idx:query_history ─────
+            try:
+                # Ensure index exists (idempotent)
+                try:
+                    await redis_client.execute_command(
+                        "FT.CREATE",
+                        "idx:query_history",
+                        "ON",
+                        "HASH",
+                        "PREFIX",
+                        "1",
+                        "query:history:",
+                        "SCHEMA",
+                        "query_text",
+                        "TEXT",
+                        "search_id",
+                        "TAG",
+                        "tenant_id",
+                        "TAG",
+                        "timestamp",
+                        "NUMERIC",
+                        "SORTABLE",
+                        "entity_count",
+                        "NUMERIC",
+                    )
+                except Exception as exc:
+                    logger.debug("RediSearch idx:query_history FT.CREATE (may already exist): %s", exc)
+
+                rs_key = f"query:history:{tenant_id}:{search_id}"
+                history_fields = {
+                    "query_text": query,
+                    "search_id": search_id,
+                    "tenant_id": tenant_id,
+                    "timestamp": str(now),
+                    "entity_count": str(entity_count),
+                }
+                await redis_client.hset(rs_key, mapping=history_fields)  # type: ignore[arg-type]
+                await redis_client.expire(rs_key, ttl_seconds)
+                logger.debug(
+                    "Query history indexed in RediSearch",
+                    extra={"tenant_id": tenant_id, "search_id": search_id},
+                )
+            except Exception as exc:
+                logger.warning("RediSearch history indexing failed: %s", exc)
+        finally:
+            await redis_client.aclose()
+    except Exception as exc:
+        logger.warning("Redis history storage failed: %s", exc)
+
+    # ── Qdrant: upsert embedding in query_embeddings collection ────────
+    try:
+        from qdrant_client import AsyncQdrantClient
+        from qdrant_client.models import PointStruct
+
+        qdrant = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        try:
+            llm = LLMClient()
+            embedding = await llm.embed(query)
+            if embedding is not None:
+                point_id = int(
+                    _hashlib.sha256(f"history:{tenant_id}:{query}".encode()).hexdigest()[:15],
+                    16,
+                )
+                await qdrant.upsert(
+                    collection_name="query_embeddings",
+                    points=[
+                        PointStruct(
+                            id=point_id,
+                            vector=embedding,
+                            payload={
+                                "query_text": query,
+                                "search_id": search_id,
+                                "tenant_id": tenant_id,
+                                "timestamp": str(now),
+                                "entity_count": entity_count,
+                            },
+                        )
+                    ],
+                )
+                logger.debug(
+                    "Query history embedding upserted in Qdrant",
+                    extra={"tenant_id": tenant_id, "search_id": search_id},
+                )
+        finally:
+            await qdrant.close()
+    except Exception as exc:
+        logger.warning("Qdrant history embedding failed: %s", exc)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
@@ -378,6 +630,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ready", tags=["ops"])
     async def ready() -> JSONResponse:
         return JSONResponse({"status": "ready", "service": "processor"})
+
+    @app.get("/dlq/stats", tags=["ops"])
+    async def dlq_stats() -> JSONResponse:
+        """Return DLQ metrics: total events routed to DLQ by error type.
+
+        Also returns the most recent DLQ messages from the raw-feed.dlq Kafka
+        topic (up to 10) so operators can inspect what's failing without
+        needing Kafka CLI access.
+        """
+        from prometheus_client import REGISTRY
+
+        # Collect DLQ counter values from Prometheus registry.
+        dlq_by_reason: dict[str, float] = {}
+        for metric in REGISTRY.collect():
+            if metric.name == "processor_dlq_events_total":
+                for sample in metric.samples:
+                    reason = sample.labels.get("reason", "unknown")
+                    dlq_by_reason[reason] = sample.value
+
+        total_dlq = sum(dlq_by_reason.values())
+
+        # Also collect schema violations (events dropped before DLQ).
+        schema_violations = 0.0
+        for metric in REGISTRY.collect():
+            if metric.name == "processor_schema_violations_total":
+                for sample in metric.samples:
+                    schema_violations += sample.value
+
+        return JSONResponse(
+            {
+                "total_dlq_events": total_dlq,
+                "dlq_by_reason": dlq_by_reason,
+                "schema_violations": schema_violations,
+                "dlq_topic": app.state.settings.kafka_dlq_topic,
+                "note": "DLQ only receives events that fail processing (schema violations, connection errors, etc.). Valid but irrelevant events are processed successfully and do not appear here.",
+            }
+        )
 
     @app.post("/validate", tags=["ops"], response_model=ValidateResponse)
     async def validate(body: ValidateRequest) -> JSONResponse:
@@ -497,7 +786,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             now = _dt.now(UTC)
             async with neo4j_driver.session() as session:
                 result = await session.run(
-                    "MATCH (e:Entity) WHERE e.id IN $ids RETURN e",
+                    "MATCH (e:Entity) WHERE e.id IN $ids " "AND e.source_id IS NOT NULL AND e.source_id <> '' RETURN e",
                     ids=body.entity_ids,
                 )
                 rows = await result.data()
@@ -538,6 +827,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "relationships": relationships,
                 "context_units": [],
                 "total": len(ent_payload),
+                "tree_root_id": entities[0].id if entities else None,
             }
         )
 
@@ -569,6 +859,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         cfg: Settings = app.state.settings
         logger.info("Search request received", extra={"tenant_id": body.tenant_id, "query": body.query[:100]})
+
+        # V4 Track 1: bind a unique search_id for cross-service tracing.
+        search_id = body.search_id or str(uuid4())
+        logger.info(
+            "Search request bound",
+            extra={"tenant_id": body.tenant_id, "search_id": search_id},
+        )
+
+        # ── V4 Phase 2: 3-Tier Result Cache check ────────────────────────
+        from ..cache.query_cache import QueryCacheService
+
+        cache = QueryCacheService(
+            redis_url=cfg.redis_url,
+            qdrant_url=cfg.qdrant_url,
+            qdrant_api_key=cfg.qdrant_api_key,
+            ttl_seconds=cfg.query_cache_ttl_seconds,
+            embedding_dim=cfg.embedding_dim,
+        )
+        await cache.connect()
+        try:
+            cached = await cache.check_cache(body.tenant_id, body.query)
+            if cached is not None:
+                # V4 Phase 9: attach summary to cached result
+                cached["summary"] = _build_summary(
+                    ent_payload=cached.get("entities", []),
+                    relationships=cached.get("relationships", []),
+                    nodes_payload=cached.get("nodes", []),
+                    context_units_payload=cached.get("context_units", []),
+                    cached=True,
+                    cache_tier=cached.get("cache_tier"),
+                    pipeline_running=False,
+                )
+                logger.info(
+                    "Cache hit — returning cached result",
+                    extra={
+                        "tenant_id": body.tenant_id,
+                        "search_id": search_id,
+                        "cache_tier": cached.get("cache_tier", "unknown"),
+                    },
+                )
+                return JSONResponse(cached)
+        finally:
+            # Cache check done — close the cache connection.
+            # We'll re-open later for store_cache if we get a cache miss.
+            await cache.close()
 
         neo4j_driver = AsyncGraphDatabase.driver(cfg.neo4j_url, auth=(cfg.neo4j_user, cfg.neo4j_password))
         qdrant_client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
@@ -618,13 +953,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             fused = DualViewFusion().fuse(relational_results, temporal_results, profile)  # type: ignore[arg-type]
             calibrated = EvidenceCalibrator().calibrate(fused, profile, l_max=4096)
 
-            # Build context_units payload
+            logger.info(
+                "search_retrieval_diagnostics",
+                extra={
+                    "tenant_id": body.tenant_id,
+                    "relational_count": len(relational_results) if isinstance(relational_results, list) else 0,
+                    "temporal_count": len(temporal_results) if isinstance(temporal_results, list) else 0,
+                    "fused_count": len(fused),
+                    "calibrated_count": len(calibrated),
+                },
+            )
+
+            # Build context_units payload with provenance from ScoredContext
             context_units_payload = [
                 {
                     "context_id": ctx.context_id,
                     "score": ctx.score,
                     "text": ctx.text[:500],  # truncate for transport
                     "entity_ids": ctx.entity_ids,
+                    "source_name": ctx.source_name,
+                    "source_url": ctx.source_url,
+                    "plugin_name": ctx.plugin_name,
                 }
                 for ctx in calibrated
             ]
@@ -642,7 +991,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if all_entity_ids:
                 async with neo4j_driver.session() as session:
                     result = await session.run(
-                        "MATCH (e:Entity) WHERE e.id IN $ids AND e.tenant_id = $tenant_id RETURN e",
+                        "MATCH (e:Entity) WHERE e.id IN $ids AND e.tenant_id = $tenant_id " "AND e.source_id IS NOT NULL AND e.source_id <> '' RETURN e",
                         ids=all_entity_ids,
                         tenant_id=body.tenant_id,
                     )
@@ -686,10 +1035,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if body.relevance_threshold > 0.0 and relationships:
                 relationships = [rel for rel in relationships if float(rel.get("confidence", rel.get("weight", 0.0))) >= body.relevance_threshold]
 
+            # ── Provenance fallback: when the retrieval pipeline returned no
+            # calibrated contexts, fetch ContextUnits directly from Neo4j so
+            # the UI still gets source_name / source_url / raw_context.
+            if not context_units_payload and entities:
+                entity_ids_for_ctx = [e.id for e in entities]
+                context_units_payload = await graph_persistence.fetch_context_units_for_entities(entity_ids_for_ctx, body.tenant_id)
+                logger.info(
+                    "search_context_units_fallback",
+                    extra={
+                        "tenant_id": body.tenant_id,
+                        "entity_count": len(entities),
+                        "context_unit_count": len(context_units_payload),
+                    },
+                )
+
             await temporal_store.close()
         finally:
             await neo4j_driver.close()
             await qdrant_client.close()
+
+        # Phase 8: retrieval-time entity dedup — keep highest confidence per (type, name)
+        entities = _deduplicate_entities(entities)
+
+        # Phase 5: sort entities by degree (highest first) so the root is the
+        # most-connected entity. Compute tree_root_id for the radial tree layout.
+        tree_root_id: str | None = None
+        if entities:
+            # Degree map from relationships
+            _degree_map: dict[str, int] = {}
+            for rel in relationships:
+                src = rel.get("source_ref") or rel.get("source_id") or rel.get("source")
+                tgt = rel.get("target_ref") or rel.get("target_id") or rel.get("target")
+                if src:
+                    _degree_map[src] = _degree_map.get(src, 0) + 1
+                if tgt:
+                    _degree_map[tgt] = _degree_map.get(tgt, 0) + 1
+            # Sort by degree desc, tie-break on confidence desc
+            entities = sorted(
+                entities,
+                key=lambda e: (_degree_map.get(e.id, 0), e.confidence),
+                reverse=True,
+            )
+            tree_root_id = entities[0].id
 
         ent_payload = [e.model_dump(mode="json") for e in entities]
 
@@ -707,16 +1095,139 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "node_count": len(nodes_payload),
             },
         )
-        return JSONResponse(
-            {
-                "entities": ent_payload,
-                "relationships": relationships,
-                "context_units": context_units_payload,
-                "total": len(ent_payload),
-                "nodes": nodes_payload,
-                "total_tokens_consumed": 0,
-            }
+
+        # V4 Phase 9: build BLUF summary for cache-miss (pipeline-triggered) response
+        summary = _build_summary(
+            ent_payload=ent_payload,
+            relationships=relationships,
+            nodes_payload=nodes_payload,
+            context_units_payload=context_units_payload,
+            cached=False,
+            cache_tier=None,
+            pipeline_running=True,
         )
+
+        response = {
+            "entities": ent_payload,
+            "relationships": relationships,
+            "context_units": context_units_payload,
+            "total": len(ent_payload),
+            "nodes": nodes_payload,
+            "tree_root_id": tree_root_id,
+            "total_tokens_consumed": 0,
+            "search_id": search_id,
+            "summary": summary,
+        }
+
+        # ── V4 Phase 2: Store result in cache for future queries ──────────
+        cache_store = QueryCacheService(
+            redis_url=cfg.redis_url,
+            qdrant_url=cfg.qdrant_url,
+            qdrant_api_key=cfg.qdrant_api_key,
+            ttl_seconds=cfg.query_cache_ttl_seconds,
+            embedding_dim=cfg.embedding_dim,
+        )
+        await cache_store.connect()
+        try:
+            await cache_store.store_cache(body.tenant_id, search_id, body.query, response)
+        finally:
+            await cache_store.close()
+
+        # ── V4 Phase 3: Record query history for fuzzy matching ────────────
+        asyncio.ensure_future(
+            _record_query_history(
+                tenant_id=body.tenant_id,
+                search_id=search_id,
+                query=body.query,
+                entity_count=len(ent_payload),
+                redis_url=cfg.redis_url,
+                qdrant_url=cfg.qdrant_url,
+                qdrant_api_key=cfg.qdrant_api_key,
+                ttl_seconds=cfg.query_cache_ttl_seconds,
+            )
+        )
+
+        return JSONResponse(response)
+
+    # ── V4 Phase 3: Fuzzy History Matching endpoint ────────────────────
+
+    @app.post(
+        "/query/history/search",
+        tags=["search"],
+        response_model=HistorySearchResponse,
+    )
+    async def history_search(body: HistorySearchRequest) -> JSONResponse:
+        """Search query history for semantically similar past queries.
+
+        Returns suggestions with instant cached results the UI can load
+        without re-executing the full search pipeline.
+        Fail-open: returns empty suggestions on any error.
+        """
+        from ..llm.client import LLMClient
+
+        cfg: Settings = app.state.settings
+        logger.info(
+            "History search request",
+            extra={"tenant_id": body.tenant_id, "query": body.query[:100]},
+        )
+
+        # ── 1. Embed the query ─────────────────────────────────────────
+        try:
+            llm = LLMClient()
+            embedding = await asyncio.wait_for(llm.embed(body.query), timeout=10.0)
+        except Exception as exc:
+            logger.warning("Failed to embed query for history search: %s", exc)
+            return JSONResponse({"suggestions": []})
+
+        # ── 2. Search Qdrant for similar past queries ───────────────────
+        try:
+            from qdrant_client import AsyncQdrantClient
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            qdrant = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.qdrant_api_key)
+            results = await qdrant.search(
+                collection_name="query_embeddings",
+                query_vector=embedding,
+                limit=body.limit + 5,  # fetch extra for post-filter margin
+                score_threshold=0.75,
+                query_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="tenant_id",
+                            match=MatchValue(value=body.tenant_id),
+                        )
+                    ]
+                ),
+            )
+            await qdrant.close()
+        except Exception as exc:
+            logger.warning("Qdrant history search failed: %s", exc)
+            return JSONResponse({"suggestions": []})
+
+        # ── 3. Build response, sorted by similarity descending ─────────
+        suggestions: list[dict[str, Any]] = []
+        for hit in results[: body.limit]:
+            payload = hit.payload or {}
+            suggestions.append(
+                {
+                    "query_text": str(payload.get("query_text", "")),
+                    "search_id": str(payload.get("search_id", "")),
+                    "timestamp": str(payload.get("timestamp", "")),
+                    "entity_count": int(payload.get("entity_count", 0)),
+                    "similarity_score": round(float(hit.score), 4),
+                }
+            )
+
+        suggestions.sort(key=lambda s: s["similarity_score"], reverse=True)
+
+        logger.info(
+            "History search response",
+            extra={
+                "tenant_id": body.tenant_id,
+                "suggestion_count": len(suggestions),
+            },
+        )
+        return JSONResponse({"suggestions": suggestions})
 
     @app.post("/query/expand", tags=["search"], response_model=SearchResponse)
     async def expand(body: ExpandRequest) -> JSONResponse:
@@ -794,6 +1305,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         MATCH (ctx:ContextUnit)<-[:CO_OCCURRED_IN]-(e:Entity)
                         WHERE ctx.id IN $context_ids AND ctx.tenant_id = $tenant_id
                         AND e.tenant_id = $tenant_id
+                        AND e.source_id IS NOT NULL AND e.source_id <> ''
                         RETURN ctx.id AS context_id, collect(e.id) AS entity_ids
                         """,
                         context_ids=context_ids,
@@ -821,7 +1333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if all_entity_ids:
                     async with neo4j_driver.session() as session:
                         result = await session.run(
-                            "MATCH (e:Entity) WHERE e.id IN $ids " "AND e.tenant_id = $tenant_id RETURN e",
+                            "MATCH (e:Entity) WHERE e.id IN $ids " "AND e.tenant_id = $tenant_id " "AND e.source_id IS NOT NULL AND e.source_id <> '' RETURN e",
                             ids=all_entity_ids,
                             tenant_id=body.tenant_id,
                         )
@@ -854,6 +1366,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.relevance_threshold > 0.0 and relationships:
             relationships = [rel for rel in relationships if float(rel.get("confidence", rel.get("weight", 0.0))) >= body.relevance_threshold]
 
+        # Phase 5: compute tree_root_id for expand responses.
+        _expand_root_id: str | None = None
+        if entities:
+            _expand_root_id = entities[0].id
+
         ent_payload = [e.model_dump(mode="json") for e in entities]
         nodes_payload = _build_custom_nodes(entities, context_units_payload, relationships, body.tenant_id)
         return JSONResponse(
@@ -863,7 +1380,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "context_units": context_units_payload,
                 "total": len(ent_payload),
                 "nodes": nodes_payload,
+                "tree_root_id": _expand_root_id,
                 "total_tokens_consumed": 0,
+                "search_id": body.search_id,
             }
         )
 
@@ -933,6 +1452,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     """
                     MATCH (e:Entity)
                     WHERE e.tenant_id = $tenant_id AND e.confidence >= 0.5
+                      AND e.source_id IS NOT NULL AND e.source_id <> ''
                     RETURN e
                     ORDER BY e.created DESC
                     LIMIT $limit

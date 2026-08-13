@@ -47,6 +47,10 @@ type RawEvent struct {
 	// Required by V4 contract when the source has a human-facing URL; may be
 	// empty only for sources that genuinely have no URL (e.g. local feeds).
 	SourceURL string `json:"source_url,omitempty"`
+	// SearchID is the optional search correlation ID that binds this event
+	// to a user-initiated /search or /enrich request. Empty for autonomous
+	// (polled/watched) collection events.
+	SearchID string `json:"search_id,omitempty"`
 }
 
 // NewRawEvent constructs a RawEvent with stamped defaults: a new UUID id, the
@@ -116,6 +120,7 @@ func (e *RawEvent) ToKafkaEvent() *kafkainternal.RawEvent {
 		KIQID:           e.KIQID,
 		SourceName:      e.SourceName,
 		SourceURL:       e.SourceURL,
+		SearchID:        e.SearchID,
 	}
 }
 
@@ -139,5 +144,6 @@ func FromKafkaEvent(k *kafkainternal.RawEvent) *RawEvent {
 		KIQID:           k.KIQID,
 		SourceName:      k.SourceName,
 		SourceURL:       k.SourceURL,
+		SearchID:        k.SearchID,
 	}
 }

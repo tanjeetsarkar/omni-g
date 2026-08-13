@@ -20,7 +20,9 @@ class CandidateMatch(BaseModel):
 
     entity_id: str
     score: float  # 0.0–1.0
-    match_type: str  # "vector" | "structural"
+    match_type: str  # "vector" | "structural" | "fuzzy" | "same_name"
+    candidate_name: str | None = None
+    candidate_type: str | None = None
 
 
 class ResolutionResult(BaseModel):

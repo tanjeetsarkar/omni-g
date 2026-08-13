@@ -15,6 +15,7 @@ class StageEvent(BaseModel):
     tenant_id: str
     stage: str
     status: Literal["active", "done"]
+    search_id: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -44,6 +45,7 @@ class StageEventPublisher:
         tenant_id: str,
         stage: str,
         status: Literal["active", "done"],
+        search_id: str | None = None,
     ) -> None:
         """Enqueue a stage event. Never raises."""
         try:
@@ -52,6 +54,7 @@ class StageEventPublisher:
                 tenant_id=tenant_id,
                 stage=stage,
                 status=status,
+                search_id=search_id,
             )
             payload = json.loads(ev.model_dump_json())
             self._producer.send(self._topic, payload)

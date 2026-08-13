@@ -23,12 +23,29 @@ export interface Relationship {
 }
 
 export interface SearchResponse {
+  search_id?: string;
   entities: Entity[];
   relationships: Relationship[];
   // V4 Track 2: structured rich-node payload with provenance.
   nodes?: CustomNodeResponse[];
   // V4 Track 2: zero-mem invariant — graph expansion consumes 0 LLM tokens.
   total_tokens_consumed?: number;
+  // Phase 5: root entity ID for radial tree layout.
+  tree_root_id?: string;
+  // V4 Phase 9: BLUF summary object for the BlufStrip component.
+  summary?: SearchSummary;
+}
+
+/** V4 Phase 9: structured summary emitted by Processor /search. */
+export interface SearchSummary {
+  total_entities: number;
+  total_relationships: number;
+  entity_types: Record<string, number>;
+  top_entities: { name: string; type: string; degree: number }[];
+  sources: string[];
+  cached: boolean;
+  cache_tier: string | null;
+  pipeline_running: boolean;
 }
 
 /** V4 Track 2: human-readable source provenance attached to every node. */
@@ -99,4 +116,18 @@ export interface BriefingTranscript {
   text: string;
   entities: string[];
   date: string;
+}
+
+/** V4 Phase 3: a single history suggestion from fuzzy query matching. */
+export interface HistorySuggestion {
+  query_text: string;
+  search_id: string;
+  timestamp: string;
+  entity_count: number;
+  similarity_score: number;
+}
+
+/** V4 Phase 3: response wrapper for /api/query/history. */
+export interface HistorySearchResponse {
+  suggestions: HistorySuggestion[];
 }

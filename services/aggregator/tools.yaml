@@ -1,0 +1,44 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Aggregator Tool Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+# Mu is the sole tool provider for the Aggregator. It exposes 30+ tools via
+# MCP at /mcp, covering web search, news, weather, markets, places, flights,
+# video, and more. Tools are auto-discovered on startup — no Go code changes
+# needed to add or remove capabilities.
+#
+# Tool categories available from mu:
+#   [web]       web_search, web_fetch        — Brave Search + readability
+#   [news]      news_headlines, news_read, news_search — RSS aggregation
+#   [weather]   weather_forecast             — Location-based forecasts
+#   [markets]   markets_list                 — Stock & market data
+#   [places]    places_search, places_nearby — Location search & geocoding
+#   [travel]    flights_overhead, routes     — Flight tracking & directions
+#   [video]     video_search                 — Cross-platform video search
+#   [media]     images, stream               — Image & streaming media
+#   [content]   blog, docs, notes            — Content creation & management
+#   [comm]      email, mail, sms, chat       — Communication tools
+#   [utility]   contacts, events, tasks, files, prayer — Personal utilities
+#
+# To restrict which tools are available, use tool_filter:
+#   tool_filter:
+#     - web_search
+#     - web_fetch
+#     - news_search
+#     - news_headlines
+#     - weather_forecast
+#
+# Mu supports two auth header styles:
+#   Authorization: Bearer <token>   — standard (preferred)
+#   X-Micro-Token: <token>          — legacy (also accepted)
+# Create a token at /token or /agents on the mu instance, or set MU_TOKEN
+# in the environment. For self-hosted read-only use, the token is optional.
+# ──────────────────────────────────────────────────────────────────────────────
+
+mcp_servers:
+  - name: mu
+    url: "${MU_MCP_URL:-http://localhost:8080/mcp}"
+    enabled: ${MU_ENABLED:-true}
+    description: "Micro/Mu — 30+ tools for web search, news, weather, markets, places, flights, video, and more"
+    tool_filter: []
+    headers:
+      Authorization: "Bearer ${MU_TOKEN:-}"

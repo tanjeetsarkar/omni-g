@@ -66,6 +66,13 @@ SAME_AS_MERGES = Counter(
     ["tenant_id"],
 )
 
+# Phase 8: same-type dedup counter
+SAME_TYPE_MERGES = Counter(
+    "processor_same_type_merges_total",
+    "Entities automatically merged via same-type same-name dedup",
+    ["tenant_id"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -182,8 +189,22 @@ class EntityResolver:
         try:
             vector_candidates = await self.find_candidates(tenant_id, entity)
             structural_candidates = await self.find_structural_matches(tenant_id, entity)
+
+            all_candidates = vector_candidates + structural_candidates
+
+            # ── Phase 8: same-type dedup rules (applied before threshold logic) ──
+            same_type_result = self._apply_same_type_dedup(entity, all_candidates, tenant_id)
+            if same_type_result is not None:
+                # Rule 1 matched — short-circuit with auto-merge
+                RESOLUTION_DECISIONS.labels(
+                    decision=same_type_result.decision.value,
+                    tenant_id=tenant_id,
+                ).inc()
+                SAME_AS_MERGES.labels(tenant_id=tenant_id).inc()
+                return same_type_result
+
             result = self._apply_decision(
-                vector_candidates + structural_candidates,
+                all_candidates,
                 entity,
             )
         finally:
@@ -312,6 +333,8 @@ class EntityResolver:
                         entity_id=pid,
                         score=float(point.score),
                         match_type="vector",
+                        candidate_name=str(payload.get("name", "")),
+                        candidate_type=str(payload.get("entity_type", "")),
                     )
                 )
 
@@ -355,7 +378,7 @@ class EntityResolver:
                     e.name = $name
                     OR $name IN coalesce(e.aliases, [])
                   )
-                RETURN e.id AS entity_id, 1.0 AS score
+                RETURN e.id AS entity_id, 1.0 AS score, e.name AS name, e.type AS type
                 """,
                 tenant_id=tenant_id,
                 entity_type=entity_type,
@@ -369,6 +392,8 @@ class EntityResolver:
                         entity_id=str(row["entity_id"]),
                         score=float(row["score"]),
                         match_type="structural",
+                        candidate_name=str(row.get("name") or ""),
+                        candidate_type=str(row.get("type") or ""),
                     )
                 )
 
@@ -381,7 +406,9 @@ class EntityResolver:
                 WITH existing, count(DISTINCT shared) AS cnt
                 WHERE cnt >= 2
                 RETURN existing.id AS entity_id,
-                       toFloat(cnt) / 10.0 AS score
+                       toFloat(cnt) / 10.0 AS score,
+                       existing.name AS name,
+                       existing.type AS type
                 """,
                 tenant_id=tenant_id,
                 entity_id=entity_id,
@@ -393,6 +420,8 @@ class EntityResolver:
                         entity_id=str(row["entity_id"]),
                         score=min(float(row["score"]), 1.0),
                         match_type="structural",
+                        candidate_name=str(row.get("name") or ""),
+                        candidate_type=str(row.get("type") or ""),
                     )
                 )
 
@@ -476,12 +505,20 @@ class EntityResolver:
                             entity_id=str(row["entity_id"]),
                             score=best_score / 100.0,
                             match_type="fuzzy",
+                            candidate_name=candidate_name,
+                            candidate_type=entity.type,
                         )
                     )
         except Exception as exc:
-            logger.warning(
+            logger.exception(
                 "fuzzy_name_match_failed",
-                extra={"tenant_id": tenant_id, "entity_id": entity.id, "error": str(exc)},
+                extra={
+                    "tenant_id": tenant_id,
+                    "entity_id": entity.id,
+                    "entity_name": name,
+                    "entity_type": entity.type,
+                    "error": str(exc),
+                },
             )
 
         logger.debug(
@@ -493,6 +530,76 @@ class EntityResolver:
             },
         )
         return candidates
+
+    # ------------------------------------------------------------------
+    # Phase 8: same-type dedup rules
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_same_type_dedup(
+        entity: Entity,
+        candidates: list[CandidateMatch],
+        tenant_id: str,
+    ) -> ResolutionResult | None:
+        """Apply same-type dedup rules before vector/structural threshold logic.
+
+        Rule 1: Same-type + same-name → auto-merge (similarity = 1.0).
+            Skips vector comparison entirely for the pair.
+        Rule 2: Same-type + substring → boost existing similarity by +0.2.
+            Modifies candidate scores in-place.
+        Rule 3: Same-type but different names → keep existing logic.
+
+        Returns a ResolutionResult if Rule 1 triggers (short-circuit),
+        otherwise ``None`` (defer to ``_apply_decision``).
+        """
+        entity_type = (entity.type or "").lower().strip()
+        entity_name = (entity.name or "").lower().strip()
+
+        if not entity_type or not entity_name:
+            return None
+
+        for c in candidates:
+            c_type = (c.candidate_type or "").lower().strip()
+            c_name = (c.candidate_name or "").lower().strip()
+
+            if not c_type or not c_name:
+                continue
+
+            # ── Rule 1: same-type + same-name → auto-merge ──────────
+            if c_type == entity_type and c_name == entity_name:
+                SAME_TYPE_MERGES.labels(tenant_id=tenant_id).inc()
+                logger.info(
+                    "same_type_exact_match_auto_merge",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "entity_id": entity.id,
+                        "entity_name": entity_name,
+                        "matched_id": c.entity_id,
+                        "matched_name": c_name,
+                    },
+                )
+                return ResolutionResult(
+                    decision=ResolutionDecision.AUTO_MERGE,
+                    matched_entity_id=c.entity_id,
+                    confidence_score=1.0,
+                    entity=entity,
+                )
+
+            # ── Rule 2: same-type + substring → boost similarity ────
+            if c_type == entity_type:
+                if c_name in entity_name or entity_name in c_name:
+                    object.__setattr__(c, "score", min(c.score + 0.2, 1.0))
+                    logger.debug(
+                        "same_type_substring_boost",
+                        extra={
+                            "tenant_id": tenant_id,
+                            "entity_id": entity.id,
+                            "candidate_id": c.entity_id,
+                            "boosted_score": c.score,
+                        },
+                    )
+
+        return None
 
     # ------------------------------------------------------------------
     # Merge decision logic (pure, no I/O — easy to unit-test)

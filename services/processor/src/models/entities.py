@@ -40,6 +40,10 @@ class Entity(BaseModel):
     created: datetime
     modified: datetime
 
+    def has_provenance(self) -> bool:
+        """Return True if this entity carries a non-empty source_id."""
+        return bool(self.source_id and self.source_id.strip())
+
 
 class Relationship(BaseModel):
     """A directed relationship between two Entity nodes."""

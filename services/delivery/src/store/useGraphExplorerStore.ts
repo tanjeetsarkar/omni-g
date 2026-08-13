@@ -6,6 +6,7 @@ import type {
   Entity,
   Relationship,
   ContextUnit,
+  SearchSummary,
 } from "../types/entities";
 
 /**
@@ -46,6 +47,10 @@ interface GraphExplorerState {
   selectedNode: CanvasNode | null;
   isLoading: boolean;
   error: string | null;
+  /** V4: search_id binding from the most recent /api/query response. */
+  searchId: string | null;
+  /** V4 Phase 9: BLUF summary from the /api/query response. */
+  summary: SearchSummary | null;
 
   // ── Actions ──────────────────────────────────────────────────────────
   setQuery: (query: string) => void;
@@ -77,6 +82,8 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
   selectedNode: null,
   isLoading: false,
   error: null,
+  searchId: null,
+  summary: null,
 
   setQuery: (query) => set({ query }),
 
@@ -90,7 +97,14 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
   setTenantId: (tenantId) => set({ tenantId }),
 
   clearCanvas: () =>
-    set({ nodes: [], edges: [], selectedNode: null, error: null }),
+    set({
+      nodes: [],
+      edges: [],
+      selectedNode: null,
+      error: null,
+      searchId: null,
+      summary: null,
+    }),
 
   executeQuery: async () => {
     const { query, depth, relevanceThreshold, tenantId } = get();
@@ -186,6 +200,8 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
         relationships,
         contextUnits,
         isLoading: false,
+        searchId: typeof data.search_id === "string" ? data.search_id : null,
+        summary: data.summary ?? null,
       });
     } catch (err) {
       set({
@@ -205,9 +221,26 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
   },
 
   mergeRealtime: (entities, relationships) => {
-    const existingIds = new Set(get().nodes.map((n) => n.id));
+    const existingNodes = get().nodes;
+    const existingIds = new Set(existingNodes.map((n) => n.id));
+
+    // Phase 8: same-type same-name dedup — don't add duplicate entity
+    // nodes that differ only by source (different IDs, same type+name).
+    const existingNameKeys = new Set(
+      existingNodes.map(
+        (n) =>
+          `${n.entity_type?.toLowerCase()}:${n.entity_name?.toLowerCase().trim()}`,
+      ),
+    );
+
     const newNodes: CanvasNode[] = entities
-      .filter((e) => !existingIds.has(e.id))
+      .filter((e) => {
+        if (existingIds.has(e.id)) return false;
+        const key = `${e.type.toLowerCase()}:${e.name.toLowerCase().trim()}`;
+        if (existingNameKeys.has(key)) return false;
+        existingNameKeys.add(key);
+        return true;
+      })
       .map((e) => ({
         id: e.id,
         entity_name: e.name,
@@ -223,12 +256,27 @@ export const useGraphExplorerStore = create<GraphExplorerState>((set, get) => ({
         raw_context: null,
         depth: 1,
       }));
-    const newEdges: CanvasEdge[] = relationships.map((r) => ({
-      id: r.id,
-      source: r.source_ref,
-      target: r.target_ref,
-      weight: r.confidence,
-    }));
+
+    // Phase 8: skip edges that already exist with same (source, target, type).
+    const existingEdges = get().edges;
+    const existingEdgeKeys = new Set(
+      existingEdges.map((e) => `${e.source}:${e.target}:${e.id}`),
+    );
+
+    const newEdges: CanvasEdge[] = relationships
+      .filter((r) => {
+        const key = `${r.source_ref}:${r.target_ref}:${r.id}`;
+        if (existingEdgeKeys.has(key)) return false;
+        existingEdgeKeys.add(key);
+        return true;
+      })
+      .map((r) => ({
+        id: r.id,
+        source: r.source_ref,
+        target: r.target_ref,
+        weight: r.confidence,
+      }));
+
     set((state) => ({
       nodes: [...state.nodes, ...newNodes],
       edges: [...state.edges, ...newEdges],

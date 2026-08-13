@@ -14,3 +14,9 @@ class ScoredContext:
     text: str
     entity_ids: list[str] = field(default_factory=list)
     source_event_id: str | None = None
+    # V4 Track 2: human-readable provenance threaded from ContextUnit nodes
+    # through retrieval → fusion → calibration → search response so the UI
+    # can render source tags without extra Neo4j round-trips.
+    source_name: str | None = None
+    source_url: str | None = None
+    plugin_name: str | None = None

@@ -192,6 +192,8 @@ export interface AlertMessage {
   community_id?: string;
   severity?: string;
   message?: string;
+  /** V4: search_id binding for correlating alerts with a specific query/canvas. */
+  search_id?: string;
   [key: string]: unknown;
 }
 
@@ -349,7 +351,13 @@ export function handleStageEventValue(messageValue: Buffer | null): void {
   if (typeof ev.tenant_id !== "string" || !ev.tenant_id) return;
 
   const room = `tenant:${ev.tenant_id}`;
-  io.to(room).emit("pipeline_stage", ev);
+  // V4: include search_id in the pipeline stage broadcast so the UI can
+  // correlate pipeline progress with the active canvas query.
+  const payload: Record<string, unknown> = { ...ev };
+  if (typeof ev.search_id === "string") {
+    payload.search_id = ev.search_id;
+  }
+  io.to(room).emit("pipeline_stage", payload);
 }
 
 /**

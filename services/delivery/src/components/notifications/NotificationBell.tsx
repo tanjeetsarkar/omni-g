@@ -3,9 +3,13 @@
 /**
  * NotificationBell — bell icon in the header showing unread notification count.
  * Dropdown shows recent errors/warnings with timestamps.
+ *
+ * V4 Phase 7: Listens to ALL Socket.io alerts. When an alert arrives
+ * with a search_id that doesn't match the active search, it increments
+ * the notification counter and queues it in the dropdown.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Bell,
   X,
@@ -13,11 +17,23 @@ import {
   AlertTriangle,
   Info,
   CheckCircle,
+  Search,
 } from "lucide-react";
 import {
   useNotificationLog,
   type NotificationType,
 } from "@/hooks/useNotificationLog";
+import { useGraphExplorerStore } from "@/store/useGraphExplorerStore";
+import { getSocket } from "@/lib/socket";
+
+interface QueuedAlert {
+  id: string;
+  summary: string;
+  query?: string;
+  searchId?: string;
+  timestamp: number;
+  entityIds: string[];
+}
 
 function NotificationIcon({ type }: { type: NotificationType }) {
   switch (type) {
@@ -48,7 +64,55 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const unreadCount = getUnreadCount();
+  // V4 Phase 7: listen to ALL alerts, queue ones from other searches
+  const activeSearchId = useGraphExplorerStore((s) => s.searchId);
+  const [alerts, setAlerts] = useState<QueuedAlert[]>([]);
+  const alertCounterRef = useRef(0);
+
+  const clearAlerts = useCallback(() => {
+    setAlerts([]);
+  }, []);
+
+  // Subscribe to all alerts on the shared socket
+  useEffect(() => {
+    const socket = getSocket();
+
+    const handleAlert = (payload: Record<string, unknown>) => {
+      const payloadSearchId =
+        typeof payload.search_id === "string" ? payload.search_id : undefined;
+
+      // If activeSearchId matches (or there's no search_id on the alert),
+      // the useRealtimeNodes hook handles it — don't queue here.
+      if (
+        !payloadSearchId ||
+        (activeSearchId && payloadSearchId === activeSearchId)
+      ) {
+        return;
+      }
+
+      // Queue alert from a different search
+      alertCounterRef.current += 1;
+      const entry: QueuedAlert = {
+        id: `alert-${alertCounterRef.current}-${Date.now()}`,
+        summary:
+          typeof payload.summary === "string" && payload.summary
+            ? payload.summary
+            : "New results available",
+        query: typeof payload.query === "string" ? payload.query : undefined,
+        searchId: payloadSearchId,
+        timestamp: Date.now(),
+        entityIds: Array.isArray(payload.entity_ids)
+          ? (payload.entity_ids as string[])
+          : [],
+      };
+      setAlerts((prev) => [entry, ...prev].slice(0, 20));
+    };
+
+    socket.on("alert", handleAlert);
+    return () => {
+      socket.off("alert", handleAlert);
+    };
+  }, [activeSearchId]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -69,17 +133,26 @@ export function NotificationBell() {
   // Show only undismissed notifications in the dropdown
   const activeNotifications = notifications.filter((n) => !n.dismissed);
 
+  // Total unread = regular notifications + alerts from other searches
+  const totalUnread = getUnreadCount() + alerts.length;
+
   return (
     <div className="relative" ref={dropdownRef}>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setOpen(!open);
+          if (!open) {
+            // Clear alerts when opening the dropdown
+            clearAlerts();
+          }
+        }}
         className="relative p-1.5 text-slate-400 hover:text-slate-200 transition-colors"
-        aria-label={`Notifications (${unreadCount} unread)`}
+        aria-label={`Notifications (${totalUnread} unread)`}
       >
         <Bell size={16} />
-        {unreadCount > 0 && (
+        {totalUnread > 0 && (
           <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 text-[9px] font-bold text-white bg-red-500 rounded-full">
-            {unreadCount > 9 ? "9+" : unreadCount}
+            {totalUnread > 9 ? "9+" : totalUnread}
           </span>
         )}
       </button>

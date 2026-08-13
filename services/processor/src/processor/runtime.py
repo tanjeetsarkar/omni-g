@@ -138,7 +138,10 @@ class ProcessorRuntime:
         )
 
     async def process_event(self, event: dict[str, Any]) -> None:
-        await self.pipeline.process(event)
+        # Extract search_id from the event envelope so pipeline stage/alert
+        # events carry the correlation ID back to the Delivery UI.
+        search_id = event.get("search_id") or None
+        await self.pipeline.process(event, search_id=search_id)
 
     async def close(self) -> None:
         await self.deduplicator.close()

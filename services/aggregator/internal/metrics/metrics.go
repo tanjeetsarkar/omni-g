@@ -36,13 +36,6 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
-	// SchedulerPollTotal counts scheduler poll attempts per plugin URL and
-	// status ("ok" | "error").
-	SchedulerPollTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "omni_g_scheduler_poll_total",
-		Help: "Total MCP plugin poll attempts by the scheduler.",
-	}, []string{"plugin_url", "status"})
-
 	// KafkaQueueDepth exposes the number of messages buffered in the producer
 	// queue. Updated on each publish.
 	KafkaQueueDepth = promauto.NewGauge(prometheus.GaugeOpts{

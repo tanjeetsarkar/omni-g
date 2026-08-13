@@ -19,13 +19,15 @@ export interface PipelineEvent {
   event_id: string;
   tenant_id: string;
   stage: string;
-  status: "active" | "done";
+  status: "active" | "done" | "error";
   timestamp: string;
   /** Local epoch ms when this event was received by the client. */
   receivedAt: number;
+  /** V4: search_id binding so the UI can correlate pipeline activity with a canvas query. */
+  search_id?: string;
 }
 
-export type StageStatus = "idle" | "active" | "done";
+export type StageStatus = "idle" | "active" | "done" | "error";
 
 const MAX_EVENTS = 100;
 
@@ -47,10 +49,13 @@ export function usePipelineEvents(socket: Socket): {
   events: PipelineEvent[];
   stageStatuses: Record<string, StageStatus>;
   isActive: boolean;
+  /** V4: the search_id of the most recent active pipeline run (from schema_validation). */
+  activeSearchId: string | null;
 } {
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [stageStatuses, setStageStatuses] =
     useState<Record<string, StageStatus>>(initialStageStatuses);
+  const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
 
   // Prevent stale-closure issues inside the event handler
   const stageStatusesRef = useRef<Record<string, StageStatus>>(
@@ -64,12 +69,14 @@ export function usePipelineEvents(socket: Socket): {
       const ev = raw as Record<string, unknown>;
       if (
         typeof ev.stage !== "string" ||
-        (ev.status !== "active" && ev.status !== "done")
+        (ev.status !== "active" &&
+          ev.status !== "done" &&
+          ev.status !== "error")
       )
         return;
 
       const stage = ev.stage;
-      const status = ev.status as "active" | "done";
+      const status = ev.status as "active" | "done" | "error";
 
       const pipelineEvent: PipelineEvent = {
         event_id: typeof ev.event_id === "string" ? ev.event_id : "",
@@ -78,6 +85,7 @@ export function usePipelineEvents(socket: Socket): {
         status,
         timestamp: typeof ev.timestamp === "string" ? ev.timestamp : "",
         receivedAt: Date.now(),
+        search_id: typeof ev.search_id === "string" ? ev.search_id : undefined,
       };
 
       // Prepend to event log (newest first), cap at MAX_EVENTS.
@@ -87,6 +95,10 @@ export function usePipelineEvents(socket: Socket): {
       let nextStatuses: Record<string, StageStatus>;
       if (stage === "schema_validation" && status === "active") {
         nextStatuses = initialStageStatuses();
+        // V4: bind activeSearchId from the schema_validation event's search_id.
+        setActiveSearchId(
+          typeof ev.search_id === "string" ? ev.search_id : null,
+        );
       } else {
         nextStatuses = { ...stageStatusesRef.current };
       }
@@ -104,5 +116,5 @@ export function usePipelineEvents(socket: Socket): {
 
   const isActive = Object.values(stageStatuses).some((s) => s === "active");
 
-  return { events, stageStatuses, isActive };
+  return { events, stageStatuses, isActive, activeSearchId };
 }

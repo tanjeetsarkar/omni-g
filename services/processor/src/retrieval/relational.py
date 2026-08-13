@@ -225,6 +225,9 @@ class RelationalRetriever:
                             context_id=item["context_id"],
                             score=float(item["score"]),
                             text=item.get("text") or "",
+                            source_name=item.get("source_name"),
+                            source_url=item.get("source_url"),
+                            plugin_name=item.get("plugin_name"),
                         )
                         for item in cached_data
                     ]
@@ -268,6 +271,9 @@ class RelationalRetriever:
                             "context_id": r.context_id,
                             "score": r.score,
                             "text": r.text,
+                            "source_name": r.source_name,
+                            "source_url": r.source_url,
+                            "plugin_name": r.plugin_name,
                         }
                         for r in results
                     ],
@@ -313,7 +319,10 @@ class RelationalRetriever:
         WITH ctx, count(DISTINCT related) AS entity_count
         RETURN ctx.id AS context_id, ctx.text AS text,
                toFloat(entity_count) / 10.0 AS score,
-               [] AS entity_ids
+               [] AS entity_ids,
+               ctx.source_name AS source_name,
+               ctx.source_url AS source_url,
+               ctx.plugin_name AS plugin_name
         ORDER BY score DESC LIMIT $top_k
         """
         try:
@@ -335,6 +344,9 @@ class RelationalRetriever:
                 score=max(float(row.get("score", 0.0)), 0.01),
                 text=row.get("text") or "",
                 entity_ids=row.get("entity_ids") or [],
+                source_name=row.get("source_name"),
+                source_url=row.get("source_url"),
+                plugin_name=row.get("plugin_name"),
             )
             for row in rows
         ]

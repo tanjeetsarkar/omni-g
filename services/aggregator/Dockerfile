@@ -37,6 +37,7 @@ USER appuser
 
 WORKDIR /app
 COPY --from=builder /aggregator ./aggregator
+COPY tools.yaml ./tools.yaml
 
 EXPOSE 8080
 

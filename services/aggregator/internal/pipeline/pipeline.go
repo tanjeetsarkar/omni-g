@@ -56,11 +56,13 @@ func New(validator SchemaValidator, publisher Publisher, topic string, tenantID 
 // (e.g. "PubMed Central"); pass "" to default to pluginName.
 // sourceURL is the canonical human-facing URL of the source document; pass ""
 // when only the plugin URL is available.
+// searchID is the optional search correlation ID that binds this event to a
+// user-initiated /search or /enrich request; pass "" for autonomous collection.
 //
 // If the validation sidecar is unreachable the event is dropped and an error
 // is returned (fail-closed). If the payload is invalid the event is counted as
 // a validation failure and dropped without an error (the rejection is expected).
-func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
+func (p *Pipeline) Process(ctx context.Context, source string, payload map[string]any, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string, searchID string) error {
 	start := time.Now()
 	logger := log.With().
 		Str("source", source).
@@ -121,6 +123,7 @@ func (p *Pipeline) Process(ctx context.Context, source string, payload map[strin
 	evt.KIQID = kiqID
 	evt.SourceName = effectiveSourceName
 	evt.SourceURL = sourceURL
+	evt.SearchID = searchID
 	// NewRawEvent stamps ID/Timestamp/SchemaVersion; preserve them.
 
 	if err := evt.Validate(); err != nil {
@@ -167,7 +170,8 @@ func SourceForTool(toolName, toolSourceURL string) string {
 // collection; pass an empty string for untasked (general) collection.
 // sourceName and sourceURL carry human-readable provenance; pass "" to
 // default sourceName to pluginName and leave sourceURL unset.
-func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string) error {
+// searchID is the optional search correlation ID; pass "" for autonomous collection.
+func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string, pluginName string, pluginVersion string, kiqID string, sourceName string, sourceURL string, searchID string) error {
 	log.Info().Str("source", source).Str("plugin_name", pluginName).Str("kiq_id", kiqID).Str("source_name", sourceName).Msg("processing content block")
 
 	var payload map[string]any
@@ -191,5 +195,5 @@ func (p *Pipeline) ProcessBlock(ctx context.Context, source string, text string,
 		}
 	}
 
-	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID, sourceName, sourceURL)
+	return p.Process(ctx, source, payload, pluginName, pluginVersion, kiqID, sourceName, sourceURL, searchID)
 }

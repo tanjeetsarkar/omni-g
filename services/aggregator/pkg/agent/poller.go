@@ -36,8 +36,8 @@ type PollerConfig struct {
 }
 
 // PollerAgent executes background interval/cron fetches using tools registered
-// in the Harness. It replaces the deprecated internal/scheduler polling loop.
-// All tool calls route through Harness.InvokeTool (the 9-stage lifecycle).
+// in the Harness. All tool calls route through Harness.InvokeTool (the 9-stage
+// lifecycle).
 type PollerAgent struct {
 	cfg PollerConfig
 
