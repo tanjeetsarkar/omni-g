@@ -127,8 +127,8 @@ func TestClient_CallTool_SendsHeaders(t *testing.T) {
 
 func TestClient_CallTool_JSONRPC(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// tools/call POSTs to the base URL (no /sse suffix).
-		assert.Equal(t, "/", r.URL.Path)
+		// tools/call POSTs to the base URL with the method path appended.
+		assert.Equal(t, "/tools/call", r.URL.Path)
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "application/json", r.Header.Get("Accept"))
 

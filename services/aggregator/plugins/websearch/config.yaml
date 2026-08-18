@@ -1,0 +1,26 @@
+# websearch Plugin Configuration
+# Environment variables can be overridden at runtime
+
+# Server
+port: 8080
+mcp_path: "/mcp"
+
+# Logging
+log_level: "info"
+
+# SearXNG Instance
+# Set to your SearXNG instance URL (e.g., http://searxng:8080 or https://search.example.com)
+searxng_url: "${SEARXNG_URL:-http://searxng-core:8080}"
+
+# Search defaults
+default_limit: 10
+max_limit: 20
+default_safe_search: 1  # 0=off, 1=moderate, 2=strict
+default_categories: "general"
+default_language: ""
+
+# Request timeout
+timeout_seconds: 30
+
+# Rate limiting (requests per minute)
+rate_limit_rpm: 60

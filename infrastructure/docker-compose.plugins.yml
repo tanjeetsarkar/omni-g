@@ -1,0 +1,121 @@
+# =============================================================================
+# Omni-G Plugin Services — Separate compose file for plugin builds
+# =============================================================================
+# This file builds plugins with the aggregator root as build context
+# so the replace directive in go.mod works correctly.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.plugins.yml --profile all up -d
+# =============================================================================
+
+services:
+  # searxng — Privacy-respecting metasearch engine
+  # Based on https://github.com/searxng/searxng/blob/master/container/docker-compose.yml
+  searxng:
+    container_name: searxng-core
+    image: docker.io/searxng/searxng:${SEARXNG_VERSION:-latest}
+    restart: always
+    ports:
+      - "8081:8080"
+    env_file:
+      - .env.searxng
+    volumes:
+      - ./searxng/core-config/:/etc/searxng/:Z
+      - searxng-data:/var/cache/searxng/
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - ai
+      - services
+      - all
+    networks:
+      - omni-g
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+  # valkey — Redis-compatible key-value store for SearXNG limiter/bot protection
+  valkey:
+    container_name: searxng-valkey
+    image: docker.io/valkey/valkey:9-alpine
+    command: valkey-server --save 30 1 --loglevel warning
+    restart: always
+    volumes:
+      - valkey-data:/data/
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - ai
+      - services
+      - all
+    networks:
+      - omni-g
+
+  # websearch — Web search and page fetch via SearXNG
+  websearch:
+    build:
+      context: ../services/aggregator
+      dockerfile: plugins/websearch/Dockerfile
+    container_name: omni-g-websearch
+    ports:
+      - "8082:8080"
+    environment:
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng-core:8080}
+      LOG_LEVEL: ${WEBSEARCH_LOG_LEVEL:-info}
+      PORT: "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - ai
+      - services
+      - all
+    networks:
+      - omni-g
+    depends_on:
+      searxng:
+        condition: service_healthy
+
+  # newsearch — News headlines, article read, and news search via RSS aggregation
+  newsearch:
+    build:
+      context: ../services/aggregator
+      dockerfile: plugins/newsearch/Dockerfile
+    container_name: omni-g-newsearch
+    ports:
+      - "8083:8080"
+    environment:
+      LOG_LEVEL: ${NEWSEARCH_LOG_LEVEL:-info}
+      PORT: "8080"
+      NEWS_FEEDS: ${NEWS_FEEDS:-}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    profiles:
+      - ai
+      - services
+      - all
+    networks:
+      - omni-g
+
+volumes:
+  searxng-data:
+  valkey-data:
+
+networks:
+  omni-g:
+    driver: bridge

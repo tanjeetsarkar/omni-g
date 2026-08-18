@@ -141,7 +141,10 @@ func (c *Client) call(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
+	// Append the method path to the base URL (e.g., /tools/list, /tools/call)
+	url := c.baseURL + "/" + req.Method
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

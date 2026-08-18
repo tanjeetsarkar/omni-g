@@ -1,0 +1,136 @@
+# SearXNG Settings for Omni-G
+# See https://docs.searxng.org/admin/settings/settings.html
+
+general:
+  debug: false
+  instance_name: "Omni-G SearXNG"
+  contact_url: "https://github.com/omni-g/aggregator"
+  enable_metrics: true
+  qwant_categ: images
+
+search:
+  safe_search: 1  # 0=off, 1=moderate, 2=strict
+  autocomplete: "google"
+  default_lang: "en"
+
+server:
+  base_url: false  # Auto-detect from request
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "${SEARXNG_SECRET_KEY}"  # Set via environment
+  limiter: true
+  image_proxy: true
+
+redis:
+  url: "${SEARXNG_REDIS_URL}"  # Set via environment
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: bing
+    engine: bing
+    shortcut: b
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: brave
+    engine: brave
+    shortcut: br
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    use_http: true
+    timeout: 5.0
+    categories: [general, news]
+    language: en
+    disabled: false
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wk
+    use_http: true
+    timeout: 5.0
+    categories: [general]
+    language: en
+    disabled: false
+  - name: github
+    engine: github
+    shortcut: gh
+    use_http: true
+    timeout: 5.0
+    categories: [general, code]
+    language: en
+    disabled: false
+  - name: arxiv
+    engine: arxiv
+    shortcut: ax
+    use_http: true
+    timeout: 10.0
+    categories: [science]
+    language: en
+    disabled: false
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    use_http: true
+    timeout: 10.0
+    categories: [science]
+    language: en
+    disabled: false
+
+categories:
+  general:
+    - google
+    - bing
+    - duckduckgo
+    - brave
+    - startpage
+    - qwant
+  news:
+    - google
+    - bing
+    - duckduckgo
+    - brave
+  science:
+    - arxiv
+    - pubmed
+    - google
+  code:
+    - github
+    - google
+
+ui:
+  theme: simple
+  center_alignment: true
+  results_on_new_tab: false
+  infinite_scroll: false
+  show_categories: true
+  show_engine_logo: true

@@ -157,37 +157,10 @@ services:
   # AI & LLM SERVICES (profile: ai)
   # =============================================================================
 
-  # mu — Micro/Mu MCP server providing 30+ tools for agents
-  # (web_search, news_search, weather_forecast, markets_list, etc.)
-  # Built from source (single Go binary). Self-hosted; no API keys needed
-  # for read-only tools. For web_search, set BRAVE_API_KEY.
-  mu:
-    build:
-      context: .
-      dockerfile: mu.Dockerfile
-    container_name: omni-g-mu
-    ports:
-      - "8081:8080"
-    environment:
-      # Mu needs at least one AI provider for its own agent features.
-      # For tool-only usage (MCP server), these are optional.
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
-    volumes:
-      - mu_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    profiles:
-      - ai
-      - services
-      - all
-    networks:
-      - omni-g
+  # Plugin services (searxng, websearch, newsearch) are defined in
+  # docker-compose.plugins.yml to ensure correct build context for Go replace directives.
+  # Include that file when starting the stack:
+  #   docker compose -f docker-compose.yml -f docker-compose.plugins.yml --profile all up -d
 
   # ollama:
   #   image: ollama/ollama:latest
@@ -214,24 +187,6 @@ services:
   #   #   ollama pull qwen2.5:3b &&
   #   #   ollama pull nomic-embed-text &&
   #   #   wait"
-
-  kokoro-tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2
-    container_name: omni-g-kokoro-tts
-    ports:
-      - "8000:8880"
-    environment:
-      - WORKERS=${KOKORO_WORKERS:-1}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    profiles:
-      - ai
-      - all
-    networks:
-      - omni-g
 
   # =============================================================================
   # OBSERVABILITY SERVICES (profile: observability)
@@ -347,11 +302,8 @@ services:
       LOG_LEVEL: ${AGGREGATOR_LOG_LEVEL:-info}
       VALIDATION_SERVICE_URL: ${AGGREGATOR_VALIDATION_SERVICE_URL:-http://processor:8001}
       TENANT_ID: ${DEFAULT_TENANT_ID:-dev-tenant}
-      # Mu sidecar — sole tool provider (replaces all legacy MCP plugins)
-      MU_MCP_URL: ${MU_MCP_URL:-http://mu:8080/mcp}
-      MU_ENABLED: ${MU_ENABLED:-true}
-      MU_TOKEN: ${MU_TOKEN:-}
-      TOOLS_CONFIG_PATH: ${TOOLS_CONFIG_PATH:-/app/tools.yaml}
+      # Plugin Registry — tool providers (websearch, newsearch, etc.)
+      PLUGINS_CONFIG_PATH: ${PLUGINS_CONFIG_PATH:-/app/plugins.yaml}
       # OpenRouter — AgenticRouter LLM
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
@@ -364,11 +316,16 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
+    volumes:
+      - ../services/aggregator/plugins:/app/plugins
     depends_on:
       kafka:
         condition: service_healthy
       processor:
         condition: service_healthy
+      # Plugin services (searxng, websearch, newsearch) are started via
+      # docker-compose.plugins.yml. When using both compose files, they will
+      # be available on the shared 'omni-g' network.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -596,7 +553,6 @@ volumes:
   neo4j_data:
   qdrant_data:
   ollama_data:
-  mu_data:
   prometheus_data:
   grafana_data:
   loki_data:
@@ -604,4 +560,4 @@ volumes:
 
 networks:
   omni-g:
-    driver: bridge
+    external: true

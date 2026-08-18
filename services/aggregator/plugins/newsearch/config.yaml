@@ -1,0 +1,33 @@
+# newsearch Plugin Configuration
+# Environment variables can be overridden at runtime
+
+# Server
+port: 8080
+mcp_path: "/mcp"
+
+# Logging
+log_level: "info"
+
+# RSS Feeds (comma-separated URLs)
+# Default: BBC, NYT, Reuters, Guardian, Ars Technica, TechCrunch, Wired, VentureBeat, Engadget, The Verge
+news_feeds: "${NEWS_FEEDS:-}"
+
+# Feed refresh interval
+refresh_interval_minutes: 15
+
+# Per-feed item limit
+feed_item_limit: 50
+
+# Default search limits
+default_headlines_limit: 30
+default_search_limit: 20
+max_search_limit: 50
+
+# Content extraction
+max_content_length: 10000
+
+# Request timeout
+timeout_seconds: 30
+
+# Cache settings
+cache_ttl_minutes: 20

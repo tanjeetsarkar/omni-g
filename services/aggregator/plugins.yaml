@@ -1,0 +1,34 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Omni-G Aggregator Plugin Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+# Each plugin runs as an independent MCP server. Plugins are discovered at
+# startup from this configuration file. Adding a new capability is a config
+# change — no Go code changes needed.
+#
+# Plugin structure:
+#   - name: unique identifier (used for Docker service name, metrics labels)
+#   - enabled: whether to load this plugin
+#   - manifest: path to the plugin's manifest.yaml (relative to aggregator root)
+#   - mcp_url: the MCP endpoint URL (HTTP+SSE)
+#   - headers: optional headers for MCP requests (e.g., Authorization)
+#   - description: human-readable description
+#
+# Environment variable expansion is supported using ${VAR:-default} syntax.
+# ──────────────────────────────────────────────────────────────────────────────
+
+plugins:
+  # websearch: Web search and page fetch via SearXNG
+  - name: websearch
+    enabled: ${WEBSEARCH_ENABLED:-true}
+    manifest: "./plugins/websearch/manifest.yaml"
+    mcp_url: "${WEBSEARCH_MCP_URL:-http://websearch:8080/mcp}"
+    description: "Web search and page fetch via SearXNG + readability"
+    headers: {}
+
+  # newsearch: News headlines, article read, and news search via RSS aggregation
+  - name: newsearch
+    enabled: ${NEWSEARCH_ENABLED:-true}
+    manifest: "./plugins/newsearch/manifest.yaml"
+    mcp_url: "${NEWSEARCH_MCP_URL:-http://newsearch:8080/mcp}"
+    description: "News headlines, article read, and news search via RSS aggregation"
+    headers: {}

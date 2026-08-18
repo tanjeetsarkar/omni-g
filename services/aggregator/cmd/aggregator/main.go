@@ -65,21 +65,20 @@ func main() {
 	}
 	h := harness.New(harnessCfg, nil)
 
-	// ── V5: Configuration-Driven Tool Registry (mu + future MCP servers) ──
-	// Tools are discovered from MCP servers defined in tools.yaml at startup.
-	// Mu is the sole tool provider, exposing 30+ tools (web_search, news_search,
-	// weather_forecast, markets_list, places_search, etc.).
-	toolRegistry, err := registry.New(cfg.ToolsConfigPath, h)
+	// ── Plugin Registry (replaces mu-centric tool registry) ────────────────
+	// Plugins are discovered from plugins.yaml at startup. Each plugin runs as
+	// an independent MCP server (websearch, newsearch, etc.).
+	pluginRegistry, err := registry.NewPluginRegistry(cfg.PluginsConfigPath, h)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to create tool registry, continuing with empty registry")
+		log.Warn().Err(err).Msg("failed to create plugin registry, continuing with empty registry")
 	} else {
 		discoverCtx, discoverCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		registered, regErr := toolRegistry.RegisterAll(discoverCtx)
+		registered, regErr := pluginRegistry.RegisterAll(discoverCtx)
 		discoverCancel()
 		if regErr != nil {
-			log.Warn().Err(regErr).Msg("tool registry registration completed with errors")
+			log.Warn().Err(regErr).Msg("plugin registry registration completed with errors")
 		}
-		log.Info().Int("tools_registered", registered).Msg("tool registry initialized")
+		log.Info().Int("tools_registered", registered).Msg("plugin registry initialized")
 	}
 
 	// ── MCP discovery handler ─────────────────────────────────────────────

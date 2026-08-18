@@ -1,0 +1,17 @@
+name: newsearch
+description: "News headlines, article read, and news search via RSS aggregation"
+version: "1.0.0"
+metadata:
+  omnig:
+    requires_env: []
+    requires_bins: []
+    primary_env: ""
+    kiq_tags:
+      - "news"
+      - "current_events"
+      - "monitoring"
+      - "breaking"
+    tenant_isolation: true
+    risk_level: "low"
+    homepage: "https://github.com/omni-g/aggregator/plugins/newsearch"
+    emoji: "📰"

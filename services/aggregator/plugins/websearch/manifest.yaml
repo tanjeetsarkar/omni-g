@@ -1,0 +1,18 @@
+name: websearch
+description: "Web search and page fetch via SearXNG + readability"
+version: "1.0.0"
+metadata:
+  omnig:
+    requires_env:
+      - SEARXNG_URL
+    requires_bins: []
+    primary_env: "SEARXNG_URL"
+    kiq_tags:
+      - "factual"
+      - "research"
+      - "osint"
+      - "general"
+    tenant_isolation: true
+    risk_level: "low"
+    homepage: "https://github.com/omni-g/aggregator/plugins/websearch"
+    emoji: "🔍"

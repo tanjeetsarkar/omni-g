@@ -227,8 +227,9 @@ If no tools are relevant, return: {"tools": []}`, r.cfg.MaxTools)
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
 	}
-
+	fmt.Println("Message to openrouter ", messages)
 	response, err := callOpenRouter(ctx, r.cfg.OpenRouterAPIKey, r.cfg.OpenRouterModel, messages, r.cfg.Timeout)
+	fmt.Println("Recieved response of call open router", response)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter call: %w", err)
 	}

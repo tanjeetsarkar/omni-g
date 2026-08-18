@@ -49,13 +49,11 @@ type Config struct {
 	// watcher tool on each (re)connect (e.g. {"query":"breaking news"}).
 	WatcherArgs string `mapstructure:"WATCHER_ARGS"`
 
-	// ── Mu / Agentic Router ──────────────────────────────────────────────
-	// MuMCPURL is the MCP endpoint of the micro/mu sidecar.
-	MuMCPURL string `mapstructure:"MU_MCP_URL"`
-	// MuEnabled controls whether mu tool discovery runs on startup.
-	MuEnabled bool `mapstructure:"MU_ENABLED"`
-	// ToolsConfigPath is the path to the YAML/JSON tool registry config.
-	ToolsConfigPath string `mapstructure:"TOOLS_CONFIG_PATH"`
+	// ── Plugin Registry ──────────────────────────────────────────────────
+	// PluginsConfigPath is the path to the plugins.yaml configuration file.
+	PluginsConfigPath string `mapstructure:"PLUGINS_CONFIG_PATH"`
+
+	// ── Agentic Router ───────────────────────────────────────────────────
 	// OpenRouterAPIKey is the API key for OpenRouter (used by AgenticRouter).
 	OpenRouterAPIKey string `mapstructure:"OPENROUTER_API_KEY"`
 	// OpenRouterModel is the model used for tool selection routing.
@@ -96,10 +94,10 @@ func Load() (*Config, error) {
 	v.SetDefault("WATCHER_TOOL", "search_news")
 	v.SetDefault("WATCHER_ARGS", "")
 
-	// ── Mu / Agentic Router defaults ────────────────────────────────────
-	v.SetDefault("MU_MCP_URL", "http://localhost:8080/mcp")
-	v.SetDefault("MU_ENABLED", true)
-	v.SetDefault("TOOLS_CONFIG_PATH", "tools.yaml")
+	// ── Plugin Registry defaults ────────────────────────────────────────
+	v.SetDefault("PLUGINS_CONFIG_PATH", "plugins.yaml")
+
+	// ── Agentic Router defaults ────────────────────────────────────────
 	v.SetDefault("OPENROUTER_API_KEY", "")
 	v.SetDefault("OPENROUTER_MODEL", "openrouter/free")
 	v.SetDefault("ROUTER_MAX_TOOLS", 5)
